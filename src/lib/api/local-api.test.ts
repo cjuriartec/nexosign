@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchHealth, fetchPing, postBatchSign } from "./local-api";
+import {
+	fetchHealth,
+	fetchPing,
+	postBatchSign,
+	postBatchSignIntent,
+} from "./local-api";
 
 describe("local-api", () => {
 	const originalFetch = globalThis.fetch;
@@ -74,5 +79,65 @@ describe("local-api", () => {
 				}),
 			}),
 		);
+	});
+
+	it("postBatchSign incluye intent_request_id en el JSON", async () => {
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ job_id: "j2", queued: true }),
+		});
+		await postBatchSign(
+			{
+				cert_id_hex: "cd",
+				inputs: ["/tmp/b.pdf"],
+				intent_request_id: "req-intent-99",
+			},
+			"http://mock.test",
+		);
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			"http://mock.test/api/v1/batch/sign",
+			expect.objectContaining({
+				body: JSON.stringify({
+					cert_id_hex: "cd",
+					inputs: ["/tmp/b.pdf"],
+					intent_request_id: "req-intent-99",
+				}),
+			}),
+		);
+	});
+
+	it("postBatchSignIntent POSTea inputs y parsea request_id y deep_link", async () => {
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				request_id: "550e8400-e29b-41d4-a716-446655440000",
+				deep_link:
+					"nexosign://sign?intent=550e8400-e29b-41d4-a716-446655440000",
+			}),
+		});
+		const r = await postBatchSignIntent(
+			{ inputs: ["/abs/doc.pdf"] },
+			"http://mock.test",
+		);
+		expect(r.request_id).toBe("550e8400-e29b-41d4-a716-446655440000");
+		expect(r.deep_link).toContain("nexosign://sign?intent=");
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			"http://mock.test/api/v1/batch/sign/intent",
+			expect.objectContaining({
+				method: "POST",
+				body: JSON.stringify({ inputs: ["/abs/doc.pdf"] }),
+			}),
+		);
+	});
+
+	it("postBatchSignIntent lanza si no ok", async () => {
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 400,
+			json: async () => ({ error: "bad" }),
+		});
+		await expect(
+			postBatchSignIntent({ inputs: ["/x.pdf"] }, "http://mock.test"),
+		).rejects.toThrow("batch sign intent failed");
 	});
 });

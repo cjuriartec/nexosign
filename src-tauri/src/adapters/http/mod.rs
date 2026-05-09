@@ -565,4 +565,132 @@ mod tests {
         assert_eq!(job.job_id, "job-contract-1");
         let _ = std::fs::remove_file(&tmp);
     }
+
+    #[tokio::test]
+    async fn batch_sign_intent_stores_pending_and_returns_deep_link() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
+        let state = SharedState::test_with_batch_intents(tx, pending.clone());
+        let app = build_router(state);
+
+        let tmp = std::env::temp_dir().join(format!(
+            "nexosign-intent-test-{}.pdf",
+            std::process::id()
+        ));
+        std::fs::write(&tmp, b"%PDF-1.4\n").unwrap();
+        let abs = tmp.canonicalize().unwrap();
+
+        let body = serde_json::json!({
+            "inputs": [abs.to_str().unwrap()],
+        });
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign/intent")
+                    .header("Origin", "http://localhost:1420")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let request_id = v["request_id"].as_str().unwrap();
+        assert!(!request_id.is_empty());
+        let deep_link = v["deep_link"].as_str().unwrap();
+        assert_eq!(
+            deep_link,
+            format!("nexosign://sign?intent={}", request_id)
+        );
+
+        let guard = pending.lock().unwrap();
+        assert_eq!(guard.len(), 1);
+        assert!(guard.contains_key(request_id));
+        drop(guard);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn batch_sign_with_intent_request_id_clears_pending_after_enqueue() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
+        let state = SharedState::test_with_batch_intents(tx, pending.clone());
+        let app = build_router(state);
+
+        let tmp = std::env::temp_dir().join(format!(
+            "nexosign-intent-clear-{}.pdf",
+            std::process::id()
+        ));
+        std::fs::write(&tmp, b"%PDF-1.4\n").unwrap();
+        let abs = tmp.canonicalize().unwrap();
+
+        let intent_body = serde_json::json!({
+            "inputs": [abs.to_str().unwrap()],
+        });
+
+        let res_intent = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign/intent")
+                    .header("Origin", "http://localhost:1420")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(intent_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res_intent.status(), StatusCode::OK);
+        let intent_bytes = to_bytes(res_intent.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let intent_v: serde_json::Value = serde_json::from_slice(&intent_bytes).unwrap();
+        let request_id = intent_v["request_id"].as_str().unwrap().to_string();
+
+        assert_eq!(pending.lock().unwrap().len(), 1);
+
+        let batch_body = serde_json::json!({
+            "cert_id_hex": "01ff",
+            "inputs": [abs.to_str().unwrap()],
+            "job_id": "job-after-intent",
+            "intent_request_id": request_id,
+        });
+
+        let res_batch = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign")
+                    .header("Origin", "http://localhost:1420")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(batch_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res_batch.status(), StatusCode::OK);
+        let _job = rx.try_recv().expect("job tras intent");
+
+        assert!(
+            pending.lock().unwrap().is_empty(),
+            "la intención debe borrarse al encolar bien"
+        );
+
+        let _ = std::fs::remove_file(&tmp);
+    }
 }

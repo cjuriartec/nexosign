@@ -10,6 +10,7 @@
 	import { Toaster } from "$lib/components/ui/sonner/index.js";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 	import AppSidebar from "$lib/components/app-sidebar.svelte";
+	import { extractIntentFromNexosignUrl } from "$lib/nexosign-deep-link";
 
 	let { children } = $props();
 
@@ -41,16 +42,10 @@
 					await listen<{ urls: string[] }>("nexosign-deep-link", async (event) => {
 						const urls = event.payload.urls ?? [];
 						for (const urlStr of urls) {
-							try {
-								const u = new URL(urlStr);
-								if (u.protocol !== "nexosign:") continue;
-								const intent = u.searchParams.get("intent");
-								if (intent) {
-									await goto(`/sign?intent=${encodeURIComponent(intent)}`);
-									return;
-								}
-							} catch {
-								/* URL inválida */
+							const intent = extractIntentFromNexosignUrl(urlStr);
+							if (intent) {
+								await goto(`/sign?intent=${encodeURIComponent(intent)}`);
+								return;
 							}
 						}
 						await goto("/sign");

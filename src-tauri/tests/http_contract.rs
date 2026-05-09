@@ -1,5 +1,8 @@
 //! Contrato HTTP del binario (tests de integración en `tests/`).
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use nexosign_lib::adapters::http::state::SharedState;
@@ -65,5 +68,47 @@ async fn integration_batch_sign_returns_queued_and_enqueues_job() {
 
     let job = rx.try_recv().expect("job en cola");
     assert_eq!(job.job_id, "contract-batch-1");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[tokio::test]
+async fn integration_batch_sign_intent_registers_deep_link_shape() {
+    let pending = Arc::new(Mutex::new(HashMap::new()));
+    let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
+    let app = build_router(SharedState::test_with_batch_intents(tx, pending.clone()));
+
+    let tmp = std::env::temp_dir().join(format!(
+        "nexosign-http-contract-intent-{}.pdf",
+        std::process::id()
+    ));
+    std::fs::write(&tmp, b"%PDF-1.4\n").unwrap();
+    let abs = tmp.canonicalize().unwrap();
+
+    let body = serde_json::json!({
+        "inputs": [abs.to_str().unwrap()],
+    });
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/batch/sign/intent")
+                .header("Origin", "http://localhost:1420")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let rid = v["request_id"].as_str().unwrap();
+    assert_eq!(
+        v["deep_link"].as_str().unwrap(),
+        format!("nexosign://sign?intent={}", rid)
+    );
+    assert_eq!(pending.lock().unwrap().len(), 1);
     let _ = std::fs::remove_file(&tmp);
 }

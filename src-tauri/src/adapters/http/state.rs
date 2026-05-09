@@ -71,6 +71,21 @@ impl SharedState {
             pending_batch_intents: Arc::new(Mutex::new(HashMap::new())),
         }
     }
+
+    /// Tests HTTP: cola batch + mismo mapa de intenciones que puede inspeccionar el test.
+    pub fn test_with_batch_intents(
+        sender: mpsc::Sender<BatchJob>,
+        pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
+    ) -> Self {
+        Self {
+            origins: Arc::new(RwLock::new(AllowedOrigins::development_defaults())),
+            app_handle: None,
+            batch_tx: Some(sender),
+            batch_cancel: Arc::new(Mutex::new(HashMap::new())),
+            pkcs11: None,
+            pending_batch_intents,
+        }
+    }
 }
 
 #[derive(Serialize)]

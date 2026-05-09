@@ -88,4 +88,117 @@ test.describe("API local opcional", () => {
 		expect(body.queued).toBe(true);
 		expect(body.job_id).toBe("e2e-batch-contract");
 	});
+
+	test("POST /api/v1/batch/sign/intent devuelve request_id y deep_link (sin encolar)", async ({
+		request,
+	}) => {
+		test.skip(
+			!process.env.NEXOSIGN_E2E_API,
+			"Sin NEXOSIGN_E2E_API: este test no se ejecuta.",
+		);
+
+		const tmpPdf = path.join(
+			os.tmpdir(),
+			`nexosign-e2e-intent-${Date.now()}.pdf`,
+		);
+		fs.writeFileSync(tmpPdf, "%PDF-1.4\n");
+
+		let res: Awaited<ReturnType<typeof request.post>>;
+		try {
+			res = await request.post(`${BASE}/api/v1/batch/sign/intent`, {
+				data: JSON.stringify({
+					inputs: [tmpPdf],
+				}),
+				headers: {
+					"Content-Type": "application/json",
+					Origin: "http://localhost:1420",
+				},
+				timeout: 10_000,
+			});
+		} catch {
+			test.skip(
+				true,
+				"No hay servidor en 127.0.0.1:14500. Ejecuta primero: npm run tauri dev",
+			);
+			return;
+		} finally {
+			try {
+				fs.unlinkSync(tmpPdf);
+			} catch {
+				/* ignore */
+			}
+		}
+
+		expect(res.ok(), `HTTP ${res.status()}`).toBeTruthy();
+		const body = await res.json();
+		expect(body.request_id).toBeTruthy();
+		expect(body.deep_link).toBe(
+			`nexosign://sign?intent=${body.request_id}`,
+		);
+	});
+
+	test("POST intent y luego batch con intent_request_id encola el trabajo", async ({
+		request,
+	}) => {
+		test.skip(
+			!process.env.NEXOSIGN_E2E_API,
+			"Sin NEXOSIGN_E2E_API: este test no se ejecuta.",
+		);
+
+		const tmpPdf = path.join(
+			os.tmpdir(),
+			`nexosign-e2e-intent-flow-${Date.now()}.pdf`,
+		);
+		fs.writeFileSync(tmpPdf, "%PDF-1.4\n");
+
+		let intentRes: Awaited<ReturnType<typeof request.post>>;
+		try {
+			intentRes = await request.post(`${BASE}/api/v1/batch/sign/intent`, {
+				data: JSON.stringify({ inputs: [tmpPdf] }),
+				headers: {
+					"Content-Type": "application/json",
+					Origin: "http://localhost:1420",
+				},
+				timeout: 10_000,
+			});
+		} catch {
+			test.skip(
+				true,
+				"No hay servidor en 127.0.0.1:14500. Ejecuta primero: npm run tauri dev",
+			);
+			return;
+		}
+
+		expect(intentRes.ok(), `intent HTTP ${intentRes.status()}`).toBeTruthy();
+		const intentBody = await intentRes.json();
+		const rid = intentBody.request_id as string;
+
+		let batchRes: Awaited<ReturnType<typeof request.post>>;
+		try {
+			batchRes = await request.post(`${BASE}/api/v1/batch/sign`, {
+				data: JSON.stringify({
+					cert_id_hex: "00",
+					inputs: [tmpPdf],
+					job_id: "e2e-after-intent",
+					intent_request_id: rid,
+				}),
+				headers: {
+					"Content-Type": "application/json",
+					Origin: "http://localhost:1420",
+				},
+				timeout: 10_000,
+			});
+		} finally {
+			try {
+				fs.unlinkSync(tmpPdf);
+			} catch {
+				/* ignore */
+			}
+		}
+
+		expect(batchRes.ok(), `batch HTTP ${batchRes.status()}`).toBeTruthy();
+		const batchBody = await batchRes.json();
+		expect(batchBody.queued).toBe(true);
+		expect(batchBody.job_id).toBe("e2e-after-intent");
+	});
 });
