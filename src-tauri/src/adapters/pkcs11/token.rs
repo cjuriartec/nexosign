@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use cryptoki::context::{CInitializeArgs, CInitializeFlags, Pkcs11};
+use cryptoki::mechanism::Mechanism;
 use cryptoki::object::{Attribute, AttributeType, CertificateType, ObjectClass};
 use cryptoki::session::UserType;
 use cryptoki::slot::Slot;
@@ -40,6 +41,80 @@ fn slots_with_token_effective(pkcs11: &Pkcs11) -> Result<Vec<Slot>, TokenError> 
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, TokenError> {
+    hex::decode(hex.trim()).map_err(|_| TokenError::BadCertId)
+}
+
+fn cert_der_and_id_for_hex(
+    session: &cryptoki::session::Session,
+    cert_id_hex: &str,
+) -> Result<(Vec<u8>, Vec<u8>), TokenError> {
+    let desired_id = hex_to_bytes(cert_id_hex)?;
+    let search_cert = vec![
+        Attribute::Class(ObjectClass::CERTIFICATE),
+        Attribute::CertificateType(CertificateType::X_509),
+        Attribute::Id(desired_id.clone()),
+    ];
+    let handles = session.find_objects(&search_cert)?;
+    if let Some(h) = handles.first() {
+        let attrs = session.get_attributes(*h, &[AttributeType::Value, AttributeType::Id])?;
+        let mut der: Option<Vec<u8>> = None;
+        let mut id_bytes = desired_id.clone();
+        for a in attrs {
+            match a {
+                Attribute::Value(v) => der = Some(v),
+                Attribute::Id(id) => id_bytes = id,
+                _ => {}
+            }
+        }
+        if let Some(der) = der {
+            return Ok((der, id_bytes));
+        }
+    }
+
+    // Fallback: mismo criterio que `list_signing_certificates` (id derivado del DER si CKA_ID falta).
+    let search = vec![
+        Attribute::Class(ObjectClass::CERTIFICATE),
+        Attribute::CertificateType(CertificateType::X_509),
+    ];
+    let handles = session.find_objects(&search)?;
+    for h in handles {
+        let attrs = session.get_attributes(
+            h,
+            &[
+                AttributeType::Value,
+                AttributeType::Label,
+                AttributeType::Id,
+            ],
+        )?;
+        let mut der: Option<Vec<u8>> = None;
+        let mut id_bytes: Option<Vec<u8>> = None;
+        for a in attrs {
+            match a {
+                Attribute::Value(v) => der = Some(v),
+                Attribute::Id(id) => id_bytes = Some(id),
+                _ => {}
+            }
+        }
+        let Some(der) = der else {
+            continue;
+        };
+        if !der_is_signing_certificate(&der) {
+            continue;
+        }
+        let id_hex = match id_bytes {
+            Some(ref id) if !id.is_empty() => bytes_to_hex(id),
+            _ => bytes_to_hex(&der[..der.len().min(32)]),
+        };
+        if id_hex == cert_id_hex {
+            let raw_id = id_bytes.unwrap_or_else(|| der[..der.len().min(32)].to_vec());
+            return Ok((der, raw_id));
+        }
+    }
+
+    Err(TokenError::BadCertId)
 }
 
 fn subject_dn_from_der(der: &[u8]) -> String {
@@ -187,6 +262,40 @@ impl Pkcs11TokenManager {
         }
 
         Ok(out)
+    }
+
+    pub fn certificate_der_by_id_hex(&self, cert_id_hex: &str) -> Result<Vec<u8>, TokenError> {
+        let mut inner = self.lock_inner()?;
+        maybe_idle_logout(&mut inner)?;
+        ensure_session_rw(&mut inner)?;
+        inner.touch_activity();
+        let session = inner.session.as_mut().expect("session");
+        let (der, _) = cert_der_and_id_for_hex(session, cert_id_hex)?;
+        Ok(der)
+    }
+
+    /// Firma RSA SHA-256 PKCS#1 v1.5 (`CKM_SHA256_RSA_PKCS`). Requiere PIN (`login`).
+    pub fn rsa_sha256_pkcs1_sign(
+        &self,
+        cert_id_hex: &str,
+        data: &[u8],
+    ) -> Result<Vec<u8>, TokenError> {
+        let mut inner = self.lock_inner()?;
+        maybe_idle_logout(&mut inner)?;
+        ensure_session_rw(&mut inner)?;
+        if !inner.logged_in {
+            return Err(TokenError::NotLoggedIn);
+        }
+        inner.touch_activity();
+        let session = inner.session.as_mut().expect("session");
+        let (_, id_bytes) = cert_der_and_id_for_hex(session, cert_id_hex)?;
+        let search_key = vec![
+            Attribute::Class(ObjectClass::PRIVATE_KEY),
+            Attribute::Id(id_bytes),
+        ];
+        let handles = session.find_objects(&search_key)?;
+        let key = handles.into_iter().next().ok_or(TokenError::NoPrivateKey)?;
+        Ok(session.sign(&Mechanism::Sha256RsaPkcs, key, data)?)
     }
 
     pub fn login(&self, pin: String) -> Result<(), TokenError> {

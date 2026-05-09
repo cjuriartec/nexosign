@@ -8,6 +8,18 @@ export type HealthResponse = {
 
 export type PingResponse = { ok: boolean };
 
+export type BatchSignResponse = {
+	job_id: string;
+	queued: boolean;
+};
+
+export type BatchSignBody = {
+	cert_id_hex: string;
+	/** Rutas absolutas a `.pdf` en el sistema de archivos local (la API valida existencia y tamaño). */
+	inputs: string[];
+	job_id?: string;
+};
+
 /** GET /health — sin credenciales; CORS debe incluir el origen del frontend en dev. */
 export async function fetchHealth(
 	baseUrl: string = LOCAL_API_BASE,
@@ -32,6 +44,25 @@ export async function fetchPing(
 		throw new Error(`ping failed: ${res.status}`);
 	}
 	return res.json() as Promise<PingResponse>;
+}
+
+/** POST /api/v1/batch/sign — encola firma PAdES; respuesta inmediata con `job_id`. */
+export async function postBatchSign(
+	body: BatchSignBody,
+	baseUrl: string = LOCAL_API_BASE,
+): Promise<BatchSignResponse> {
+	const res = await fetch(`${baseUrl}/api/v1/batch/sign`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(body),
+	});
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({}));
+		throw new Error(
+			`batch sign failed: ${res.status} ${JSON.stringify(err)}`,
+		);
+	}
+	return res.json() as Promise<BatchSignResponse>;
 }
 
 /** POST /api/v1/demo-progress — dispara evento Tauri `progreso` (stub). */

@@ -4,6 +4,7 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use nexosign_lib::adapters::http::state::SharedState;
 use nexosign_lib::adapters::http::{build_router, LOCAL_API_PORT};
+use nexosign_lib::adapters::worker::batch::BatchJob;
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -23,4 +24,45 @@ async fn integration_health_echoes_version_and_port_constant() {
     let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["service"], "nexosign");
+}
+
+#[tokio::test]
+async fn integration_batch_sign_returns_queued_and_enqueues_job() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
+    let app = build_router(SharedState::test_with_batch(tx));
+
+    let tmp = std::env::temp_dir().join(format!(
+        "nexosign-http-contract-{}.pdf",
+        std::process::id()
+    ));
+    std::fs::write(&tmp, b"%PDF-1.4\n").unwrap();
+    let abs = tmp.canonicalize().unwrap();
+
+    let body = serde_json::json!({
+        "cert_id_hex": "01ff",
+        "inputs": [abs.to_str().unwrap()],
+        "job_id": "contract-batch-1"
+    });
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/batch/sign")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["queued"], true);
+    assert_eq!(v["job_id"], "contract-batch-1");
+
+    let job = rx.try_recv().expect("job en cola");
+    assert_eq!(job.job_id, "contract-batch-1");
+    let _ = std::fs::remove_file(&tmp);
 }

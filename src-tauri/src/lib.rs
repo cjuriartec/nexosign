@@ -1,7 +1,9 @@
 pub mod adapters;
+pub mod application;
 mod commands;
 pub mod domain;
 pub mod infrastructure;
+pub mod ports;
 
 use std::sync::{Arc, RwLock};
 use std::sync::Once;
@@ -32,7 +34,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(origins.clone())
-        .manage(pkcs11)
+        .manage(pkcs11.clone())
         .invoke_handler(tauri::generate_handler![
             greet,
             commands::get_local_api_base_url,
@@ -48,7 +50,7 @@ pub fn run() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
-            infrastructure::local_server::spawn_local_api(handle, origins.clone());
+            infrastructure::local_server::spawn_local_api(handle, origins.clone(), pkcs11.clone());
             Ok(())
         })
         .run(tauri::generate_context!())

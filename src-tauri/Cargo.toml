@@ -32,4 +32,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 cryptoki = "0.12"
 thiserror = "2.0.18"
 x509-parser = "0.18.1"
+lopdf = "0.40.0"
+sha2 = "0.10"
+der = "0.7"
+hex = "0.4.3"
+uuid = { version = "1.23.1", features = ["v4"] }
+cms = { version = "0.2.3", features = ["builder", "std", "sha2", "rsa"] }
+const-oid = "0.9.6"
+rsa = "0.9.10"
+signature = "2.2"
+pkcs1 = "0.7.5"
+x509-cert = "0.2.5"
+spki = "0.7.3"
 

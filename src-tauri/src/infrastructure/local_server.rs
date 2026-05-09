@@ -5,11 +5,19 @@ use tauri::AppHandle;
 
 use crate::adapters::http::{build_router, LOCAL_API_PORT};
 use crate::adapters::http::state::SharedState;
+use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::domain::allowed_origins::AllowedOrigins;
 
 /// Arranca el servidor Axum en segundo plano (`127.0.0.1:14500`).
-pub fn spawn_local_api(handle: AppHandle, origins: Arc<RwLock<AllowedOrigins>>) {
-    let state = SharedState::new(origins, Some(handle));
+pub fn spawn_local_api(
+    handle: AppHandle,
+    origins: Arc<RwLock<AllowedOrigins>>,
+    pkcs11: Arc<Pkcs11TokenManager>,
+) {
+    let (tx, rx) = tokio::sync::mpsc::channel(16);
+    crate::adapters::worker::batch::spawn_batch_worker(rx, pkcs11, Some(handle.clone()));
+
+    let state = SharedState::new(origins, Some(handle), Some(tx));
     let router = build_router(state);
     let addr = SocketAddr::from(([127, 0, 0, 1], LOCAL_API_PORT));
 

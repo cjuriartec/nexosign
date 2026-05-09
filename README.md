@@ -1,6 +1,14 @@
 # NexoSign
 
-Aplicación de escritorio **Tauri 2** + **SvelteKit** + **TypeScript**. API local HTTP embebida en **`127.0.0.1:14500`** (Axum) con CORS dinámico y eventos IPC `progreso`. La **fase 2** añade descubrimiento PKCS#11, listado de certificados de firma y sesión con PIN + timeout de inactividad vía comandos Tauri.
+Aplicación de escritorio **Tauri 2** + **SvelteKit** + **TypeScript**. API local HTTP embebida en **`127.0.0.1:14500`** (Axum) con CORS dinámico y eventos IPC `progreso`. La **fase 2** añade descubrimiento PKCS#11, listado de certificados de firma y sesión con PIN + timeout de inactividad vía comandos Tauri. La **fase 3** añade cola batch secuencial (`mpsc`), endpoint **`POST /api/v1/batch/sign`**, firma PAdES-BES (CMS detached + token RSA), y emisión de **`progreso`** por documento.
+
+### Firma batch / PAdES (fase 3)
+
+| Elemento | Descripción |
+|----------|-------------|
+| `POST /api/v1/batch/sign` | Cuerpo JSON: `cert_id_hex`, lista `inputs` de rutas **absolutas** a `.pdf`, opcional `job_id`. Respuesta inmediata `{ "job_id", "queued": true }`. El trabajo se procesa en un worker único (sin paralelizar PKCS#11). |
+| `NEXOSIGN_BATCH_OUTPUT_DIR` | Si está definido, los PDF firmados se escriben en ese directorio como `{nombre}_signed.pdf`; si no, junto al original con sufijo `_signed.pdf`. |
+| Sesión PKCS#11 | La firma real exige **`pkcs11_login` previo** (PIN). Sin sesión iniciada el worker devolverá error en `progreso` por archivo. |
 
 ### PKCS#11 / DNIe (fase 2)
 
@@ -40,7 +48,7 @@ npm run tauri dev
 | Capa | Comando | Qué valida |
 |------|---------|------------|
 | **Dominio Rust** | `cargo test -p nexosign --lib domain` | Normalización de orígenes y política `AllowedOrigins` |
-| **HTTP (Axum)** | `cargo test -p nexosign --lib adapters::http` | `/health`, `/api/v1/ping`, CORS preflight, rechazo de `Origin` no listado |
+| **HTTP (Axum)** | `cargo test -p nexosign --lib adapters::http` | `/health`, `/api/v1/ping`, `/api/v1/batch/sign`, CORS preflight, rechazo de `Origin` no listado |
 | **Contrato HTTP (crate)** | `cargo test -p nexosign --test http_contract` | Integración del router sin levantar proceso OS |
 | **Cliente TS** | `npm run test` | Vitest: `fetchHealth` / `fetchPing` con `fetch` mockeado |
 | **E2E UI** | `npx playwright install chromium` (una vez) · `npm run test:e2e` | Playwright + `vite preview`: título NexoSign y secciones visibles |

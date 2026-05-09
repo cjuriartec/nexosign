@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchHealth, fetchPing } from "./local-api";
+import { fetchHealth, fetchPing, postBatchSign } from "./local-api";
 
 describe("local-api", () => {
 	const originalFetch = globalThis.fetch;
@@ -42,6 +42,37 @@ describe("local-api", () => {
 		expect(globalThis.fetch).toHaveBeenCalledWith(
 			"http://mock.test/api/v1/ping",
 			expect.objectContaining({ method: "POST" }),
+		);
+	});
+
+	it("postBatchSign envía POST JSON y parsea job_id", async () => {
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				job_id: "job-1",
+				queued: true,
+			}),
+		});
+		const b = await postBatchSign(
+			{
+				cert_id_hex: "ab",
+				inputs: ["/tmp/a.pdf"],
+				job_id: "job-1",
+			},
+			"http://mock.test",
+		);
+		expect(b.queued).toBe(true);
+		expect(b.job_id).toBe("job-1");
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			"http://mock.test/api/v1/batch/sign",
+			expect.objectContaining({
+				method: "POST",
+				body: JSON.stringify({
+					cert_id_hex: "ab",
+					inputs: ["/tmp/a.pdf"],
+					job_id: "job-1",
+				}),
+			}),
 		);
 	});
 });

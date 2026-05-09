@@ -1,6 +1,11 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
 import { test, expect } from "@playwright/test";
 
-const HEALTH_URL = "http://127.0.0.1:14500/health";
+const BASE = "http://127.0.0.1:14500";
+const HEALTH_URL = `${BASE}/health`;
 
 /**
  * Contrato HTTP real (servidor Axum dentro de la app Tauri).
@@ -34,5 +39,50 @@ test.describe("API local opcional", () => {
 		const body = await res.json();
 		expect(body.service).toBe("nexosign");
 		expect(body.status).toBe("ok");
+	});
+
+	test("POST /api/v1/batch/sign encola con job_id (ruta absoluta .pdf)", async ({
+		request,
+	}) => {
+		test.skip(
+			!process.env.NEXOSIGN_E2E_API,
+			"Sin NEXOSIGN_E2E_API: este test no se ejecuta.",
+		);
+
+		const tmpPdf = path.join(
+			os.tmpdir(),
+			`nexosign-e2e-batch-${Date.now()}.pdf`,
+		);
+		fs.writeFileSync(tmpPdf, "%PDF-1.4\n");
+
+		let res: Awaited<ReturnType<typeof request.post>>;
+		try {
+			res = await request.post(`${BASE}/api/v1/batch/sign`, {
+				data: JSON.stringify({
+					cert_id_hex: "00",
+					inputs: [tmpPdf],
+					job_id: "e2e-batch-contract",
+				}),
+				headers: { "Content-Type": "application/json" },
+				timeout: 10_000,
+			});
+		} catch {
+			test.skip(
+				true,
+				"No hay servidor en 127.0.0.1:14500. Ejecuta primero: npm run tauri dev",
+			);
+			return;
+		} finally {
+			try {
+				fs.unlinkSync(tmpPdf);
+			} catch {
+				/* ignore */
+			}
+		}
+
+		expect(res.ok(), `HTTP ${res.status()}`).toBeTruthy();
+		const body = await res.json();
+		expect(body.queued).toBe(true);
+		expect(body.job_id).toBe("e2e-batch-contract");
 	});
 });

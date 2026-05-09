@@ -14,8 +14,16 @@ pub enum TokenError {
     NoSlot,
     #[error("índice de slot inválido")]
     SlotIndex,
+    #[error("sin sesión PKCS#11 iniciada (PIN requerido para firmar)")]
+    NotLoggedIn,
     #[error("PIN vacío")]
     EmptyPin,
+    #[error("identificador de certificado inválido")]
+    BadCertId,
+    #[error("no se encontró clave privada para el certificado indicado")]
+    NoPrivateKey,
+    #[error("tipo de clave no soportado para firma PAdES en esta fase (solo RSA)")]
+    UnsupportedKeyType,
     #[error("estado interno bloqueado")]
     MutexPoisoned,
 }

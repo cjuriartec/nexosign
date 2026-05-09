@@ -16,7 +16,7 @@ todos:
     status: completed
   - id: f3-queue-pades
     content: Cola mpsc secuencial, endpoints de batch, pipeline PAdES + eventos progreso
-    status: pending
+    status: completed
   - id: f4-security-ux
     content: Diálogo origen + SQLite, UI batch, deep link nexosign://
     status: pending

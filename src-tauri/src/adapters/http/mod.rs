@@ -8,13 +8,60 @@ use axum::{
     Router,
 };
 use http::request::Parts;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::adapters::http::state::{HealthResponse, PingResponse, SharedState};
+use crate::adapters::worker::batch::BatchJob;
 
 pub const LOCAL_API_PORT: u16 = 14500;
+
+/// Tamaño máximo por PDF en un lote (50 MiB).
+const MAX_BATCH_PDF_BYTES: u64 = 50 * 1024 * 1024;
+
+fn validate_batch_inputs(paths: &[std::path::PathBuf]) -> Result<(), String> {
+    if paths.is_empty() {
+        return Err("inputs no puede estar vacío".into());
+    }
+    for p in paths {
+        if !p.is_absolute() {
+            return Err(format!(
+                "cada ruta debe ser absoluta (recibido: {})",
+                p.display()
+            ));
+        }
+        let meta = std::fs::metadata(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        if !meta.is_file() {
+            return Err(format!("no es un archivo regular: {}", p.display()));
+        }
+        if meta.len() > MAX_BATCH_PDF_BYTES {
+            return Err(format!(
+                "archivo demasiado grande (máx. 50 MiB): {}",
+                p.display()
+            ));
+        }
+        let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("");
+        if !ext.eq_ignore_ascii_case("pdf") {
+            return Err(format!("solo se admiten .pdf: {}", p.display()));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BatchSignBody {
+    pub cert_id_hex: String,
+    pub inputs: Vec<std::path::PathBuf>,
+    #[serde(default)]
+    pub job_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchSignResponse {
+    pub job_id: String,
+    pub queued: bool,
+}
 
 pub fn build_router(state: SharedState) -> Router {
     let origins_for_cors = state.origins.clone();
@@ -43,6 +90,7 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/health", get(get_health))
         .route("/api/v1/ping", post(post_ping))
         .route("/api/v1/demo-progress", post(post_demo_progress))
+        .route("/api/v1/batch/sign", post(post_batch_sign))
         .layer(cors)
         .with_state(state)
 }
@@ -93,6 +141,59 @@ async fn post_demo_progress(
     }
 
     Json(serde_json::json!({ "emitted": true })).into_response()
+}
+
+async fn post_batch_sign(
+    State(state): State<SharedState>,
+    Json(body): Json<BatchSignBody>,
+) -> impl IntoResponse {
+    let Some(tx) = state.batch_tx.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "cola batch no configurada" })),
+        )
+            .into_response();
+    };
+
+    if body.cert_id_hex.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "cert_id_hex requerido" })),
+        )
+            .into_response();
+    }
+
+    if let Err(msg) = validate_batch_inputs(&body.inputs) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response();
+    }
+
+    let job_id = body
+        .job_id
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    let job = BatchJob {
+        job_id: job_id.clone(),
+        cert_id_hex: body.cert_id_hex,
+        inputs: body.inputs,
+    };
+
+    match tx.try_send(job) {
+        Ok(()) => Json(BatchSignResponse {
+            job_id,
+            queued: true,
+        })
+        .into_response(),
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "cola batch llena, reintente" })),
+        )
+            .into_response(),
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "cola batch cerrada" })),
+        )
+            .into_response(),
+    }
 }
 
 #[cfg(test)]
@@ -180,5 +281,47 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn batch_sign_enqueue_returns_200_and_job_id() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
+        let app = build_router(SharedState::test_with_batch(tx));
+
+        let tmp = std::env::temp_dir().join(format!(
+            "nexosign-batch-test-{}.pdf",
+            std::process::id()
+        ));
+        std::fs::write(&tmp, b"%PDF-1.1\n").unwrap();
+
+        let abs = tmp.canonicalize().unwrap();
+        let body = serde_json::json!({
+            "cert_id_hex": "01ab",
+            "inputs": [abs.to_str().unwrap()],
+            "job_id": "job-contract-1"
+        });
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign")
+                    .header("Origin", "http://localhost:1420")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["queued"], true);
+        assert_eq!(v["job_id"], "job-contract-1");
+
+        let job = rx.try_recv().expect("job encolado");
+        assert_eq!(job.job_id, "job-contract-1");
+        let _ = std::fs::remove_file(&tmp);
     }
 }
