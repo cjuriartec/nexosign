@@ -21,6 +21,20 @@ pub const LOCAL_API_PORT: u16 = 14500;
 /// Tamaño máximo por PDF en un lote (50 MiB).
 const MAX_BATCH_PDF_BYTES: u64 = 50 * 1024 * 1024;
 
+fn validate_optional_output_dir(path: Option<std::path::PathBuf>) -> Result<Option<std::path::PathBuf>, String> {
+    let Some(p) = path else {
+        return Ok(None);
+    };
+    if !p.is_absolute() {
+        return Err(format!(
+            "output_dir debe ser ruta absoluta (recibido: {})",
+            p.display()
+        ));
+    }
+    std::fs::create_dir_all(&p).map_err(|e| format!("output_dir: {e}"))?;
+    Ok(Some(p))
+}
+
 fn validate_batch_inputs(paths: &[std::path::PathBuf]) -> Result<(), String> {
     if paths.is_empty() {
         return Err("inputs no puede estar vacío".into());
@@ -100,6 +114,12 @@ pub struct BatchSignBody {
     pub inputs: Vec<std::path::PathBuf>,
     #[serde(default)]
     pub job_id: Option<String>,
+    /// Solo loopback; la app desbloquea el token antes de encolar.
+    #[serde(default)]
+    pub pin: Option<String>,
+    /// Directorio absoluto donde escribir `{stem}_firmado.pdf` para cada entrada (p. ej. carpeta `…_firmados`).
+    #[serde(default)]
+    pub output_dir: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
@@ -217,6 +237,47 @@ async fn post_batch_sign(
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response();
     }
 
+    let output_dir = match validate_optional_output_dir(body.output_dir) {
+        Ok(d) => d,
+        Err(msg) => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response();
+        }
+    };
+
+    if let Some(ref pin_raw) = body.pin {
+        let pin_trim = pin_raw.trim();
+        if !pin_trim.is_empty() {
+            let Some(mgr) = state.pkcs11.clone() else {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({ "error": "PIN vía API no disponible (modo prueba o sin token)" })),
+                )
+                    .into_response();
+            };
+            let cert_hex = body.cert_id_hex.trim().to_string();
+            let pin_owned = pin_trim.to_string();
+            let login_res =
+                tokio::task::spawn_blocking(move || mgr.login_for_certificate(pin_owned, &cert_hex)).await;
+            match login_res {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(serde_json::json!({ "error": e.to_string() })),
+                    )
+                        .into_response();
+                }
+                Err(e) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": e.to_string() })),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    }
+
     let job_id = body
         .job_id
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -241,6 +302,7 @@ async fn post_batch_sign(
         cert_id_hex: body.cert_id_hex,
         inputs: body.inputs,
         cancel,
+        output_dir,
     };
 
     match tx.try_send(job) {

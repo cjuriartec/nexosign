@@ -15,17 +15,24 @@ pub struct SignBatchInput {
     pub cert_id_hex: String,
     pub inputs: Vec<PathBuf>,
     pub cancel: CancellationToken,
+    /// Si está definido, los PDF firmados van aquí como `{stem}_firmado.pdf` (p. ej. carpeta hermana `_firmados`).
+    pub output_dir: Option<PathBuf>,
 }
 
-fn output_path_for(input: &Path) -> PathBuf {
+fn output_path_for(input: &Path, output_dir: Option<&Path>) -> PathBuf {
+    let stem = input
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let out_name = format!("{stem}_firmado.pdf");
     if let Ok(dir) = std::env::var("NEXOSIGN_BATCH_OUTPUT_DIR") {
-        let base = input.file_name().unwrap_or_default();
-        let stem = Path::new(base).file_stem().unwrap_or_default();
-        return PathBuf::from(dir).join(format!("{}_signed.pdf", stem.to_string_lossy()));
+        return PathBuf::from(dir).join(&out_name);
+    }
+    if let Some(dir) = output_dir {
+        return dir.join(&out_name);
     }
     let mut out = input.to_path_buf();
-    let stem = out.file_stem().unwrap_or_default().to_string_lossy();
-    out.set_file_name(format!("{}_signed.pdf", stem));
+    out.set_file_name(out_name);
     out
 }
 
@@ -56,8 +63,12 @@ pub fn process_batch<P: ProgressNotifier>(
             .unwrap_or_default();
         let path_str = path.display().to_string();
 
-        let res =
-            pades::sign_pdf_pades_bes(token.clone(), &input.cert_id_hex, path, &output_path_for(path));
+        let res = pades::sign_pdf_pades_bes(
+            token.clone(),
+            &input.cert_id_hex,
+            path,
+            &output_path_for(path, input.output_dir.as_deref()),
+        );
 
         match res {
             Ok(()) => progress.notify(ProgressEvent {
@@ -78,5 +89,6 @@ pub fn process_batch<P: ProgressNotifier>(
             }),
         }
     }
+    let _ = token.logout();
     Ok(())
 }

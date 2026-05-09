@@ -1,7 +1,8 @@
-//! PKCS#11 token manager (initialize, list signing certs, PIN session).
+//! PKCS#11 token manager (initialize, list signing certs, PIN solo durante operaciones de firma).
 
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use cryptoki::context::{CInitializeArgs, CInitializeFlags, Pkcs11};
 use cryptoki::mechanism::Mechanism;
@@ -11,6 +12,7 @@ use cryptoki::slot::Slot;
 use cryptoki::types::AuthPin;
 use x509_parser::prelude::*;
 
+use crate::adapters::persistence::Pkcs11PathsDb;
 use crate::adapters::pkcs11::driver::find_all_pkcs11_modules;
 use crate::adapters::pkcs11::error::TokenError;
 use crate::domain::cert_filter::der_is_signing_certificate;
@@ -37,6 +39,17 @@ fn slots_with_token_effective(pkcs11: &Pkcs11) -> Result<Vec<Slot>, TokenError> 
         }
     }
     Ok(out)
+}
+
+fn pick_slot_from_slice(slots: &[Slot]) -> Result<Slot, TokenError> {
+    if slots.is_empty() {
+        return Err(TokenError::NoSlot);
+    }
+    let idx = std::env::var("NEXOSIGN_PKCS11_SLOT")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    slots.get(idx).copied().ok_or(TokenError::SlotIndex)
 }
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -124,36 +137,108 @@ fn subject_dn_from_der(der: &[u8]) -> String {
     cert.subject().to_string()
 }
 
+/// Enumera certificados de firma en una sesión RW ya abierta.
+fn collect_signing_certs_from_session(
+    session: &mut cryptoki::session::Session,
+) -> Result<Vec<SigningCertSummary>, TokenError> {
+    let search = vec![
+        Attribute::Class(ObjectClass::CERTIFICATE),
+        Attribute::CertificateType(CertificateType::X_509),
+    ];
+    let handles = session.find_objects(&search)?;
+
+    let mut out = Vec::new();
+    for h in handles {
+        let attrs = session.get_attributes(
+            h,
+            &[
+                AttributeType::Value,
+                AttributeType::Label,
+                AttributeType::Id,
+            ],
+        )?;
+        let mut der: Option<Vec<u8>> = None;
+        let mut label = String::new();
+        let mut id_bytes: Option<Vec<u8>> = None;
+        for a in attrs {
+            match a {
+                Attribute::Value(v) => der = Some(v),
+                Attribute::Label(l) => label = String::from_utf8_lossy(&l).into_owned(),
+                Attribute::Id(id) => id_bytes = Some(id),
+                _ => {}
+            }
+        }
+        let Some(der) = der else {
+            continue;
+        };
+        if !der_is_signing_certificate(&der) {
+            continue;
+        }
+        let id_hex = match id_bytes {
+            Some(ref id) if !id.is_empty() => bytes_to_hex(id),
+            _ => bytes_to_hex(&der[..der.len().min(32)]),
+        };
+        out.push(SigningCertSummary {
+            id_hex,
+            label,
+            subject_dn: subject_dn_from_der(&der),
+        });
+    }
+
+    Ok(out)
+}
+
+/// Lista certificados de firma visibles en un único fichero PKCS#11 (cierra sesión al terminar).
+fn list_signing_certs_for_path(path: &std::path::Path) -> Result<Vec<SigningCertSummary>, TokenError> {
+    let pkcs11 = Pkcs11::new(path)?;
+    pkcs11.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))?;
+    let slots = slots_with_token_effective(&pkcs11)?;
+    if slots.is_empty() {
+        return Ok(vec![]);
+    }
+    let slot = pick_slot_from_slice(&slots)?;
+    let mut session = pkcs11.open_rw_session(slot)?;
+    collect_signing_certs_from_session(&mut session)
+}
+
 pub struct Pkcs11TokenManager {
     inner: Mutex<Inner>,
 }
 
 struct Inner {
     pkcs11: Option<Pkcs11>,
-    active_module_path: Option<std::path::PathBuf>,
+    active_module_path: Option<PathBuf>,
     session: Option<cryptoki::session::Session>,
     logged_in: bool,
-    last_activity: Option<Instant>,
-    idle_timeout: Duration,
+    /// Misma base SQLite que orígenes permitidos (`OriginDbPath`).
+    app_database_path: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl Pkcs11TokenManager {
-    pub fn new() -> Self {
-        let idle_secs = std::env::var("NEXOSIGN_TOKEN_IDLE_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(900_u64);
-
+    /// `app_database_path`: ruta al `.sqlite` de la app; `None` hasta que Tauri ejecuta `setup` (tests: `None`).
+    pub fn new(app_database_path: Arc<Mutex<Option<PathBuf>>>) -> Self {
         Self {
             inner: Mutex::new(Inner {
                 pkcs11: None,
                 active_module_path: None,
                 session: None,
                 logged_in: false,
-                last_activity: None,
-                idle_timeout: Duration::from_secs(idle_secs),
+                app_database_path,
             }),
         }
+    }
+
+    /// Cierra sesión PKCS#11 en memoria para volver a cargar el módulo tras cambiar rutas en BD.
+    pub fn reset_pkcs11_driver_state(&self) -> Result<(), TokenError> {
+        let mut inner = self.lock_inner()?;
+        if let Some(ref sess) = inner.session {
+            let _ = sess.logout();
+        }
+        inner.session = None;
+        inner.pkcs11 = None;
+        inner.active_module_path = None;
+        inner.logged_in = false;
+        Ok(())
     }
 
     fn lock_inner(&self) -> Result<std::sync::MutexGuard<'_, Inner>, TokenError> {
@@ -211,82 +296,47 @@ impl Pkcs11TokenManager {
     }
 
     pub fn list_signing_certificates(&self) -> Result<Vec<SigningCertSummary>, TokenError> {
-        let mut inner = self.lock_inner()?;
-        maybe_idle_logout(&mut inner)?;
-        ensure_session_rw(&mut inner)?;
-        inner.touch_activity();
-        let session = inner.session.as_mut().expect("session");
+        let paths = {
+            let inner = self.lock_inner()?;
+            merged_pkcs11_module_paths(&inner)?
+        };
 
-        let search = vec![
-            Attribute::Class(ObjectClass::CERTIFICATE),
-            Attribute::CertificateType(CertificateType::X_509),
-        ];
-        let handles = session.find_objects(&search)?;
-
-        let mut out = Vec::new();
-        for h in handles {
-            let attrs = session.get_attributes(
-                h,
-                &[
-                    AttributeType::Value,
-                    AttributeType::Label,
-                    AttributeType::Id,
-                ],
-            )?;
-            let mut der: Option<Vec<u8>> = None;
-            let mut label = String::new();
-            let mut id_bytes: Option<Vec<u8>> = None;
-            for a in attrs {
-                match a {
-                    Attribute::Value(v) => der = Some(v),
-                    Attribute::Label(l) => label = String::from_utf8_lossy(&l).into_owned(),
-                    Attribute::Id(id) => id_bytes = Some(id),
-                    _ => {}
+        let mut merged = Vec::new();
+        let mut seen = HashSet::new();
+        for path in paths {
+            match list_signing_certs_for_path(&path) {
+                Ok(certs) => {
+                    for c in certs {
+                        if seen.insert(c.id_hex.clone()) {
+                            merged.push(c);
+                        }
+                    }
                 }
+                Err(_) => continue,
             }
-            let Some(der) = der else {
-                continue;
-            };
-            if !der_is_signing_certificate(&der) {
-                continue;
-            }
-            let id_hex = match id_bytes {
-                Some(ref id) if !id.is_empty() => bytes_to_hex(id),
-                _ => bytes_to_hex(&der[..der.len().min(32)]),
-            };
-            out.push(SigningCertSummary {
-                id_hex,
-                label,
-                subject_dn: subject_dn_from_der(&der),
-            });
         }
-
-        Ok(out)
+        Ok(merged)
     }
 
     pub fn certificate_der_by_id_hex(&self, cert_id_hex: &str) -> Result<Vec<u8>, TokenError> {
         let mut inner = self.lock_inner()?;
-        maybe_idle_logout(&mut inner)?;
-        ensure_session_rw(&mut inner)?;
-        inner.touch_activity();
+        ensure_pkcs11_and_session_for_cert(&mut inner, cert_id_hex)?;
         let session = inner.session.as_mut().expect("session");
         let (der, _) = cert_der_and_id_for_hex(session, cert_id_hex)?;
         Ok(der)
     }
 
-    /// Firma RSA SHA-256 PKCS#1 v1.5 (`CKM_SHA256_RSA_PKCS`). Requiere PIN (`login`).
+    /// Firma RSA SHA-256 PKCS#1 v1.5 (`CKM_SHA256_RSA_PKCS`). Requiere PIN (`login` / `login_for_certificate`).
     pub fn rsa_sha256_pkcs1_sign(
         &self,
         cert_id_hex: &str,
         data: &[u8],
     ) -> Result<Vec<u8>, TokenError> {
         let mut inner = self.lock_inner()?;
-        maybe_idle_logout(&mut inner)?;
-        ensure_session_rw(&mut inner)?;
+        ensure_pkcs11_and_session_for_cert(&mut inner, cert_id_hex)?;
         if !inner.logged_in {
             return Err(TokenError::NotLoggedIn);
         }
-        inner.touch_activity();
         let session = inner.session.as_mut().expect("session");
         let (_, id_bytes) = cert_der_and_id_for_hex(session, cert_id_hex)?;
         let search_key = vec![
@@ -303,7 +353,6 @@ impl Pkcs11TokenManager {
             return Err(TokenError::EmptyPin);
         }
         let mut inner = self.lock_inner()?;
-        maybe_idle_logout(&mut inner)?;
         ensure_session_rw(&mut inner)?;
         {
             let session = inner.session.as_mut().expect("session");
@@ -311,7 +360,23 @@ impl Pkcs11TokenManager {
             session.login(UserType::User, Some(&auth))?;
         }
         inner.logged_in = true;
-        inner.touch_activity();
+        Ok(())
+    }
+
+    /// Igual que [`login`], pero abre sesión en el **módulo PKCS#11 que contiene** `cert_id_hex`
+    /// (necesario si hay varios middlewares y el certificado no está en el primero de la lista).
+    pub fn login_for_certificate(&self, pin: String, cert_id_hex: &str) -> Result<(), TokenError> {
+        if pin.is_empty() {
+            return Err(TokenError::EmptyPin);
+        }
+        let mut inner = self.lock_inner()?;
+        ensure_pkcs11_and_session_for_cert(&mut inner, cert_id_hex)?;
+        {
+            let session = inner.session.as_mut().expect("session");
+            let auth = AuthPin::new(pin.into());
+            session.login(UserType::User, Some(&auth))?;
+        }
+        inner.logged_in = true;
         Ok(())
     }
 
@@ -323,37 +388,18 @@ impl Pkcs11TokenManager {
             }
         }
         inner.logged_in = false;
-        inner.last_activity = None;
         Ok(())
     }
 
     pub fn session_status(&self) -> SessionStatusDto {
-        let mut inner = match self.lock_inner() {
-            Ok(g) => g,
-            Err(_) => {
-                return SessionStatusDto {
-                    logged_in: false,
-                    idle_timeout_secs: 900,
-                    seconds_until_auto_logout: None,
-                };
-            }
-        };
-        let _ = maybe_idle_logout(&mut inner);
-        let secs_left = match (inner.logged_in, inner.last_activity) {
-            (true, Some(t)) => {
-                let elapsed = t.elapsed();
-                if elapsed >= inner.idle_timeout {
-                    Some(0)
-                } else {
-                    Some((inner.idle_timeout - elapsed).as_secs())
-                }
-            }
-            _ => None,
-        };
+        let logged_in = self
+            .lock_inner()
+            .map(|g| g.logged_in)
+            .unwrap_or(false);
         SessionStatusDto {
-            logged_in: inner.logged_in,
-            idle_timeout_secs: inner.idle_timeout.as_secs(),
-            seconds_until_auto_logout: secs_left,
+            logged_in,
+            idle_timeout_secs: 0,
+            seconds_until_auto_logout: None,
         }
     }
 }
@@ -361,6 +407,7 @@ impl Pkcs11TokenManager {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SessionStatusDto {
     pub logged_in: bool,
+    /// Siempre `0` (ya no hay cierre por inactividad).
     pub idle_timeout_secs: u64,
     pub seconds_until_auto_logout: Option<u64>,
 }
@@ -384,12 +431,105 @@ pub struct Pkcs11Diagnostics {
     pub slots: Vec<Pkcs11SlotDetail>,
 }
 
+fn pkcs11_paths_from_db(inner: &Inner) -> Option<Vec<PathBuf>> {
+    let guard = inner.app_database_path.lock().ok()?;
+    let db_file = guard.as_ref()?.clone();
+    let db = Pkcs11PathsDb::open(&db_file).ok()?;
+    let paths = db.list_paths_ordered().ok()?;
+    Some(paths.into_iter().map(PathBuf::from).collect())
+}
+
+fn preferred_module_path_from_db(inner: &Inner) -> Option<PathBuf> {
+    let guard = inner.app_database_path.lock().ok()?;
+    let db_file = guard.as_ref()?.clone();
+    let db = Pkcs11PathsDb::open(&db_file).ok()?;
+    let s = db.get_preferred_module_path().ok()??;
+    let p = PathBuf::from(s);
+    if p.is_file() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+/// Orden efectivo de candidatos: si el usuario eligió un middleware preferido en BD, se prueba primero.
+fn merged_pkcs11_module_paths(inner: &Inner) -> Result<Vec<PathBuf>, TokenError> {
+    let db_paths = pkcs11_paths_from_db(inner);
+    let mut paths = find_all_pkcs11_modules(db_paths.as_deref())?;
+    if let Some(pref) = preferred_module_path_from_db(inner) {
+        let key = pref.to_string_lossy().to_lowercase();
+        paths.retain(|p| p.to_string_lossy().to_lowercase() != key);
+        paths.insert(0, pref);
+    }
+    Ok(paths)
+}
+
+/// Selecciona el módulo PKCS#11 y slot donde existe `cert_id_hex` (recorre rutas BD + incorporadas).
+fn ensure_pkcs11_and_session_for_cert(
+    inner: &mut Inner,
+    cert_id_hex: &str,
+) -> Result<(), TokenError> {
+    if let Some(ref mut sess) = inner.session {
+        if cert_der_and_id_for_hex(sess, cert_id_hex).is_ok() {
+            return Ok(());
+        }
+        inner.session = None;
+        inner.logged_in = false;
+    }
+
+    if let Some(ref pkcs11) = inner.pkcs11 {
+        let slots = slots_with_token_effective(pkcs11)?;
+        for slot in slots {
+            let sess = pkcs11.open_rw_session(slot)?;
+            if cert_der_and_id_for_hex(&sess, cert_id_hex).is_ok() {
+                inner.session = Some(sess);
+                return Ok(());
+            }
+        }
+        inner.pkcs11 = None;
+        inner.active_module_path = None;
+    }
+
+    let paths = merged_pkcs11_module_paths(inner)?;
+
+    for path in paths {
+        let pkcs11 = match Pkcs11::new(&path) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if pkcs11
+            .initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))
+            .is_err()
+        {
+            continue;
+        }
+        let slots = match slots_with_token_effective(&pkcs11) {
+            Ok(s) if !s.is_empty() => s,
+            _ => continue,
+        };
+        for slot in slots {
+            let sess = match pkcs11.open_rw_session(slot) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            if cert_der_and_id_for_hex(&sess, cert_id_hex).is_ok() {
+                inner.pkcs11 = Some(pkcs11);
+                inner.active_module_path = Some(path.clone());
+                inner.session = Some(sess);
+                return Ok(());
+            }
+        }
+    }
+
+    Err(TokenError::BadCertId)
+}
+
 fn ensure_pkcs11(inner: &mut Inner) -> Result<(), TokenError> {
     if inner.pkcs11.is_some() {
         return Ok(());
     }
 
-    let paths = find_all_pkcs11_modules()?;
+    let paths = merged_pkcs11_module_paths(inner)?;
 
     for path in &paths {
         if let Ok(pkcs11) = Pkcs11::new(path) {
@@ -420,14 +560,7 @@ fn ensure_pkcs11(inner: &mut Inner) -> Result<(), TokenError> {
 
 fn pick_slot(pkcs11: &Pkcs11) -> Result<Slot, TokenError> {
     let slots = slots_with_token_effective(pkcs11)?;
-    if slots.is_empty() {
-        return Err(TokenError::NoSlot);
-    }
-    let idx = std::env::var("NEXOSIGN_PKCS11_SLOT")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(0);
-    slots.get(idx).copied().ok_or(TokenError::SlotIndex)
+    pick_slot_from_slice(&slots)
 }
 
 fn ensure_session_rw(inner: &mut Inner) -> Result<(), TokenError> {
@@ -442,25 +575,3 @@ fn ensure_session_rw(inner: &mut Inner) -> Result<(), TokenError> {
     Ok(())
 }
 
-fn maybe_idle_logout(inner: &mut Inner) -> Result<(), TokenError> {
-    if !inner.logged_in {
-        return Ok(());
-    }
-    let Some(last) = inner.last_activity else {
-        return Ok(());
-    };
-    if last.elapsed() >= inner.idle_timeout {
-        if let Some(ref s) = inner.session {
-            let _ = s.logout();
-        }
-        inner.logged_in = false;
-        inner.last_activity = None;
-    }
-    Ok(())
-}
-
-impl Inner {
-    fn touch_activity(&mut self) {
-        self.last_activity = Some(Instant::now());
-    }
-}

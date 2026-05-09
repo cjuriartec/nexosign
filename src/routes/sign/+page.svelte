@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { open } from "@tauri-apps/plugin-dialog";
+	import { basename, dirname, join } from "@tauri-apps/api/path";
 	import { toast } from "svelte-sonner";
 	import * as Card from "$lib/components/ui/card/index.js";
 	import { Button } from "$lib/components/ui/button/index.js";
@@ -11,37 +12,57 @@
 	import { Progress } from "$lib/components/ui/progress/index.js";
 	import * as ScrollArea from "$lib/components/ui/scroll-area/index.js";
 	import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert/index.js";
-	import { postBatchSign } from "$lib/api/local-api";
+	import { postBatchSign, type BatchSignBody } from "$lib/api/local-api";
 	import { subscribeProgress, type ProgressPayload } from "$lib/events/progress";
 	import * as pkcs11 from "$lib/tauri/pkcs11";
 	import type { SigningCertSummary } from "$lib/tauri/pkcs11";
+	import { enumeratePdfsUnderFolder } from "$lib/tauri/batch";
+	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
 	import { cancelBatchJob, getLocalApiBaseUrl } from "$lib/tauri/settings";
 	import { isTauriRuntime } from "$lib/tauri/env";
 	import FileStackIcon from "@lucide/svelte/icons/files";
+	import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
+	import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
+	import CheckIcon from "@lucide/svelte/icons/check";
+	import { cn } from "$lib/utils.js";
+
+	const SIGN_STEPS = [
+		{ step: 1, title: "Archivos", hint: "PDF sueltos o carpeta entera" },
+		{ step: 2, title: "Certificado", hint: "Tu identidad para firmar" },
+		{ step: 3, title: "PIN", hint: "Del DNIe o tarjeta (no se guarda)" },
+		{ step: 4, title: "Confirmar", hint: "Revisa y pulsa Firmar" },
+	] as const;
 
 	let paths = $state<string[]>([]);
+	/** Origen del lote actual: archivos sueltos vs carpeta (salida agrupada). */
+	let sourceMode = $state<"files" | "folder" | null>(null);
+	let folderPath = $state<string | null>(null);
+	/** Directorio absoluto `{padre}/{nombre}_firmados` cuando sourceMode === folder */
+	let outputDirForJob = $state<string | null>(null);
+
 	let certs = $state<SigningCertSummary[]>([]);
 	let certId = $state("");
 	let pin = $state("");
-	let jobId = $state(`job-${Date.now()}`);
-	let session = $state<Awaited<ReturnType<typeof pkcs11.pkcs11SessionStatus>> | null>(null);
 	let apiBase = $state("");
 	let busy = $state(false);
 
+	/** 1 origen · 2 certificado · 3 PIN · 4 confirmar */
+	let wizardStep = $state(1);
+
 	let activeJobId = $state<string | null>(null);
-	/** Ref para el callback de progreso (evita cierre obsoleto). */
 	const activeJobRef: { current: string | null } = { current: null };
 	let progressPct = $state(0);
 	let logLines = $state<string[]>([]);
 
+	const showProgressPanel = $derived(
+		activeJobId !== null || logLines.length > 0 || progressPct > 0,
+	);
+
+	const wizardBarPct = $derived(Math.round((wizardStep / 4) * 100));
+
 	function pushLog(line: string) {
 		logLines = [...logLines, line].slice(-120);
-	}
-
-	async function refreshSession() {
-		if (!isTauriRuntime()) return;
-		session = await pkcs11.pkcs11SessionStatus();
 	}
 
 	async function refreshCerts() {
@@ -52,24 +73,18 @@
 				certId = certs[0]?.id_hex ?? "";
 			}
 		} catch (e) {
-			toast.error(String(e));
 			certs = [];
+			if (isPkcs11NoTokenError(e)) {
+				return;
+			}
+			toast.error(String(e));
 		}
 	}
 
-	async function loginPin() {
-		if (!isTauriRuntime() || !pin.trim()) return;
-		busy = true;
-		try {
-			await pkcs11.pkcs11Login(pin);
-			toast.success("Sesión PKCS#11 iniciada");
-			await refreshSession();
-			await refreshCerts();
-		} catch (e) {
-			toast.error(String(e));
-		} finally {
-			busy = false;
-		}
+	async function computeFirmadosDir(folderAbs: string): Promise<string> {
+		const parent = await dirname(folderAbs);
+		const base = await basename(folderAbs);
+		return join(parent, `${base}_firmados`);
 	}
 
 	async function pickPdfs() {
@@ -83,13 +98,76 @@
 		});
 		if (sel === null) return;
 		const list = Array.isArray(sel) ? sel : [sel];
-		const unique = [...new Set([...paths, ...list])];
+		sourceMode = "files";
+		folderPath = null;
+		outputDirForJob = null;
+		const unique = [...new Set(list)];
 		paths = unique;
-		toast.message(`${list.length} archivo(s) añadidos`);
+	}
+
+	async function pickFolder() {
+		if (!isTauriRuntime()) {
+			toast.error("Requiere la app de escritorio.");
+			return;
+		}
+		const sel = await open({ directory: true, multiple: false });
+		if (sel === null || Array.isArray(sel)) return;
+		busy = true;
+		try {
+			const pdfs = await enumeratePdfsUnderFolder(sel);
+			paths = pdfs;
+			sourceMode = "folder";
+			folderPath = sel;
+			outputDirForJob = await computeFirmadosDir(sel);
+			if (pdfs.length === 0) {
+				toast.message("No hay PDFs en esa carpeta.");
+			}
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			busy = false;
+		}
+	}
+
+	function clearPaths() {
+		paths = [];
+		sourceMode = null;
+		folderPath = null;
+		outputDirForJob = null;
 	}
 
 	function removeAt(i: number) {
 		paths = paths.filter((_, idx) => idx !== i);
+		if (paths.length === 0) clearPaths();
+	}
+
+	async function step1Continue() {
+		if (paths.length === 0) return;
+		await refreshCerts();
+		wizardStep = 2;
+	}
+
+	async function step2Continue() {
+		if (!certId.trim()) {
+			toast.error("Selecciona un certificado.");
+			return;
+		}
+		wizardStep = 3;
+	}
+
+	function pinStepContinue() {
+		if (!pin.trim()) return;
+		wizardStep = 4;
+	}
+
+	function goBack() {
+		if (wizardStep <= 1) return;
+		wizardStep -= 1;
+	}
+
+	function jumpToStep(step: number) {
+		if (step < 1 || step >= wizardStep) return;
+		wizardStep = step;
 	}
 
 	async function submitBatch() {
@@ -98,11 +176,12 @@
 			return;
 		}
 		if (paths.length === 0) {
-			toast.error("Añade al menos un PDF.");
+			toast.error("No hay PDFs.");
 			return;
 		}
-		if (!session?.logged_in) {
-			toast.error("Inicia sesión con el PIN del token primero.");
+		if (!pin.trim()) {
+			toast.error("Indica el PIN del token en el paso 3.");
+			wizardStep = 3;
 			return;
 		}
 
@@ -112,18 +191,18 @@
 		activeJobId = null;
 		activeJobRef.current = null;
 		try {
-			const jid = jobId.trim() || undefined;
-			const res = await postBatchSign(
-				{
-					cert_id_hex: certId.trim(),
-					inputs: paths,
-					job_id: jid,
-				},
-				apiBase,
-			);
+			const body: BatchSignBody = {
+				cert_id_hex: certId.trim(),
+				inputs: paths,
+				pin: pin.trim(),
+			};
+			if (outputDirForJob) {
+				body.output_dir = outputDirForJob;
+			}
+			const res = await postBatchSign(body, apiBase);
 			activeJobId = res.job_id;
 			activeJobRef.current = res.job_id;
-			toast.success(`Lote encolado: ${res.job_id}`);
+			toast.success("Firma en curso");
 		} catch (e) {
 			toast.error(String(e));
 		} finally {
@@ -134,13 +213,13 @@
 	async function cancelJob() {
 		const id = activeJobId;
 		if (!id) {
-			toast.message("No hay un job activo reciente.");
+			toast.message("No hay una firma reciente en cola.");
 			return;
 		}
 		if (!isTauriRuntime()) return;
 		try {
 			const ok = await cancelBatchJob(id);
-			toast.message(ok ? "Cancelación enviada" : "Job no encontrado en cola");
+			toast.message(ok ? "Cancelación enviada" : "Trabajo no encontrado");
 		} catch (e) {
 			toast.error(String(e));
 		}
@@ -152,8 +231,7 @@
 		void (async () => {
 			if (isTauriRuntime()) {
 				apiBase = await getLocalApiBaseUrl();
-				await refreshSession();
-				if (session?.logged_in) await refreshCerts();
+				await refreshCerts();
 			} else {
 				apiBase = "http://127.0.0.1:14500";
 			}
@@ -175,114 +253,114 @@
 		return () => unlisten?.();
 	});
 
-	// sync ref si se limpia el job en UI
 	$effect(() => {
 		activeJobRef.current = activeJobId;
 	});
 </script>
 
 <svelte:head>
-	<title>Firmar PDFs — NexoSign</title>
+	<title>Firmar — NexoSign</title>
 </svelte:head>
 
 <div class="space-y-8">
-	<div>
-		<h1 class="text-3xl font-semibold tracking-tight">Firma masiva PAdES</h1>
-		<p class="text-muted-foreground mt-1 max-w-2xl text-sm leading-relaxed">
-			Selecciona PDFs en disco (rutas absolutas), certificado de firma y cola el lote contra la API local. El
-			progreso llega por eventos en tiempo real.
-		</p>
+	<div class="flex flex-wrap items-start justify-between gap-4">
+		<div>
+			<h1 class="text-3xl font-semibold tracking-tight">Firmar</h1>
+			<p class="text-muted-foreground mt-1 text-sm">
+				Paso <span class="text-foreground font-medium">{wizardStep}</span> de 4 · sigue el orden o vuelve atrás con el botón o tocando un paso ya hecho.
+			</p>
+		</div>
+		{#if wizardStep > 1}
+			<Button variant="outline" size="sm" onclick={() => goBack()} class="gap-1">
+				<ChevronLeftIcon class="size-4" />
+				Atrás
+			</Button>
+		{/if}
 	</div>
+
+	<nav class="space-y-3" aria-label="Pasos del asistente de firma">
+		<div class="grid grid-cols-4 gap-1.5 sm:gap-3">
+			{#each SIGN_STEPS as s}
+				{@const done = wizardStep > s.step}
+				{@const active = wizardStep === s.step}
+				<button
+					type="button"
+					disabled={s.step >= wizardStep}
+					title={s.step >= wizardStep ? "" : `Ir al paso ${s.step}: ${s.title}`}
+					class={cn(
+						"flex flex-col items-center gap-1 rounded-lg border px-1 py-2 text-center transition-colors sm:px-2 sm:py-3",
+						active && "border-primary bg-primary/5 ring-primary/25 ring-2",
+						done && !active && "border-border bg-muted/40 hover:bg-muted/70 text-foreground",
+						!done && !active && "border-border/60 opacity-55",
+					)}
+					onclick={() => jumpToStep(s.step)}
+				>
+					<span
+						class={cn(
+							"flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold sm:size-9 sm:text-sm",
+							active && "bg-primary text-primary-foreground",
+							done && !active && "bg-muted-foreground/25 text-muted-foreground",
+							!done && !active && "bg-muted text-muted-foreground",
+						)}
+					>
+						{#if done}
+							<CheckIcon class="size-3.5 sm:size-4" aria-hidden="true" />
+							<span class="sr-only">Completado</span>
+						{:else}
+							{s.step}
+						{/if}
+					</span>
+					<span class="text-[10px] font-medium leading-tight sm:text-xs">{s.title}</span>
+					<span class="text-muted-foreground hidden leading-tight sm:block sm:text-[11px]">{s.hint}</span>
+				</button>
+			{/each}
+		</div>
+		<div class="bg-muted h-1.5 overflow-hidden rounded-full" role="progressbar" aria-valuenow={wizardBarPct} aria-valuemin={0} aria-valuemax={100} aria-label="Avance del asistente">
+			<div
+				class="bg-primary h-full rounded-full transition-[width] duration-300 ease-out"
+				style="width: {wizardBarPct}%"
+			></div>
+		</div>
+	</nav>
 
 	{#if !isTauriRuntime()}
 		<Alert>
 			<FileStackIcon class="size-4" />
 			<AlertTitle>Vista limitada</AlertTitle>
-			<AlertDescription>
-				Para elegir archivos y usar PKCS#11, ejecuta NexoSign como aplicación Tauri. En navegador solo puedes
-				probar la API si ya tienes otra instancia sirviendo en {apiBase}.
-			</AlertDescription>
+			<AlertDescription>Usa la app de escritorio para elegir archivos y el lector.</AlertDescription>
 		</Alert>
 	{/if}
 
-	<div class="grid gap-4 lg:grid-cols-2">
+	{#if wizardStep === 1}
 		<Card.Root>
 			<Card.Header>
-				<Card.Title class="text-base">Token y certificado</Card.Title>
-				<Card.Description>PIN y certificado de firma listados por PKCS#11.</Card.Description>
+				<Card.Title class="text-base">{SIGN_STEPS[0].title}</Card.Title>
+				<Card.Description class="text-xs">
+					{SIGN_STEPS[0].hint}. Si eliges carpeta, se incluyen subcarpetas y los PDFs aparecen en la tabla.
+				</Card.Description>
 			</Card.Header>
 			<Card.Content class="space-y-4">
-				{#if session}
-					<p class="text-sm">
-						Sesión:
-						<strong>{session.logged_in ? "activa" : "sin PIN"}</strong>
+				<div class="flex flex-wrap gap-2">
+					<Button type="button" onclick={() => pickPdfs()} disabled={busy}>
+						<FileStackIcon class="mr-2 size-4" />
+						Elegir PDFs…
+					</Button>
+					<Button type="button" variant="secondary" onclick={() => pickFolder()} disabled={busy}>
+						<FolderOpenIcon class="mr-2 size-4" />
+						Elegir carpeta…
+					</Button>
+					<Button type="button" variant="outline" disabled={busy || paths.length === 0} onclick={() => clearPaths()}>
+						Limpiar
+					</Button>
+				</div>
+				{#if outputDirForJob && sourceMode === "folder"}
+					<p class="text-muted-foreground text-xs">
+						Salida:
+						<code class="bg-muted ml-1 rounded px-1 py-0.5 font-mono">{outputDirForJob}</code>
 					</p>
 				{/if}
-				<div class="grid gap-2">
-					<Label for="pin-sign">PIN del token</Label>
-					<div class="flex flex-wrap gap-2">
-						<Input
-							id="pin-sign"
-							class="max-w-xs"
-							type="password"
-							autocomplete="off"
-							bind:value={pin}
-							placeholder="PIN"
-						/>
-						<Button variant="secondary" disabled={busy || !pin.trim()} onclick={() => loginPin()}>
-							Aplicar PIN
-						</Button>
-						<Button variant="outline" size="sm" disabled={busy} onclick={() => refreshCerts()}>
-							Refrescar lista
-						</Button>
-					</div>
-				</div>
-
-				<div class="grid gap-2">
-					<Label>Certificado</Label>
-					{#if certs.length === 0}
-						<p class="text-muted-foreground text-sm">
-							Inicia sesión y refresca la lista en «Certificados».
-						</p>
-					{:else}
-						<Select.Root type="single" bind:value={certId}>
-							<Select.Trigger class="w-full max-w-lg justify-between">
-								{certs.find((c) => c.id_hex === certId)?.label ||
-									"Selecciona un certificado"}
-							</Select.Trigger>
-							<Select.Content>
-								{#each certs as c}
-									<Select.Item value={c.id_hex} label={c.label}>
-										<div class="flex flex-col text-left">
-											<span class="font-medium">{c.label || "(sin etiqueta)"}</span>
-											<span class="text-muted-foreground text-xs">{c.subject_dn}</span>
-										</div>
-									</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					{/if}
-				</div>
-			</Card.Content>
-		</Card.Root>
-
-		<Card.Root>
-			<Card.Header>
-				<Card.Title class="text-base">Archivos PDF</Card.Title>
-				<Card.Description>Solo rutas absolutas en este equipo.</Card.Description>
-			</Card.Header>
-			<Card.Content class="space-y-3">
-				<div class="flex flex-wrap gap-2">
-					<Button onclick={() => pickPdfs()} disabled={busy}>
-						<FileStackIcon class="mr-2 size-4" />
-						Añadir PDFs…
-					</Button>
-					<Button variant="outline" disabled={busy || paths.length === 0} onclick={() => (paths = [])}>
-						Vaciar lista
-					</Button>
-				</div>
 				{#if paths.length === 0}
-					<p class="text-muted-foreground text-sm">Todavía no hay archivos.</p>
+					<p class="text-muted-foreground text-sm">Nada seleccionado.</p>
 				{:else}
 					<Table.Root>
 						<Table.Header>
@@ -314,58 +392,157 @@
 							{/each}
 						</Table.Body>
 					</Table.Root>
+					<p class="text-muted-foreground text-xs">{paths.length} PDF</p>
 				{/if}
+				<Button
+					type="button"
+					disabled={busy || paths.length === 0}
+					onclick={() => step1Continue()}
+					aria-label={`Siguiente paso: ${SIGN_STEPS[1].title}`}
+				>
+					Continuar
+					<span class="text-primary-foreground/85 ml-1 hidden font-normal sm:inline">
+						→ {SIGN_STEPS[1].title}
+					</span>
+				</Button>
 			</Card.Content>
 		</Card.Root>
-	</div>
+	{/if}
 
-	<Card.Root>
-		<Card.Header>
-			<Card.Title class="text-base">Cola de firma</Card.Title>
-			<Card.Description>
-				<code class="bg-muted rounded px-1 text-xs">job_id</code> opcional (si no, el servidor genera uno).
-			</Card.Description>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-4 sm:flex-row sm:items-end">
-			<div class="grid max-w-md flex-1 gap-2">
-				<Label for="job">job_id</Label>
-				<Input id="job" bind:value={jobId} placeholder="job-opcional" />
-			</div>
-			<div class="flex flex-wrap gap-2">
-				<Button
-					disabled={busy || paths.length === 0 || !certId}
-					onclick={() => submitBatch()}
-				>
-					Encolar firma
-				</Button>
-				<Button variant="outline" disabled={busy} onclick={() => cancelJob()}>Cancelar job</Button>
-			</div>
-		</Card.Content>
-	</Card.Root>
-
-	<Card.Root>
-		<Card.Header>
-			<Card.Title class="text-base">Progreso</Card.Title>
-			<Card.Description>
-				Evento <code class="bg-muted rounded px-1 text-xs">progreso</code> del job activo.
-				{#if activeJobId}
-					<span class="text-foreground font-mono text-xs"> {activeJobId}</span>
+	{#if wizardStep === 2}
+		<Card.Root>
+			<Card.Header>
+				<Card.Title class="text-base">{SIGN_STEPS[1].title}</Card.Title>
+				<Card.Description class="text-xs">
+					{SIGN_STEPS[1].hint}. Conecta el lector o tarjeta y usa «Actualizar» si la lista está vacía.
+				</Card.Description>
+			</Card.Header>
+			<Card.Content class="space-y-4">
+				{#if certs.length === 0}
+					<p class="text-muted-foreground text-sm">Sin certificados (lector o token).</p>
+				{:else}
+					<div class="grid gap-2">
+						<Label>Certificado</Label>
+						<Select.Root type="single" bind:value={certId}>
+							<Select.Trigger class="w-full max-w-xl justify-between">
+								{certs.find((c) => c.id_hex === certId)?.label || "Selecciona un certificado"}
+							</Select.Trigger>
+							<Select.Content>
+								{#each certs as c}
+									<Select.Item value={c.id_hex} label={c.label}>
+										<div class="flex flex-col text-left">
+											<span class="font-medium">{c.label || "(sin etiqueta)"}</span>
+											<span class="text-muted-foreground text-xs">{c.subject_dn}</span>
+										</div>
+									</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					</div>
 				{/if}
-			</Card.Description>
-		</Card.Header>
-		<Card.Content class="space-y-4">
-			<Progress value={progressPct} class="h-2" />
-			<ScrollArea.Root class="h-48 rounded-md border">
-				<div class="p-3 font-mono text-xs leading-relaxed">
-					{#if logLines.length === 0}
-						<span class="text-muted-foreground">Sin eventos todavía.</span>
+				<div class="flex flex-wrap gap-2">
+					<Button type="button" variant="outline" size="sm" onclick={() => refreshCerts()} disabled={busy}>
+						Actualizar
+					</Button>
+					<Button
+						type="button"
+						disabled={busy || !certId.trim() || certs.length === 0}
+						onclick={() => step2Continue()}
+						aria-label={`Siguiente paso: ${SIGN_STEPS[2].title}`}
+					>
+						Continuar
+						<span class="text-primary-foreground/85 ml-1 hidden font-normal sm:inline">
+							→ {SIGN_STEPS[2].title}
+						</span>
+					</Button>
+				</div>
+			</Card.Content>
+		</Card.Root>
+	{/if}
+
+	{#if wizardStep === 3}
+		<Card.Root>
+			<Card.Header>
+				<Card.Title class="text-base">{SIGN_STEPS[2].title}</Card.Title>
+				<Card.Description class="text-xs">{SIGN_STEPS[2].hint}. No se guarda en disco.</Card.Description>
+			</Card.Header>
+			<Card.Content class="space-y-4">
+				<div class="grid max-w-md gap-2">
+					<Label for="pin-wizard">PIN</Label>
+					<Input
+						id="pin-wizard"
+						type="password"
+						autocomplete="off"
+						bind:value={pin}
+						placeholder="PIN"
+						onkeydown={(e) => e.key === "Enter" && pinStepContinue()}
+					/>
+				</div>
+				<Button
+					type="button"
+					disabled={busy || !pin.trim()}
+					onclick={() => pinStepContinue()}
+					aria-label={`Siguiente paso: ${SIGN_STEPS[3].title}`}
+				>
+					Continuar
+					<span class="text-primary-foreground/85 ml-1 hidden font-normal sm:inline">
+						→ {SIGN_STEPS[3].title}
+					</span>
+				</Button>
+			</Card.Content>
+		</Card.Root>
+	{/if}
+
+	{#if wizardStep === 4}
+		<Card.Root>
+			<Card.Header>
+				<Card.Title class="text-base">{SIGN_STEPS[3].title}</Card.Title>
+				<Card.Description class="text-xs">{SIGN_STEPS[3].hint}</Card.Description>
+			</Card.Header>
+			<Card.Content class="space-y-4 text-sm">
+				<div class="text-muted-foreground space-y-1 text-xs">
+					<p>
+						<span class="text-foreground font-medium">{paths.length}</span>
+						archivo(s) ·
+						<span class="text-foreground font-medium"
+							>{certs.find((c) => c.id_hex === certId)?.label || certId}</span
+						>
+					</p>
+					{#if outputDirForJob}
+						<p class="truncate font-mono" title={outputDirForJob}>{outputDirForJob}</p>
 					{:else}
-						{#each logLines as line}
-							<div>{line}</div>
-						{/each}
+						<p><code class="bg-muted rounded px-1">*_firmado.pdf</code> junto a cada PDF</p>
 					{/if}
 				</div>
-			</ScrollArea.Root>
-		</Card.Content>
-	</Card.Root>
+				<div class="flex flex-wrap gap-2">
+					<Button type="button" disabled={busy || paths.length === 0 || !certId} onclick={() => submitBatch()}>
+						Firmar
+					</Button>
+					<Button type="button" variant="outline" disabled={busy} onclick={() => cancelJob()}>Cancelar</Button>
+				</div>
+			</Card.Content>
+		</Card.Root>
+	{/if}
+
+	{#if showProgressPanel}
+		<Card.Root>
+			<Card.Header class="pb-2">
+				<Card.Title class="text-base">Progreso</Card.Title>
+			</Card.Header>
+			<Card.Content class="space-y-4">
+				<Progress value={progressPct} class="h-2" />
+				<ScrollArea.Root class="h-40 rounded-md border">
+					<div class="p-3 font-mono text-xs leading-relaxed">
+						{#if logLines.length === 0}
+							<span class="text-muted-foreground">Esperando eventos…</span>
+						{:else}
+							{#each logLines as line}
+								<div>{line}</div>
+							{/each}
+						{/if}
+					</div>
+				</ScrollArea.Root>
+			</Card.Content>
+		</Card.Root>
+	{/if}
 </div>

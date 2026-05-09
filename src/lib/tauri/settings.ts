@@ -19,3 +19,36 @@ export async function removeAllowedOrigin(origin: string): Promise<void> {
 export async function cancelBatchJob(job_id: string): Promise<boolean> {
 	return invoke<boolean>("cancel_batch_job", { job_id });
 }
+
+/** Rutas PKCS#11 guardadas en SQLite (orden = prioridad respecto a las incorporadas en driver). */
+export async function listPkcs11DriverPaths(): Promise<string[]> {
+	return invoke<string[]>("list_pkcs11_driver_paths");
+}
+
+export async function addPkcs11DriverPath(path: string): Promise<void> {
+	return invoke<void>("add_pkcs11_driver_path", { path });
+}
+
+export async function removePkcs11DriverPath(path: string): Promise<void> {
+	return invoke<void>("remove_pkcs11_driver_path", { path });
+}
+
+export async function setPkcs11DriverPathsOrder(paths: string[]): Promise<void> {
+	return invoke<void>("set_pkcs11_driver_paths_order", { paths });
+}
+
+export async function resetPkcs11DriverPathsToDefaults(): Promise<void> {
+	return invoke<void>("reset_pkcs11_driver_paths_to_defaults");
+}
+
+export async function getPkcs11PreferredModule(): Promise<string | null> {
+	return invoke<string | null>("get_pkcs11_preferred_module");
+}
+
+export async function setPkcs11PreferredModule(path: string | null): Promise<void> {
+	return invoke<void>("set_pkcs11_preferred_module", { path });
+}
+
+export async function listPkcs11EffectiveModulePaths(): Promise<string[]> {
+	return invoke<string[]>("list_pkcs11_effective_module_paths");
+}

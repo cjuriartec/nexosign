@@ -10,7 +10,6 @@
 	import { Toaster } from "$lib/components/ui/sonner/index.js";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 	import AppSidebar from "$lib/components/app-sidebar.svelte";
-	import ThemeToggle from "$lib/components/theme-toggle.svelte";
 
 	let { children } = $props();
 
@@ -59,18 +58,14 @@
 
 <Sidebar.Provider>
 	<AppSidebar />
+	<!-- Con el menú cerrado en móvil el pie del sidebar no es visible: botón flotante para abrirlo. -->
+	<Sidebar.Trigger
+		class="bg-background border-input fixed bottom-4 right-4 z-50 flex size-10 items-center justify-center rounded-full border shadow-md md:hidden"
+		aria-label="Abrir menú"
+	/>
 	<Sidebar.Inset>
-		<header
-			class="flex h-14 shrink-0 items-center gap-2 border-b px-4"
-			data-slot="layout"
-		>
-			<Sidebar.Trigger class="-ml-1" />
-			<div class="flex flex-1 items-center justify-end gap-2">
-				<ThemeToggle />
-			</div>
-		</header>
-		<main class="flex min-h-[calc(100vh-3.5rem)] flex-1 flex-col">
-			<div class="mx-auto w-full max-w-6xl flex-1 p-6">
+		<main class="flex min-h-svh flex-1 flex-col">
+			<div class="mx-auto w-full max-w-6xl flex-1 p-5 md:p-6">
 				{@render children?.()}
 			</div>
 		</main>

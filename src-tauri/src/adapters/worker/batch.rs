@@ -17,6 +17,7 @@ pub struct BatchJob {
     pub cert_id_hex: String,
     pub inputs: Vec<std::path::PathBuf>,
     pub cancel: CancellationToken,
+    pub output_dir: Option<std::path::PathBuf>,
 }
 
 struct TauriProgress(AppHandle);
@@ -59,6 +60,7 @@ pub fn spawn_batch_worker(
                     cert_id_hex: job.cert_id_hex,
                     inputs: job.inputs,
                     cancel: job.cancel,
+                    output_dir: job.output_dir,
                 };
                 let _ = process_batch(input, token_c, notifier);
                 if let Ok(mut g) = reg_c.lock() {

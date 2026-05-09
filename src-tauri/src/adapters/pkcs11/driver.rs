@@ -1,4 +1,7 @@
 //! Resolución del módulo PKCS#11 nativo (`.dll` / `.so` / `.dylib`).
+//!
+//! Las rutas por defecto por sistema operativo pueden persistirse en SQLite (`pkcs11_driver_paths`);
+//! aquí solo definimos el orden incorporado y la fusión con la variable de entorno.
 
 use std::path::PathBuf;
 
@@ -11,13 +14,73 @@ pub enum DriverPathError {
     )]
     EnvPathMissing(PathBuf),
     #[error(
-        "No se encontró ningún módulo PKCS#11. Instala OpenSC/DNIe o define NEXOSIGN_PKCS11_MODULE."
+        "No se encontró ningún módulo PKCS#11. Instala OpenSC/DNIe, define NEXOSIGN_PKCS11_MODULE o configura rutas en la base de datos."
     )]
     NotFound,
 }
 
-/// Devuelve todas las rutas de módulos PKCS#11 que existen físicamente en el sistema, ordenadas por prioridad.
-pub fn find_all_pkcs11_modules() -> Result<Vec<PathBuf>, DriverPathError> {
+/// Rutas incorporadas por plataforma (misma lista que antes en código); sirven para SQLite seed y fallback.
+pub fn builtin_pkcs11_path_strings() -> &'static [&'static str] {
+    #[cfg(target_os = "windows")]
+    {
+        &[
+            r"C:\Windows\System32\bit4ipki.dll",
+            r"C:\Windows\System32\idprimepkcs1164.dll",
+            r"C:\Windows\System32\etpkcs11.dll",
+            r"C:\Windows\System32\eps2003csp11.dll",
+            r"C:\Windows\System32\asepkcs.dll",
+            r"C:\Windows\System32\opensc-pkcs11.dll",
+            r"C:\Windows\System32\pkcs11.dll",
+        ]
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        &[
+            "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so",
+            "/usr/lib/opensc-pkcs11.so",
+            "/usr/local/lib/opensc-pkcs11.so",
+        ]
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        &[
+            "/usr/local/lib/libasepkcs.dylib",
+            "/Library/Application Support/Athena/lib/libasepkcs.dylib",
+            "/usr/local/lib/libbit4ipki.dylib",
+            "/Library/bit4id/pkcs11/libbit4ipki.dylib",
+            "/usr/local/lib/libetpkcs11.dylib",
+            "/opt/homebrew/lib/opensc-pkcs11.so",
+            "/opt/homebrew/lib/pkcs11/opensc-pkcs11.so",
+            "/usr/local/lib/opensc-pkcs11.so",
+            "/Library/OpenSC/lib/opensc-pkcs11.so",
+        ]
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        &[]
+    }
+}
+
+fn builtin_candidate_paths() -> Vec<PathBuf> {
+    builtin_pkcs11_path_strings()
+        .iter()
+        .map(|s| PathBuf::from(*s))
+        .collect()
+}
+
+/// Rutas candidatas existentes en disco, ordenadas por prioridad.
+///
+/// - Si existe `NEXOSIGN_PKCS11_MODULE` y el archivo existe, solo se usa esa ruta.
+/// - Si no, se **fusionan** las rutas guardadas en SQLite (orden de la BD primero) con las rutas
+///   incorporadas por SO; así no dependemos de un solo driver y se pueden añadir ubicaciones en BD
+///   sin sustituir el resto de candidatos.
+/// - Se deduplican rutas (sin distinguir mayúsculas en la clave).
+pub fn find_all_pkcs11_modules(
+    db_ordered: Option<&[PathBuf]>,
+) -> Result<Vec<PathBuf>, DriverPathError> {
     if let Ok(p) = std::env::var("NEXOSIGN_PKCS11_MODULE") {
         let pb = PathBuf::from(p.trim());
         if pb.is_file() {
@@ -26,45 +89,27 @@ pub fn find_all_pkcs11_modules() -> Result<Vec<PathBuf>, DriverPathError> {
         return Err(DriverPathError::EnvPathMissing(pb));
     }
 
+    let mut merged: Vec<PathBuf> = Vec::new();
+    let mut seen = std::collections::HashSet::<String>::new();
+
+    let mut push_unique = |pb: PathBuf| {
+        let key = pb.to_string_lossy().to_lowercase();
+        if seen.insert(key) {
+            merged.push(pb);
+        }
+    };
+
+    if let Some(paths) = db_ordered {
+        for p in paths {
+            push_unique(p.clone());
+        }
+    }
+    for p in builtin_candidate_paths() {
+        push_unique(p);
+    }
+
     let mut found = Vec::new();
-
-    #[cfg(target_os = "windows")]
-    let candidates = [
-        // DNIe Perú (Bit4Id, Gemalto/IDPrime, SafeNet, ePass, IDProtect/Athena)
-        r"C:\Windows\System32\bit4ipki.dll",
-        r"C:\Windows\System32\idprimepkcs1164.dll",
-        r"C:\Windows\System32\etpkcs11.dll",
-        r"C:\Windows\System32\eps2003csp11.dll",
-        r"C:\Windows\System32\asepkcs.dll",
-        // Fallback: OpenSC genérico
-        r"C:\Windows\System32\opensc-pkcs11.dll",
-        r"C:\Windows\System32\pkcs11.dll",
-    ];
-
-    #[cfg(target_os = "linux")]
-    let candidates = [
-        "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so",
-        "/usr/lib/opensc-pkcs11.so",
-        "/usr/local/lib/opensc-pkcs11.so",
-    ];
-
-    #[cfg(target_os = "macos")]
-    let candidates = [
-        // DNIe Perú en Mac (IDProtect/Athena, Bit4Id, SafeNet) oficiales
-        "/usr/local/lib/libasepkcs.dylib",
-        "/Library/Application Support/Athena/lib/libasepkcs.dylib",
-        "/usr/local/lib/libbit4ipki.dylib",
-        "/Library/bit4id/pkcs11/libbit4ipki.dylib",
-        "/usr/local/lib/libetpkcs11.dylib",
-        // Fallback: OpenSC genérico
-        "/opt/homebrew/lib/opensc-pkcs11.so",
-        "/opt/homebrew/lib/pkcs11/opensc-pkcs11.so",
-        "/usr/local/lib/opensc-pkcs11.so",
-        "/Library/OpenSC/lib/opensc-pkcs11.so",
-    ];
-
-    for c in candidates {
-        let pb = PathBuf::from(c);
+    for pb in merged {
         if pb.is_file() {
             found.push(pb);
         }

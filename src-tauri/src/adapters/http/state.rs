@@ -6,6 +6,7 @@ use tauri::AppHandle;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::adapters::worker::batch::BatchJob;
 use crate::domain::allowed_origins::AllowedOrigins;
 
@@ -17,6 +18,8 @@ pub struct SharedState {
     pub batch_tx: Option<mpsc::Sender<BatchJob>>,
     /// Tokens de cancelación por `job_id` (HTTP registra; worker elimina al terminar).
     pub batch_cancel: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    /// Para `POST /batch/sign` con PIN opcional (solo proceso real Tauri).
+    pub pkcs11: Option<std::sync::Arc<Pkcs11TokenManager>>,
 }
 
 impl SharedState {
@@ -25,12 +28,14 @@ impl SharedState {
         app_handle: Option<AppHandle>,
         batch_tx: Option<mpsc::Sender<BatchJob>>,
         batch_cancel: Arc<Mutex<HashMap<String, CancellationToken>>>,
+        pkcs11: Option<std::sync::Arc<Pkcs11TokenManager>>,
     ) -> Self {
         Self {
             origins,
             app_handle,
             batch_tx,
             batch_cancel,
+            pkcs11,
         }
     }
 
@@ -41,6 +46,7 @@ impl SharedState {
             app_handle: None,
             batch_tx: None,
             batch_cancel: Arc::new(Mutex::new(HashMap::new())),
+            pkcs11: None,
         }
     }
 
@@ -51,6 +57,7 @@ impl SharedState {
             app_handle: None,
             batch_tx: Some(sender),
             batch_cancel: Arc::new(Mutex::new(HashMap::new())),
+            pkcs11: None,
         }
     }
 }

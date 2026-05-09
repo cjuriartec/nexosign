@@ -8,6 +8,7 @@ export type SigningCertSummary = {
 
 export type SessionStatusDto = {
 	logged_in: boolean;
+	/** Compatibilidad; ya no hay cierre por inactividad (valor ignorado en UI). */
 	idle_timeout_secs: number;
 	seconds_until_auto_logout: number | null;
 };

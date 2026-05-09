@@ -1,37 +1,40 @@
 <script lang="ts">
 	import { page } from "$app/state";
 	import NexoLogo from "@lucide/svelte/icons/shield-check";
-	import LayoutDashboardIcon from "@lucide/svelte/icons/layout-dashboard";
 	import FilePenLineIcon from "@lucide/svelte/icons/file-pen-line";
 	import IdCardIcon from "@lucide/svelte/icons/id-card";
 	import SettingsIcon from "@lucide/svelte/icons/settings";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 
 	const nav = [
-		{ href: "/", label: "Inicio", icon: LayoutDashboardIcon },
-		{ href: "/sign", label: "Firmar PDFs", icon: FilePenLineIcon },
+		{ href: "/sign", label: "Firmar", icon: FilePenLineIcon },
 		{ href: "/certificates", label: "Certificados", icon: IdCardIcon },
 		{ href: "/settings", label: "Ajustes", icon: SettingsIcon },
 	];
 </script>
 
 <Sidebar.Root collapsible="icon">
-	<Sidebar.Header class="border-b border-sidebar-border px-2 py-3">
-		<div class="flex items-center gap-2 px-2">
+	<Sidebar.Header
+		class="border-b border-sidebar-border px-2 py-3 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:py-2"
+	>
+		<a
+			href="/sign"
+			class="flex min-w-0 items-center gap-2 rounded-md px-2 outline-none ring-sidebar-ring hover:bg-sidebar-accent/50 focus-visible:ring-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:px-0"
+		>
 			<div
-				class="bg-sidebar-primary text-sidebar-primary-foreground flex size-8 items-center justify-center rounded-lg"
+				class="bg-sidebar-primary text-sidebar-primary-foreground flex size-8 shrink-0 items-center justify-center rounded-lg group-data-[collapsible=icon]:size-7"
 			>
-				<NexoLogo class="size-5" />
+				<NexoLogo class="size-5 group-data-[collapsible=icon]:size-4" />
 			</div>
-			<div class="grid flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
+			<div class="grid min-w-0 flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
 				<span class="truncate font-semibold">NexoSign</span>
-				<span class="text-muted-foreground truncate text-xs">DNIe · PAdES</span>
+				<span class="text-muted-foreground truncate text-xs">Firma con DNIe</span>
 			</div>
-		</div>
+		</a>
 	</Sidebar.Header>
 	<Sidebar.Content>
 		<Sidebar.Group>
-			<Sidebar.GroupLabel>Navegación</Sidebar.GroupLabel>
+			<Sidebar.GroupLabel class="sr-only">Menú</Sidebar.GroupLabel>
 			<Sidebar.GroupContent>
 				<Sidebar.Menu>
 					{#each nav as item (item.href)}
@@ -54,5 +57,12 @@
 			</Sidebar.GroupContent>
 		</Sidebar.Group>
 	</Sidebar.Content>
-	<Sidebar.Rail />
+	<Sidebar.Footer class="border-t border-sidebar-border p-2">
+		<div class="flex justify-center group-data-[collapsible=icon]:px-0">
+			<Sidebar.Trigger
+				class="w-full max-w-full justify-center gap-2 group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:p-0"
+				aria-label="Contraer o expandir menú lateral"
+			/>
+		</div>
+	</Sidebar.Footer>
 </Sidebar.Root>

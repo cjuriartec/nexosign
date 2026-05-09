@@ -18,6 +18,10 @@ export type BatchSignBody = {
 	/** Rutas absolutas a `.pdf` en el sistema de archivos local (la API valida existencia y tamaño). */
 	inputs: string[];
 	job_id?: string;
+	/** Solo en loopback: desbloquea el token antes de encolar. */
+	pin?: string;
+	/** Directorio absoluto donde escribir `{stem}_firmado.pdf` (p. ej. carpeta `…_firmados`). */
+	output_dir?: string;
 };
 
 /** GET /health — sin credenciales; CORS debe incluir el origen del frontend en dev. */

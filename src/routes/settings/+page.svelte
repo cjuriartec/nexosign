@@ -6,19 +6,284 @@
 	import { Input } from "$lib/components/ui/input/index.js";
 	import { Label } from "$lib/components/ui/label/index.js";
 	import * as Table from "$lib/components/ui/table/index.js";
+	import * as Select from "$lib/components/ui/select/index.js";
+	import { Badge } from "$lib/components/ui/badge/index.js";
+	import ThemeToggle from "$lib/components/theme-toggle.svelte";
 	import {
 		addAllowedOrigin,
 		listAllowedOrigins,
 		removeAllowedOrigin,
 		getLocalApiBaseUrl,
+		listPkcs11DriverPaths,
+		addPkcs11DriverPath,
+		removePkcs11DriverPath,
+		setPkcs11DriverPathsOrder,
+		resetPkcs11DriverPathsToDefaults,
+		getPkcs11PreferredModule,
+		setPkcs11PreferredModule,
+		listPkcs11EffectiveModulePaths,
 	} from "$lib/tauri/settings";
+	import { cn } from "$lib/utils.js";
 	import { isTauriRuntime } from "$lib/tauri/env";
 	import { LOCAL_API_BASE } from "$lib/config/constants";
+	import { fetchHealth, fetchPing } from "$lib/api/local-api";
+	import * as ScrollArea from "$lib/components/ui/scroll-area/index.js";
+	import * as pkcs11 from "$lib/tauri/pkcs11";
+	import type { Pkcs11Diagnostics } from "$lib/tauri/pkcs11";
+	import CpuIcon from "@lucide/svelte/icons/cpu";
+	import GripVerticalIcon from "@lucide/svelte/icons/grip-vertical";
+	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 
 	let origins = $state<string[]>([]);
 	let newOrigin = $state("");
 	let apiUrl = $state(LOCAL_API_BASE);
 	let loading = $state(false);
+	let diagLoading = $state(false);
+	let health = $state<{ status: string; service: string; version: string } | null>(null);
+	let pingOk = $state<boolean | null>(null);
+
+	let pkcsDiag = $state<Pkcs11Diagnostics | null>(null);
+	let pkcsBusy = $state(false);
+	let pkcs11Paths = $state<string[]>([]);
+	let newDriverPath = $state("");
+	let pathsBusy = $state(false);
+	let effectiveModulePaths = $state<string[]>([]);
+	/** `__auto__` = sin preferencia (orden de tabla + incorporadas). */
+	let preferredChoice = $state("__auto__");
+	/** Con «Automático»: biblioteca PKCS#11 que la app acaba de cargar tras resolver prioridades. */
+	let autoResolvedModulePath = $state<string | null>(null);
+	type PathDragState = {
+		fromIndex: number;
+		pointerId: number;
+		armed: boolean;
+		startX: number;
+		startY: number;
+		label: string;
+	};
+	let pathDrag = $state<PathDragState | null>(null);
+	let pathDropIndex = $state<number | null>(null);
+	let pathGhostX = $state(0);
+	let pathGhostY = $state(0);
+	let pathListEl = $state<HTMLElement | null>(null);
+	const PATH_DRAG_THRESHOLD = 4;
+
+	async function probeActiveModulePath() {
+		if (!isTauriRuntime()) return;
+		try {
+			autoResolvedModulePath = await pkcs11.probePkcs11ModulePath();
+		} catch {
+			autoResolvedModulePath = null;
+		}
+	}
+
+	async function syncPkcsLists() {
+		if (!isTauriRuntime()) return;
+		pkcs11Paths = await listPkcs11DriverPaths();
+		effectiveModulePaths = await listPkcs11EffectiveModulePaths();
+		const p = await getPkcs11PreferredModule();
+		preferredChoice = p ?? "__auto__";
+		await probeActiveModulePath();
+	}
+
+	async function refreshPkcs11Listing() {
+		if (!isTauriRuntime()) return;
+		pkcsBusy = true;
+		try {
+			await syncPkcsLists();
+			toast.message("Listado actualizado");
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			pkcsBusy = false;
+		}
+	}
+
+	async function diagnosePkcs11Slots() {
+		if (!isTauriRuntime()) return;
+		pkcsBusy = true;
+		try {
+			pkcsDiag = await pkcs11.pkcs11DiagnoseSlots();
+			toast.success("Diagnóstico PKCS#11 listo");
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			pkcsBusy = false;
+		}
+	}
+
+	async function persistPreferredChoice(v: string | undefined) {
+		if (!isTauriRuntime()) return;
+		const next = v ?? "__auto__";
+		pathsBusy = true;
+		try {
+			await setPkcs11PreferredModule(next === "__auto__" ? null : next);
+			preferredChoice = next;
+			await probeActiveModulePath();
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			pathsBusy = false;
+		}
+	}
+
+	async function addDriverPathRow() {
+		const p = newDriverPath.trim();
+		if (!p || !isTauriRuntime()) return;
+		pathsBusy = true;
+		try {
+			await addPkcs11DriverPath(p);
+			newDriverPath = "";
+			toast.success("Ruta añadida");
+			await syncPkcsLists();
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			pathsBusy = false;
+		}
+	}
+
+	async function removeDriverPathRow(path: string) {
+		if (!isTauriRuntime()) return;
+		pathsBusy = true;
+		try {
+			await removePkcs11DriverPath(path);
+			toast.message("Ruta eliminada");
+			await syncPkcsLists();
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			pathsBusy = false;
+		}
+	}
+
+	function startPathDrag(e: PointerEvent, index: number) {
+		if (e.button !== 0 || pathsBusy) return;
+		const label = pkcs11Paths[index];
+		if (!label) return;
+		e.preventDefault();
+		pathDrag = {
+			fromIndex: index,
+			pointerId: e.pointerId,
+			armed: false,
+			startX: e.clientX,
+			startY: e.clientY,
+			label,
+		};
+		pathGhostX = e.clientX;
+		pathGhostY = e.clientY;
+		window.addEventListener("pointermove", onPathPointerMove, { passive: false });
+		window.addEventListener("pointerup", onPathPointerUp);
+		window.addEventListener("pointercancel", onPathPointerCancel);
+		window.addEventListener("keydown", onPathKeyDown);
+	}
+
+	function onPathPointerMove(e: PointerEvent) {
+		if (!pathDrag) return;
+		if (e.pointerId !== pathDrag.pointerId) return;
+		if (!pathDrag.armed) {
+			const dx = e.clientX - pathDrag.startX;
+			const dy = e.clientY - pathDrag.startY;
+			if (dx * dx + dy * dy < PATH_DRAG_THRESHOLD * PATH_DRAG_THRESHOLD) return;
+			pathDrag = { ...pathDrag, armed: true };
+			document.body.classList.add("nexo-dnd-active");
+		}
+		e.preventDefault();
+		pathGhostX = e.clientX;
+		pathGhostY = e.clientY;
+		pathDropIndex = computePathDropAt(e.clientX, e.clientY);
+	}
+
+	function onPathPointerUp(e: PointerEvent) {
+		if (!pathDrag) return;
+		if (e.pointerId !== pathDrag.pointerId) return;
+		const armed = pathDrag.armed;
+		const fromIndex = pathDrag.fromIndex;
+		const target = pathDropIndex;
+		finishPathDrag();
+		if (!armed) return;
+		if (target === null) return;
+		let toIndex = target;
+		if (toIndex > fromIndex) toIndex--;
+		if (toIndex === fromIndex) return;
+		void reorderDriverPaths(fromIndex, toIndex);
+	}
+
+	function onPathPointerCancel() {
+		finishPathDrag();
+	}
+
+	function onPathKeyDown(e: KeyboardEvent) {
+		if (e.key === "Escape") finishPathDrag();
+	}
+
+	function finishPathDrag() {
+		pathDrag = null;
+		pathDropIndex = null;
+		document.body.classList.remove("nexo-dnd-active");
+		window.removeEventListener("pointermove", onPathPointerMove);
+		window.removeEventListener("pointerup", onPathPointerUp);
+		window.removeEventListener("pointercancel", onPathPointerCancel);
+		window.removeEventListener("keydown", onPathKeyDown);
+	}
+
+	function computePathDropAt(x: number, y: number): number | null {
+		if (!pathListEl) return null;
+		const rect = pathListEl.getBoundingClientRect();
+		const SLACK = 80;
+		if (
+			x < rect.left - SLACK ||
+			x > rect.right + SLACK ||
+			y < rect.top - SLACK ||
+			y > rect.bottom + SLACK
+		) {
+			return null;
+		}
+		const rows = Array.from(pathListEl.querySelectorAll<HTMLElement>("[data-path-row]"));
+		if (rows.length === 0) return 0;
+		for (let i = 0; i < rows.length; i++) {
+			const r = rows[i].getBoundingClientRect();
+			if (y < r.top + r.height / 2) return i;
+		}
+		return rows.length;
+	}
+
+	async function reorderDriverPaths(fromIndex: number, toIndex: number) {
+		if (
+			fromIndex === toIndex ||
+			fromIndex < 0 ||
+			toIndex < 0 ||
+			fromIndex >= pkcs11Paths.length ||
+			toIndex >= pkcs11Paths.length
+		)
+			return;
+		pathsBusy = true;
+		try {
+			const arr = [...pkcs11Paths];
+			const [item] = arr.splice(fromIndex, 1);
+			arr.splice(toIndex, 0, item);
+			await setPkcs11DriverPathsOrder(arr);
+			pkcs11Paths = arr;
+			await syncPkcsLists();
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			pathsBusy = false;
+		}
+	}
+
+	async function resetDriverPathsDefaults() {
+		if (!isTauriRuntime()) return;
+		pathsBusy = true;
+		try {
+			await resetPkcs11DriverPathsToDefaults();
+			toast.success("Lista restaurada a las rutas incorporadas");
+			await syncPkcsLists();
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			pathsBusy = false;
+		}
+	}
 
 	async function refresh() {
 		if (!isTauriRuntime()) return;
@@ -30,6 +295,22 @@
 			toast.error(String(e));
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function refreshDiagnostics() {
+		diagLoading = true;
+		try {
+			const base = isTauriRuntime() ? await getLocalApiBaseUrl() : LOCAL_API_BASE;
+			apiUrl = base;
+			health = await fetchHealth(base);
+			const p = await fetchPing(base);
+			pingOk = p.ok;
+		} catch {
+			health = null;
+			pingOk = false;
+		} finally {
+			diagLoading = false;
 		}
 	}
 
@@ -57,7 +338,17 @@
 	}
 
 	onMount(() => {
-		if (isTauriRuntime()) void refresh();
+		void refreshDiagnostics();
+		if (isTauriRuntime()) {
+			void refresh();
+			void (async () => {
+				try {
+					await syncPkcsLists();
+				} catch (e) {
+					toast.error(String(e));
+				}
+			})();
+		}
 	});
 </script>
 
@@ -69,37 +360,258 @@
 	<div>
 		<h1 class="text-3xl font-semibold tracking-tight">Ajustes</h1>
 		<p class="text-muted-foreground mt-1 text-sm">
-			Orígenes permitidos para CORS y para <code class="bg-muted rounded px-1 text-xs">POST /batch/sign</code>.
-			Los valores por defecto de desarrollo siguen activos; aquí persistes aprobaciones extra en SQLite.
+			Tema, PKCS#11, sitios permitidos y comprobación del servicio.
 		</p>
 	</div>
 
 	<Card.Root>
 		<Card.Header>
-			<Card.Title class="text-base">API local</Card.Title>
-			<Card.Description>
-				Base URL expuesta por la app (solo loopback).
-				{#if isTauriRuntime()}
-					<code class="bg-muted mt-2 block rounded-md p-2 text-xs">{apiUrl}</code>
-				{:else}
-					<code class="bg-muted mt-2 block rounded-md p-2 text-xs">{LOCAL_API_BASE}</code>
-				{/if}
-			</Card.Description>
+			<Card.Title class="text-base">Apariencia</Card.Title>
+			<Card.Description>Claro, oscuro o el mismo tema que el sistema.</Card.Description>
 		</Card.Header>
-		<Card.Content class="text-muted-foreground space-y-2 text-sm">
-			<p>
-				Enlaces <code class="bg-muted rounded px-1">nexosign://</code> abren la vista de firma cuando el SO
-				reenvía la URL a la app (macOS/iOS/Android; en Windows/Linux puede abrirse una nueva instancia).
+		<Card.Content class="flex items-center gap-3">
+			<ThemeToggle />
+		</Card.Content>
+	</Card.Root>
+
+	{#if isTauriRuntime()}
+		<Card.Root>
+			<Card.Header class="flex flex-row items-start justify-between space-y-0">
+				<div>
+					<Card.Title class="text-base">PKCS#11</Card.Title>
+					<Card.Description>
+						Selector del controlador y orden de rutas en la tabla inferior.
+					</Card.Description>
+				</div>
+				<CpuIcon class="text-muted-foreground size-5" />
+			</Card.Header>
+			<Card.Content class="space-y-6">
+				<div class="flex flex-col gap-3 sm:flex-row sm:items-end">
+					<div class="grid min-w-0 flex-1 gap-2">
+						<Label for="p11-preferred">Middleware</Label>
+						<Select.Root
+							type="single"
+							bind:value={preferredChoice}
+							onValueChange={(v) => void persistPreferredChoice(v)}
+						>
+							<Select.Trigger
+								id="p11-preferred"
+								class="w-full max-w-xl justify-between font-normal"
+								disabled={pathsBusy || pkcsBusy}
+							>
+								{#if preferredChoice === "__auto__"}
+									Automático
+								{:else}
+									<span class="block max-w-[min(100%,28rem)] truncate text-left font-mono text-xs">{preferredChoice}</span>
+								{/if}
+							</Select.Trigger>
+							<Select.Content>
+								<Select.Item value="__auto__" label="Automático">Automático</Select.Item>
+								{#each effectiveModulePaths as ep}
+									<Select.Item value={ep} label={ep}>
+										<span class="block max-w-[min(100vw-4rem,36rem)] truncate font-mono text-xs">{ep}</span>
+									</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					</div>
+					<Button
+						variant="secondary"
+						size="sm"
+						class="shrink-0 sm:mb-0.5"
+						disabled={pkcsBusy || pathsBusy}
+						onclick={() => refreshPkcs11Listing()}
+					>
+						Actualizar
+					</Button>
+				</div>
+
+				{#if preferredChoice === "__auto__"}
+					<p class="text-muted-foreground text-xs leading-relaxed">
+						{#if autoResolvedModulePath}
+							Seleccionado:
+							<code class="bg-muted ml-1 rounded px-1.5 py-0.5 font-mono text-[11px]">{autoResolvedModulePath}</code>
+						{:else}
+							Aún no hay módulo PKCS#11 activo (inserta el token o revisa las rutas).
+						{/if}
+					</p>
+				{/if}
+
+				<div class="space-y-3 border-t pt-4">
+					<div>
+						<p class="text-sm font-medium">Rutas guardadas</p>
+						<p class="text-muted-foreground mt-1 text-xs leading-relaxed">
+							La primera fila tiene más prioridad cuando eliges «Automático» arriba. Añade rutas absolutas y ordénalas arrastrando las filas por el asa.
+						</p>
+					</div>
+
+					{#if pkcs11Paths.length > 0}
+						<div class="select-none" bind:this={pathListEl}>
+							<Table.Root>
+								<Table.Header>
+									<Table.Row>
+										<Table.Head class="w-10 px-2">
+											<span class="sr-only">Ordenar</span>
+										</Table.Head>
+										<Table.Head class="w-10">#</Table.Head>
+										<Table.Head>Ruta</Table.Head>
+										<Table.Head class="w-14 text-right">
+											<span class="sr-only">Eliminar</span>
+										</Table.Head>
+									</Table.Row>
+								</Table.Header>
+								<Table.Body>
+									{#each pkcs11Paths as p, i}
+										{@const dragging = pathDrag?.armed && pathDrag.fromIndex === i}
+										{@const showAbove = pathDrag?.armed && pathDropIndex === i}
+										{@const showBelow = pathDrag?.armed && i === pkcs11Paths.length - 1 && pathDropIndex === pkcs11Paths.length}
+										<Table.Row
+											data-path-row
+											class={cn(
+												"transition-opacity",
+												dragging && "opacity-30",
+												showAbove && "border-primary border-t-2",
+												showBelow && "border-primary border-b-2",
+											)}
+										>
+											<Table.Cell class="w-10 px-2 align-middle">
+												<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+												<span
+													class="text-muted-foreground hover:text-foreground inline-flex cursor-grab touch-none select-none active:cursor-grabbing"
+													class:cursor-not-allowed={pathsBusy}
+													class:pointer-events-none={pathsBusy}
+													role="button"
+													tabindex="0"
+													aria-label="Arrastrar para cambiar prioridad"
+													onpointerdown={(e) => startPathDrag(e, i)}
+												>
+													<GripVerticalIcon class="size-4 shrink-0" />
+												</span>
+											</Table.Cell>
+											<Table.Cell class="text-muted-foreground align-middle">{i + 1}</Table.Cell>
+											<Table.Cell class="max-w-0 align-middle">
+												<code class="block truncate text-xs" title={p}>{p}</code>
+											</Table.Cell>
+											<Table.Cell class="text-right align-middle">
+												<Button
+													variant="ghost"
+													size="icon-sm"
+													class="text-destructive size-8"
+													disabled={pathsBusy}
+													aria-label="Quitar ruta"
+													onclick={() => removeDriverPathRow(p)}
+												>
+													<Trash2Icon class="size-4" />
+												</Button>
+											</Table.Cell>
+										</Table.Row>
+									{/each}
+								</Table.Body>
+							</Table.Root>
+						</div>
+					{:else}
+						<p class="text-muted-foreground text-sm">No hay rutas guardadas (se usarán solo las incorporadas).</p>
+					{/if}
+
+					<div class="flex flex-col gap-2 sm:flex-row sm:items-end">
+						<div class="grid min-w-0 flex-1 gap-2">
+							<Label for="new-p11-path">Añadir ruta absoluta al controlador</Label>
+							<Input
+								id="new-p11-path"
+								bind:value={newDriverPath}
+								placeholder="/usr/local/lib/ejemplo-pkcs11.so"
+								disabled={pathsBusy}
+								onkeydown={(e) => e.key === "Enter" && addDriverPathRow()}
+							/>
+						</div>
+						<Button class="sm:mb-0.5" disabled={pathsBusy || !newDriverPath.trim()} onclick={() => addDriverPathRow()}>
+							Añadir
+						</Button>
+					</div>
+
+					<Button variant="outline" size="sm" disabled={pathsBusy} onclick={() => resetDriverPathsDefaults()}>
+						Restaurar lista incorporada por sistema
+					</Button>
+				</div>
+			</Card.Content>
+		</Card.Root>
+
+		<Card.Root>
+			<Card.Header>
+				<Card.Title class="text-base">Diagnóstico de slots</Card.Title>
+				<Card.Description>
+					Vista PKCS#11 según el criterio NexoSign (token presente en el slot).
+				</Card.Description>
+			</Card.Header>
+			<Card.Content class="space-y-4">
+				<Button variant="outline" size="sm" disabled={pkcsBusy} onclick={() => diagnosePkcs11Slots()}>
+					Ejecutar diagnóstico
+				</Button>
+				{#if pkcsDiag}
+					<div class="text-muted-foreground flex flex-wrap gap-2 text-xs">
+						<Badge variant="outline">estrictos: {pkcsDiag.count_pkcs11_get_slot_list_true}</Badge>
+						<Badge variant="secondary">utilizables: {pkcsDiag.count_effective_for_nexosign}</Badge>
+					</div>
+					<ScrollArea.Root class="h-[220px] rounded-md border">
+						<div class="p-4">
+							<ul class="space-y-2 text-sm">
+								{#each pkcsDiag.slots as s}
+									<li class="border-b pb-2 last:border-0">
+										<span class="font-medium">Slot {s.slot_id}</span>
+										· {s.slot_description.trim()}
+										<span class="text-muted-foreground">
+											· token_present={s.token_present_in_slot_info}</span
+										>
+										{#if s.token_label}
+											<div class="text-muted-foreground text-xs">{s.token_label}</div>
+										{/if}
+									</li>
+								{/each}
+							</ul>
+						</div>
+					</ScrollArea.Root>
+				{/if}
+			</Card.Content>
+		</Card.Root>
+	{/if}
+
+	<Card.Root>
+		<Card.Header class="flex flex-row flex-wrap items-start justify-between gap-2 space-y-0">
+			<div>
+				<Card.Title class="text-base">Servicio local</Card.Title>
+				<Card.Description>Solo útil si algo falla al firmar desde una web.</Card.Description>
+			</div>
+			<Button variant="outline" size="sm" onclick={() => refreshDiagnostics()} disabled={diagLoading}>
+				{diagLoading ? "Comprobando…" : "Comprobar de nuevo"}
+			</Button>
+		</Card.Header>
+		<Card.Content class="space-y-3 text-sm">
+			<code class="bg-muted block rounded-md p-2 text-xs">{apiUrl || "…"}</code>
+			{#if diagLoading && health === null && pingOk === null}
+				<p class="text-muted-foreground">Comprobando…</p>
+			{:else if health}
+				<div class="flex flex-wrap items-center gap-2">
+					<Badge variant="secondary">{health.service}</Badge>
+					<Badge variant="outline">v{health.version}</Badge>
+					<Badge class={health.status === "ok" ? "" : "bg-destructive"}>{health.status}</Badge>
+					<Badge variant={pingOk ? "default" : "destructive"}>
+						{pingOk ? "Respuesta correcta" : "Sin respuesta"}
+					</Badge>
+				</div>
+			{:else}
+				<p class="text-destructive">No responde el servicio en esta máquina.</p>
+			{/if}
+			<p class="text-muted-foreground text-xs">
+				Enlaces <code class="bg-muted rounded px-1">nexosign://</code> pueden abrir esta app desde el navegador.
 			</p>
 		</Card.Content>
 	</Card.Root>
 
 	<Card.Root>
 		<Card.Header>
-			<Card.Title class="text-base">Orígenes HTTP(S)</Card.Title>
+			<Card.Title class="text-base">Sitios permitidos</Card.Title>
 			<Card.Description>
-				Normalizados a esquema + host + puerto. Sin reiniciar el servidor: la lista en memoria se actualiza al
-				guardar.
+				Páginas que pueden pedir firmas a esta app (normalmente las añades cuando aparece el aviso).
 			</Card.Description>
 		</Card.Header>
 		<Card.Content class="space-y-6">
@@ -149,3 +661,23 @@
 		</Card.Content>
 	</Card.Root>
 </div>
+
+{#if pathDrag?.armed}
+	<div
+		class="border-primary bg-card text-card-foreground pointer-events-none fixed z-60 max-w-md -translate-x-1/2 -translate-y-1/2 truncate rounded-md border px-2 py-1 font-mono text-[11px] shadow-lg"
+		style="left: {pathGhostX}px; top: {pathGhostY}px;"
+		aria-hidden="true"
+	>
+		{pathDrag.label}
+	</div>
+{/if}
+
+<style>
+	:global(body.nexo-dnd-active) {
+		cursor: grabbing !important;
+		user-select: none;
+	}
+	:global(body.nexo-dnd-active *) {
+		cursor: grabbing !important;
+	}
+</style>

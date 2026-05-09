@@ -10,7 +10,8 @@ pub enum TokenError {
     Driver(#[from] DriverPathError),
     #[error(transparent)]
     Pkcs11(#[from] cryptoki::error::Error),
-    #[error("no hay slots con token (¿tarjeta/DNIe insertado?)")]
+    /// Prefijo reconocible por la UI (`PKCS11_NO_TOKEN:`); el resto es texto para el usuario.
+    #[error("PKCS11_NO_TOKEN: no hay slots con token (¿tarjeta/DNIe insertado?)")]
     NoSlot,
     #[error("índice de slot inválido")]
     SlotIndex,

@@ -8,7 +8,7 @@ pub mod ports;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Once, RwLock};
 
-use adapters::persistence::AllowedOriginsDb;
+use adapters::persistence::{AllowedOriginsDb, Pkcs11PathsDb};
 use adapters::pkcs11::token::Pkcs11TokenManager;
 use domain::allowed_origins::AllowedOrigins;
 use infrastructure::origin_db::OriginDbPath;
@@ -37,7 +37,8 @@ pub fn run() {
     init_tracing();
 
     let origins = Arc::new(RwLock::new(AllowedOrigins::from_env()));
-    let pkcs11 = Arc::new(Pkcs11TokenManager::new());
+    let app_db_slot = Arc::new(Mutex::new(None::<std::path::PathBuf>));
+    let pkcs11 = Arc::new(Pkcs11TokenManager::new(app_db_slot.clone()));
     let batch_cancel = Arc::new(Mutex::new(HashMap::<String, CancellationToken>::new()));
 
     tauri::Builder::default()
@@ -56,12 +57,21 @@ pub fn run() {
             commands::cancel_batch_job,
             commands::demo_emit_progress,
             commands::probe_pkcs11_module_path,
+            commands::list_pkcs11_driver_paths,
+            commands::add_pkcs11_driver_path,
+            commands::remove_pkcs11_driver_path,
+            commands::reset_pkcs11_driver_paths_to_defaults,
+            commands::set_pkcs11_driver_paths_order,
+            commands::get_pkcs11_preferred_module,
+            commands::set_pkcs11_preferred_module,
+            commands::list_pkcs11_effective_module_paths,
             commands::pkcs11_diagnose_slots,
             commands::pkcs11_slot_count,
             commands::list_signing_certificates,
             commands::pkcs11_login,
             commands::pkcs11_logout,
             commands::pkcs11_session_status,
+            commands::enumerate_pdfs_under_folder,
         ])
         .setup(move |app| {
             let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -72,6 +82,10 @@ pub fn run() {
                 let mut g = origins.write().map_err(|e| e.to_string())?;
                 db.merge_into_allowed_origins(&mut *g)
                     .map_err(|e| e.to_string())?;
+            }
+            let _ = Pkcs11PathsDb::open(&db_path).map_err(|e| e.to_string())?;
+            if let Ok(mut slot) = app_db_slot.lock() {
+                *slot = Some(db_path.clone());
             }
             app.manage(OriginDbPath(Arc::new(db_path)));
 

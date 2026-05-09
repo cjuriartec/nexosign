@@ -20,12 +20,18 @@ pub fn spawn_local_api(
     let (tx, rx) = tokio::sync::mpsc::channel(16);
     crate::adapters::worker::batch::spawn_batch_worker(
         rx,
-        pkcs11,
+        pkcs11.clone(),
         Some(handle.clone()),
         batch_cancel.clone(),
     );
 
-    let state = SharedState::new(origins, Some(handle), Some(tx), batch_cancel);
+    let state = SharedState::new(
+        origins,
+        Some(handle),
+        Some(tx),
+        batch_cancel,
+        Some(pkcs11),
+    );
     let router = build_router(state);
     let addr = SocketAddr::from(([127, 0, 0, 1], LOCAL_API_PORT));
 
