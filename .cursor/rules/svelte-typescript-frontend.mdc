@@ -1,0 +1,18 @@
+---
+description: Frontend Svelte + TypeScript (NexoSign)
+globs: src/**/*.{ts,svelte}
+alwaysApply: false
+---
+
+# Frontend Svelte + TypeScript
+
+## Stack
+
+- **Producto**: NexoSign.
+- **UI**: SvelteKit + Svelte 5.
+- Lógica Tauri (`invoke`, `listen`) en `$lib` (servicios), componentes mayormente presentacionales.
+
+## Tests
+
+- Vitest para cliente HTTP (`src/lib/**/*.test.ts`).
+- E2E UI con Playwright (`e2e/`); contrato API opcional con `NEXOSIGN_E2E_API=1`.

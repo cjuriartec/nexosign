@@ -1,0 +1,22 @@
+---
+description: Convenciones Rust en src-tauri (hexagonal, errores, async)
+globs: src-tauri/**/*.rs
+alwaysApply: false
+---
+
+# Backend Rust NexoSign (Tauri)
+
+## Organización
+
+- `domain/`: tipos y reglas sin IO.
+- `application/`: servicios de caso de uso (fases siguientes).
+- `ports/`: traits con contratos (fases siguientes).
+- `adapters/`: Axum, SQLite, `cryptoki`, Tauri.
+
+## Errores
+
+- Preferir `thiserror` en dominio / aplicación; mapear en el borde HTTP/Tauri.
+
+## Async
+
+- No bloquear el executor con PKCS#11 largo: `spawn_blocking` cuando toque (fases 2–3).

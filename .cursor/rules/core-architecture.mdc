@@ -1,0 +1,18 @@
+---
+description: Arquitectura hexagonal, SOLID y límites de capas (NexoSign)
+alwaysApply: true
+---
+
+# Arquitectura y SOLID (NexoSign)
+
+## Hexagonal
+
+- **Dominio** (`domain/`): sin imports de Axum, Tauri, SQLite ni `cryptoki`.
+- **Casos de uso** (`application/`): orquestan flujos; dependen solo de **puertos** (`ports/`) y dominio.
+- **Adaptadores** (`adapters/`): HTTP, Tauri, PKCS#11, SQLite, worker de cola. Implementan puertos.
+- Handlers (HTTP/commands) **delgados**: validar entrada → llamar un caso de uso → mapear salida/error.
+
+## Escalabilidad
+
+- PKCS#11 **una cola, un consumidor**; no paralelizar firmas al chip.
+- Estado compartido explícito (`AppState` / `SharedState` tipado), sin singletons mágicos.

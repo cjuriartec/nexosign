@@ -4,10 +4,10 @@ overview: Plan en 5 fases para NexoSign (app Tauri + Rust, API local :14500), PK
 todos:
   - id: f1-tauri-scaffold
     content: Crear proyecto NexoSign con npm create tauri-app (Rust + Svelte + TS), añadir tokio, axum, tower-http, tracing
-    status: pending
+    status: completed
   - id: f1-localhost-14500
     content: Implementar servidor Axum en 127.0.0.1:14500 con CORS dinámico (lista configurable en memoria + defaults), /health; wire emit/listen Tauri
-    status: pending
+    status: completed
   - id: f2-pkcs11-path
     content: Función multiplataforma de resolución de .dll/.so/.dylib y carga cryptoki
     status: pending
