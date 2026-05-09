@@ -34,7 +34,9 @@ npm run tauri dev
 | **Contrato HTTP (crate)** | `cargo test -p nexosign --test http_contract` | Integración del router sin levantar proceso OS |
 | **Cliente TS** | `npm run test` | Vitest: `fetchHealth` / `fetchPing` con `fetch` mockeado |
 | **E2E UI** | `npx playwright install chromium` (una vez) · `npm run test:e2e` | Playwright + `vite preview`: título NexoSign y secciones visibles |
-| **E2E API opcional** | Con la app en marcha: `NEXOSIGN_E2E_API=1 npm run test:e2e` | `GET /health` contra puerto 14500 |
+| **E2E API opcional** | Ver abajo (dos terminales) | `GET /health` real contra `:14500` |
+
+**E2E API (`NEXOSIGN_E2E_API=1`):** la API solo existe mientras corre la app Tauri. Terminal A: `npm run tauri dev`. Terminal B: `NEXOSIGN_E2E_API=1 npm run test:e2e`. Si no hay nada en `:14500`, ese test se **omite** con mensaje (no cuenta como fallo).
 
 Atajo recomendado tras instalar Rust:
 

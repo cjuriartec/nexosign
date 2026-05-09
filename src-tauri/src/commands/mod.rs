@@ -1,7 +1,13 @@
+use std::sync::{Arc, RwLock};
+
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
 
 use crate::adapters::http::LOCAL_API_PORT;
+use crate::domain::allowed_origins::AllowedOrigins;
+
+/// Estado gestionado por Tauri (`.manage`) compartido con la API local.
+type OriginsStore = Arc<RwLock<AllowedOrigins>>;
 
 #[tauri::command]
 pub fn get_local_api_base_url() -> String {
@@ -10,7 +16,7 @@ pub fn get_local_api_base_url() -> String {
 
 #[tauri::command]
 pub fn list_allowed_origins(
-    state: tauri::State<'_, std::sync::Arc<std::sync::RwLock<crate::domain::allowed_origins::AllowedOrigins>>,
+    state: tauri::State<'_, OriginsStore>,
 ) -> Result<Vec<String>, String> {
     state
         .read()

@@ -1,6 +1,8 @@
+pub mod state;
+
 use axum::{
     extract::State,
-    http::{HeaderValue, Method, StatusCode},
+    http::{header, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post},
     Router,
@@ -18,7 +20,11 @@ pub fn build_router(state: SharedState) -> Router {
     let origins_for_cors = state.origins.clone();
     let cors = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers(tower_http::cors::Any)
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::ACCEPT,
+        ])
         .allow_credentials(true)
         .allow_origin(AllowOrigin::predicate(
             move |origin: &HeaderValue, _parts: &Parts| {
@@ -93,6 +99,7 @@ async fn post_demo_progress(
 mod tests {
     use super::*;
     use axum::body::{to_bytes, Body};
+    use axum::http::header;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
@@ -137,7 +144,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cors_blocks_unknown_origin_for_actual_request() {
+    async fn cors_unknown_origin_gets_no_allow_origin_header() {
         let app = build_router(SharedState::test_default());
         let res = app
             .oneshot(
@@ -149,8 +156,12 @@ mod tests {
             )
             .await
             .unwrap();
-        // Sin Origin permitido, tower-http puede responder 403 u omitir ACAO según versión.
-        assert_ne!(res.status(), StatusCode::OK);
+        // tower-http puede seguir devolviendo 200 al handler; lo importante es no exponer ACAO.
+        let acao = res.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN);
+        assert!(
+            acao.is_none(),
+            "origen no listado no debe recibir Access-Control-Allow-Origin"
+        );
     }
 
     #[tokio::test]
