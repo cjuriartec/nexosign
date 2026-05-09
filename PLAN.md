@@ -10,10 +10,10 @@ todos:
     status: completed
   - id: f2-pkcs11-path
     content: Función multiplataforma de resolución de .dll/.so/.dylib y carga cryptoki
-    status: pending
+    status: completed
   - id: f2-certs-pin
     content: Enumerar certificados, filtrar firma, implementar login PIN y sesión con timeout
-    status: pending
+    status: completed
   - id: f3-queue-pades
     content: Cola mpsc secuencial, endpoints de batch, pipeline PAdES + eventos progreso
     status: pending

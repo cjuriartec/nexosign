@@ -1,6 +1,16 @@
 # NexoSign
 
-Aplicación de escritorio **Tauri 2** + **SvelteKit** + **TypeScript**. API local HTTP embebida en **`127.0.0.1:14500`** (Axum) con CORS dinámico y eventos IPC `progreso` (fase 1).
+Aplicación de escritorio **Tauri 2** + **SvelteKit** + **TypeScript**. API local HTTP embebida en **`127.0.0.1:14500`** (Axum) con CORS dinámico y eventos IPC `progreso`. La **fase 2** añade descubrimiento PKCS#11, listado de certificados de firma y sesión con PIN + timeout de inactividad vía comandos Tauri.
+
+### PKCS#11 / DNIe (fase 2)
+
+| Variable | Descripción |
+|----------|-------------|
+| `NEXOSIGN_PKCS11_MODULE` | Ruta absoluta al `.dll` / `.so` / `.dylib` PKCS#11 (prioridad sobre rutas por defecto). |
+| `NEXOSIGN_PKCS11_SLOT` | Índice del slot con token (`0` por defecto). |
+| `NEXOSIGN_TOKEN_IDLE_SECS` | Segundos de inactividad antes de `logout` automático del token (por defecto `900`). |
+
+En macOS / Windows el sistema puede **autenticar** el DNIe vía Apple / CryptoAPI sin usar el mismo stack que **PKCS#11**. Si el DNI “funciona” en el navegador pero NexoSign muestra **0 slots** o el lector sin `token_present`, suele ser el **módulo equivocado**: prueba el PKCS#11 del **middleware oficial del DNIe** (FNMT/CCN) y apunta `NEXOSIGN_PKCS11_MODULE` a su biblioteca. OpenSC a veces no ve la tarjeta aunque el lector USB sí esté enlazado.
 
 ## Prerrequisitos
 
