@@ -10,7 +10,7 @@ use cryptoki::slot::Slot;
 use cryptoki::types::AuthPin;
 use x509_parser::prelude::*;
 
-use crate::adapters::pkcs11::driver::resolve_pkcs11_module_path;
+use crate::adapters::pkcs11::driver::find_all_pkcs11_modules;
 use crate::adapters::pkcs11::error::TokenError;
 use crate::domain::cert_filter::der_is_signing_certificate;
 use crate::domain::signing_cert::SigningCertSummary;
@@ -55,6 +55,7 @@ pub struct Pkcs11TokenManager {
 
 struct Inner {
     pkcs11: Option<Pkcs11>,
+    active_module_path: Option<std::path::PathBuf>,
     session: Option<cryptoki::session::Session>,
     logged_in: bool,
     last_activity: Option<Instant>,
@@ -71,6 +72,7 @@ impl Pkcs11TokenManager {
         Self {
             inner: Mutex::new(Inner {
                 pkcs11: None,
+                active_module_path: None,
                 session: None,
                 logged_in: false,
                 last_activity: None,
@@ -84,7 +86,9 @@ impl Pkcs11TokenManager {
     }
 
     pub fn probe_module_path(&self) -> Result<String, TokenError> {
-        let p = resolve_pkcs11_module_path()?;
+        let mut inner = self.lock_inner()?;
+        ensure_pkcs11(&mut inner)?;
+        let p = inner.active_module_path.as_ref().unwrap();
         Ok(p.display().to_string())
     }
 
@@ -100,7 +104,7 @@ impl Pkcs11TokenManager {
         let mut inner = self.lock_inner()?;
         ensure_pkcs11(&mut inner)?;
         let pkcs11 = inner.pkcs11.as_ref().expect("initialized");
-        let module_path = resolve_pkcs11_module_path()?.display().to_string();
+        let module_path = inner.active_module_path.as_ref().unwrap().display().to_string();
 
         let count_slot_list_true = pkcs11.get_slots_with_token()?.len();
         let effective = slots_with_token_effective(pkcs11)?;
@@ -275,11 +279,34 @@ fn ensure_pkcs11(inner: &mut Inner) -> Result<(), TokenError> {
     if inner.pkcs11.is_some() {
         return Ok(());
     }
-    let path = resolve_pkcs11_module_path()?;
-    let pkcs11 = Pkcs11::new(path)?;
-    pkcs11.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))?;
-    inner.pkcs11 = Some(pkcs11);
-    Ok(())
+
+    let paths = find_all_pkcs11_modules()?;
+
+    for path in &paths {
+        if let Ok(pkcs11) = Pkcs11::new(path) {
+            if pkcs11.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK)).is_ok() {
+                if let Ok(slots) = slots_with_token_effective(&pkcs11) {
+                    if !slots.is_empty() {
+                        inner.pkcs11 = Some(pkcs11);
+                        inner.active_module_path = Some(path.clone());
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
+    // Si ninguno tiene token, nos quedamos con el primero que funcione (no crash) para que la UI muestre 0 slots
+    for path in &paths {
+        if let Ok(pkcs11) = Pkcs11::new(path) {
+            let _ = pkcs11.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK));
+            inner.pkcs11 = Some(pkcs11);
+            inner.active_module_path = Some(path.clone());
+            return Ok(());
+        }
+    }
+
+    Err(TokenError::Driver(crate::adapters::pkcs11::driver::DriverPathError::NotFound))
 }
 
 fn pick_slot(pkcs11: &Pkcs11) -> Result<Slot, TokenError> {
