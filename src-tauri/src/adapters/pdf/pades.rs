@@ -13,7 +13,7 @@ use cms::signed_data::{EncapsulatedContentInfo, SignerIdentifier};
 use const_oid::db::rfc5911::ID_DATA;
 use const_oid::db::rfc5912::ID_SHA_256;
 use der::{Decode, Encode};
-use lopdf::{Dictionary, IncrementalDocument, Object, StringFormat};
+use lopdf::{Dictionary, Document, IncrementalDocument, Object, StringFormat};
 use sha2::{Digest, Sha256};
 use spki::AlgorithmIdentifierOwned;
 use x509_cert::Certificate;
@@ -21,6 +21,28 @@ use x509_cert::Certificate;
 use crate::adapters::pdf::cms_signer::Pkcs11RsaCmsSigner;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::application::errors::SignBatchError;
+
+/// Casilla 7×5 en la primera página: `col` 0..6 (izq→der), `row` 0..4 (arriba→abajo, como al leer el PDF).
+#[derive(Clone, Copy, Debug)]
+pub struct SignatureGridPlacement {
+    pub col: u8,
+    pub row: u8,
+}
+
+impl Default for SignatureGridPlacement {
+    fn default() -> Self {
+        Self { col: 3, row: 4 }
+    }
+}
+
+impl SignatureGridPlacement {
+    fn normalized(self) -> Self {
+        Self {
+            col: self.col.min(6),
+            row: self.row.min(4),
+        }
+    }
+}
 
 fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
@@ -114,7 +136,115 @@ fn build_cms_signed_data(
         .map_err(|e| SignBatchError::Pades(format!("CMS DER: {e}")))
 }
 
-fn append_signature_objects(doc: &mut IncrementalDocument, der_placeholder_len: usize) -> Result<(), SignBatchError> {
+fn object_to_f64(obj: &Object) -> Result<f64, SignBatchError> {
+    match obj {
+        Object::Integer(i) => Ok(*i as f64),
+        Object::Real(r) => Ok(f64::from(*r)),
+        _ => Err(SignBatchError::Pades("coordenada PDF: número esperado".into())),
+    }
+}
+
+fn array4_from_object(doc: &Document, obj: &Object) -> Result<[f64; 4], SignBatchError> {
+    let arr = match obj {
+        Object::Array(a) => a,
+        Object::Reference(r) => {
+            let o = doc
+                .get_object(*r)
+                .map_err(|e| SignBatchError::Pades(format!("MediaBox ref: {e}")))?;
+            match o {
+                Object::Array(a) => a,
+                _ => {
+                    return Err(SignBatchError::Pades(
+                        "MediaBox: indirecto no es array".into(),
+                    ));
+                }
+            }
+        }
+        _ => {
+            return Err(SignBatchError::Pades("MediaBox: se esperaba array".into()));
+        }
+    };
+    if arr.len() < 4 {
+        return Err(SignBatchError::Pades("MediaBox: faltan valores".into()));
+    }
+    Ok([
+        object_to_f64(&arr[0])?,
+        object_to_f64(&arr[1])?,
+        object_to_f64(&arr[2])?,
+        object_to_f64(&arr[3])?,
+    ])
+}
+
+/// MediaBox o CropBox de la primera página (la de menor número).
+fn read_first_page_box(pdf_bytes: &[u8]) -> Result<[f64; 4], SignBatchError> {
+    use std::io::Cursor;
+    let doc = Document::load_from(Cursor::new(pdf_bytes))
+        .map_err(|e| SignBatchError::Pades(format!("leer PDF (MediaBox): {e}")))?;
+    let page_id = doc
+        .get_pages()
+        .into_iter()
+        .next()
+        .map(|(_, id)| id)
+        .ok_or_else(|| SignBatchError::Pades("PDF sin páginas".into()))?;
+    let page = doc
+        .get_object(page_id)
+        .map_err(|e| SignBatchError::Pades(format!("página: {e}")))?
+        .as_dict()
+        .map_err(|e| SignBatchError::Pades(format!("página no diccionario: {e}")))?;
+    let mb = page
+        .get(b"MediaBox")
+        .or_else(|_| page.get(b"CropBox"))
+        .map_err(|_| SignBatchError::Pades("página sin MediaBox ni CropBox".into()))?;
+    array4_from_object(&doc, mb)
+}
+
+/// `Rect` pequeño en user space: fila 0 = cabecera del PDF, col 0 = izquierda.
+fn rect_from_grid(page_box: [f64; 4], g: SignatureGridPlacement) -> [i64; 4] {
+    let g = g.normalized();
+    let page_llx = page_box[0];
+    let page_lly = page_box[1];
+    let page_urx = page_box[2];
+    let page_ury = page_box[3];
+    let w = (page_urx - page_llx).max(1.0);
+    let h = (page_ury - page_lly).max(1.0);
+    let margin = (w.min(h) * 0.028).clamp(16.0, 44.0);
+    let inner_w = w - 2.0 * margin;
+    let inner_h = h - 2.0 * margin;
+    let cell_w = inner_w / 7.0;
+    let cell_h = inner_h / 5.0;
+    let col = f64::from(g.col);
+    let row = f64::from(g.row);
+    let x0 = page_llx + margin + col * cell_w;
+    let y_cell_bottom = page_ury - margin - (row + 1.0) * cell_h;
+    let widget_w = (cell_w * 0.58).clamp(70.0, 120.0);
+    let widget_h = (cell_h * 0.40).clamp(24.0, 44.0);
+    let llx = x0 + (cell_w - widget_w) * 0.5;
+    let lly = y_cell_bottom + (cell_h - widget_h) * 0.5;
+    let urx = llx + widget_w;
+    let ury = lly + widget_h;
+    let llx = llx.max(page_llx);
+    let lly = lly.max(page_lly);
+    let mut urx = urx.min(page_urx);
+    let mut ury = ury.min(page_ury);
+    if urx <= llx {
+        urx = llx + 1.0;
+    }
+    if ury <= lly {
+        ury = lly + 1.0;
+    }
+    [
+        llx.round() as i64,
+        lly.round() as i64,
+        urx.round() as i64,
+        ury.round() as i64,
+    ]
+}
+
+fn append_signature_objects(
+    doc: &mut IncrementalDocument,
+    der_placeholder_len: usize,
+    rect: [i64; 4],
+) -> Result<(), SignBatchError> {
     let prev = doc.get_prev_documents();
     let page_id = prev
         .page_iter()
@@ -169,10 +299,10 @@ fn append_signature_objects(doc: &mut IncrementalDocument, der_placeholder_len: 
     annot.set(
         "Rect",
         Object::Array(vec![
-            Object::Integer(0),
-            Object::Integer(0),
-            Object::Integer(0),
-            Object::Integer(0),
+            Object::Integer(rect[0]),
+            Object::Integer(rect[1]),
+            Object::Integer(rect[2]),
+            Object::Integer(rect[3]),
         ]),
     );
     annot.set("F", Object::Integer(132));
@@ -245,12 +375,16 @@ pub fn sign_pdf_pades_bes(
     cert_id_hex: &str,
     input_path: &Path,
     output_path: &Path,
+    placement: SignatureGridPlacement,
 ) -> Result<(), SignBatchError> {
     let cert_der = token.certificate_der_by_id_hex(cert_id_hex)?;
     let pdf_bytes = std::fs::read(input_path).map_err(|e| SignBatchError::Io {
         path: input_path.to_path_buf(),
         source: e,
     })?;
+
+    let page_box = read_first_page_box(&pdf_bytes)?;
+    let rect = rect_from_grid(page_box, placement);
 
     let mut der_cap = 8192usize;
 
@@ -260,7 +394,7 @@ pub fn sign_pdf_pades_bes(
             .try_into()
             .map_err(|e| SignBatchError::Pades(format!("PDF lectura: {e}")))?;
 
-        append_signature_objects(&mut doc, der_cap).map_err(|e| e)?;
+        append_signature_objects(&mut doc, der_cap, rect)?;
 
         let mut buf = Vec::new();
         doc.save_to(&mut buf)

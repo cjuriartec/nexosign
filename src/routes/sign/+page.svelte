@@ -31,8 +31,12 @@
 		{ step: 1, title: "Archivos", hint: "PDF sueltos o carpeta entera" },
 		{ step: 2, title: "Certificado", hint: "Tu identidad para firmar" },
 		{ step: 3, title: "PIN", hint: "Del DNIe o tarjeta (no se guarda)" },
-		{ step: 4, title: "Confirmar", hint: "Revisa y pulsa Firmar" },
+		{ step: 4, title: "Ubicación", hint: "Casilla en la 1.ª página (pie discreto)" },
+		{ step: 5, title: "Confirmar", hint: "Revisa y pulsa Firmar" },
 	] as const;
+
+	/** Rejilla 7×5 en primera página: col 0 izquierda, fila 0 arriba (como se lee el PDF). */
+	const SIG_GRID_COLS = 7;
 
 	let paths = $state<string[]>([]);
 	/** Origen del lote actual: archivos sueltos vs carpeta (salida agrupada). */
@@ -47,8 +51,11 @@
 	let apiBase = $state("");
 	let busy = $state(false);
 
-	/** 1 origen · 2 certificado · 3 PIN · 4 confirmar */
+	/** 1 archivos · 2 cert · 3 PIN · 4 ubicación · 5 confirmar */
 	let wizardStep = $state(1);
+
+	let sigGridCol = $state(3);
+	let sigGridRow = $state(4);
 
 	let activeJobId = $state<string | null>(null);
 	const activeJobRef: { current: string | null } = { current: null };
@@ -59,7 +66,7 @@
 		activeJobId !== null || logLines.length > 0 || progressPct > 0,
 	);
 
-	const wizardBarPct = $derived(Math.round((wizardStep / 4) * 100));
+	const wizardBarPct = $derived(Math.round((wizardStep / 5) * 100));
 
 	function pushLog(line: string) {
 		logLines = [...logLines, line].slice(-120);
@@ -160,6 +167,10 @@
 		wizardStep = 4;
 	}
 
+	function placementStepContinue() {
+		wizardStep = 5;
+	}
+
 	function goBack() {
 		if (wizardStep <= 1) return;
 		wizardStep -= 1;
@@ -195,6 +206,7 @@
 				cert_id_hex: certId.trim(),
 				inputs: paths,
 				pin: pin.trim(),
+				signature_grid: { col: sigGridCol, row: sigGridRow },
 			};
 			if (outputDirForJob) {
 				body.output_dir = outputDirForJob;
@@ -267,7 +279,7 @@
 		<div>
 			<h1 class="text-3xl font-semibold tracking-tight">Firmar</h1>
 			<p class="text-muted-foreground mt-1 text-sm">
-				Paso <span class="text-foreground font-medium">{wizardStep}</span> de 4 · sigue el orden o vuelve atrás con el botón o tocando un paso ya hecho.
+				Paso <span class="text-foreground font-medium">{wizardStep}</span> de 5 · sigue el orden o vuelve atrás con el botón o tocando un paso ya hecho.
 			</p>
 		</div>
 		{#if wizardStep > 1}
@@ -279,7 +291,7 @@
 	</div>
 
 	<nav class="space-y-3" aria-label="Pasos del asistente de firma">
-		<div class="grid grid-cols-4 gap-1.5 sm:gap-3">
+		<div class="grid grid-cols-5 gap-1.5 sm:gap-3">
 			{#each SIGN_STEPS as s}
 				{@const done = wizardStep > s.step}
 				{@const active = wizardStep === s.step}
@@ -497,7 +509,61 @@
 		<Card.Root>
 			<Card.Header>
 				<Card.Title class="text-base">{SIGN_STEPS[3].title}</Card.Title>
-				<Card.Description class="text-xs">{SIGN_STEPS[3].hint}</Card.Description>
+				<Card.Description class="text-xs">
+					{SIGN_STEPS[3].hint}. La firma criptográfica usa tu certificado y el diseño del sello configurado; aquí solo eliges dónde colocar el recuadro visible (pequeño) en la primera página.
+				</Card.Description>
+			</Card.Header>
+			<Card.Content class="space-y-4">
+				<p class="text-muted-foreground text-xs leading-snug">
+					Fila superior = cabecera del PDF · columnas de izquierda a derecha. Cada PDF del lote usa la misma casilla.
+				</p>
+				<div class="mx-auto w-full max-w-md space-y-1">
+					{#each [0, 1, 2, 3, 4] as row}
+						<div class="grid grid-cols-7 gap-1">
+							{#each [0, 1, 2, 3, 4, 5, 6] as col}
+								<button
+									type="button"
+									class={cn(
+										"aspect-square max-h-10 rounded-md border text-[10px] font-medium transition-colors sm:max-h-11",
+										sigGridCol === col && sigGridRow === row
+											? "border-primary bg-primary/15 text-foreground ring-primary/30 ring-2"
+											: "border-border bg-muted/30 text-muted-foreground hover:bg-muted/60",
+									)}
+									aria-label="Casilla columna {col + 1}, fila {row + 1}"
+									aria-pressed={sigGridCol === col && sigGridRow === row}
+									onclick={() => {
+										sigGridCol = col;
+										sigGridRow = row;
+									}}
+								>
+									{row * SIG_GRID_COLS + col + 1}
+								</button>
+							{/each}
+						</div>
+					{/each}
+				</div>
+				<p class="text-muted-foreground text-xs">
+					Selección: columna {sigGridCol + 1} · fila {sigGridRow + 1}
+				</p>
+				<Button
+					type="button"
+					onclick={() => placementStepContinue()}
+					aria-label={`Siguiente paso: ${SIGN_STEPS[4].title}`}
+				>
+					Continuar
+					<span class="text-primary-foreground/85 ml-1 hidden font-normal sm:inline">
+						→ {SIGN_STEPS[4].title}
+					</span>
+				</Button>
+			</Card.Content>
+		</Card.Root>
+	{/if}
+
+	{#if wizardStep === 5}
+		<Card.Root>
+			<Card.Header>
+				<Card.Title class="text-base">{SIGN_STEPS[4].title}</Card.Title>
+				<Card.Description class="text-xs">{SIGN_STEPS[4].hint}</Card.Description>
 			</Card.Header>
 			<Card.Content class="space-y-4 text-sm">
 				<div class="text-muted-foreground space-y-1 text-xs">
@@ -507,6 +573,11 @@
 						<span class="text-foreground font-medium"
 							>{certs.find((c) => c.id_hex === certId)?.label || certId}</span
 						>
+					</p>
+					<p>
+						Primera página: columna <span class="text-foreground font-medium">{sigGridCol + 1}</span>,
+						fila <span class="text-foreground font-medium">{sigGridRow + 1}</span>
+						<span class="text-muted-foreground"> (rejilla 7×5 · recuadro visible pequeño)</span>
 					</p>
 					{#if outputDirForJob}
 						<p class="truncate font-mono" title={outputDirForJob}>{outputDirForJob}</p>

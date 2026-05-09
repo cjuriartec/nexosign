@@ -10,6 +10,8 @@ use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::application::errors::SignBatchError;
 use crate::ports::{ProgressEvent, ProgressNotifier};
 
+use crate::adapters::pdf::pades::SignatureGridPlacement;
+
 pub struct SignBatchInput {
     pub job_id: String,
     pub cert_id_hex: String,
@@ -17,6 +19,8 @@ pub struct SignBatchInput {
     pub cancel: CancellationToken,
     /// Si está definido, los PDF firmados van aquí como `{stem}_firmado.pdf` (p. ej. carpeta hermana `_firmados`).
     pub output_dir: Option<PathBuf>,
+    /// Casilla 7×5 en primera página (`None` → centro-abajo).
+    pub signature_grid: Option<SignatureGridPlacement>,
 }
 
 fn output_path_for(input: &Path, output_dir: Option<&Path>) -> PathBuf {
@@ -63,11 +67,14 @@ pub fn process_batch<P: ProgressNotifier>(
             .unwrap_or_default();
         let path_str = path.display().to_string();
 
+        let placement = input.signature_grid.unwrap_or_default();
+
         let res = pades::sign_pdf_pades_bes(
             token.clone(),
             &input.cert_id_hex,
             path,
             &output_path_for(path, input.output_dir.as_deref()),
+            placement,
         );
 
         match res {

@@ -22,6 +22,8 @@ export type BatchSignBody = {
 	pin?: string;
 	/** Directorio absoluto donde escribir `{stem}_firmado.pdf` (p. ej. carpeta `…_firmados`). */
 	output_dir?: string;
+	/** Primera página: casilla en rejilla 7×5 (`col` 0–6 izquierda→derecha, `row` 0–4 arriba→abajo). */
+	signature_grid?: { col: number; row: number };
 };
 
 /** GET /health — sin credenciales; CORS debe incluir el origen del frontend en dev. */

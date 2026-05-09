@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::adapters::http::state::{HealthResponse, PingResponse, SharedState};
+use crate::adapters::pdf::pades::SignatureGridPlacement;
 use crate::adapters::worker::batch::BatchJob;
 
 pub const LOCAL_API_PORT: u16 = 14500;
@@ -109,6 +110,12 @@ fn gate_batch_origin(state: &SharedState, headers: &HeaderMap) -> Result<(), Res
 }
 
 #[derive(Debug, Deserialize)]
+pub struct SignatureGridDto {
+    pub col: u8,
+    pub row: u8,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct BatchSignBody {
     pub cert_id_hex: String,
     pub inputs: Vec<std::path::PathBuf>,
@@ -120,6 +127,9 @@ pub struct BatchSignBody {
     /// Directorio absoluto donde escribir `{stem}_firmado.pdf` para cada entrada (p. ej. carpeta `…_firmados`).
     #[serde(default)]
     pub output_dir: Option<std::path::PathBuf>,
+    /// Primera página: casilla 7×5 (col 0–6, row 0–4; fila 0 = cabecera del PDF).
+    #[serde(default)]
+    pub signature_grid: Option<SignatureGridDto>,
 }
 
 #[derive(Debug, Serialize)]
@@ -244,6 +254,22 @@ async fn post_batch_sign(
         }
     };
 
+    let signature_grid = match body.signature_grid {
+        Some(g) => {
+            if g.col > 6 || g.row > 4 {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(
+                        serde_json::json!({ "error": "signature_grid: col debe ser 0–6 y row 0–4 (rejilla 7×5)" }),
+                    ),
+                )
+                    .into_response();
+            }
+            Some(SignatureGridPlacement { col: g.col, row: g.row })
+        }
+        None => None,
+    };
+
     if let Some(ref pin_raw) = body.pin {
         let pin_trim = pin_raw.trim();
         if !pin_trim.is_empty() {
@@ -303,6 +329,7 @@ async fn post_batch_sign(
         inputs: body.inputs,
         cancel,
         output_dir,
+        signature_grid,
     };
 
     match tx.try_send(job) {
