@@ -1,5 +1,9 @@
 pub mod state;
 
+mod pending_batch_intent;
+
+pub use pending_batch_intent::{PendingBatchIntent, PENDING_INTENT_TTL_SECS};
+
 use axum::{
     extract::State,
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
@@ -110,6 +114,20 @@ fn gate_batch_origin(state: &SharedState, headers: &HeaderMap) -> Result<(), Res
 }
 
 #[derive(Debug, Deserialize)]
+pub struct BatchSignIntentBody {
+    pub inputs: Vec<std::path::PathBuf>,
+    #[serde(default)]
+    pub output_dir: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchSignIntentResponse {
+    pub request_id: String,
+    /// Abrir en el sistema para lanzar NexoSign y el asistente de firma.
+    pub deep_link: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct SignatureGridDto {
     pub col: u8,
     pub row: u8,
@@ -130,6 +148,9 @@ pub struct BatchSignBody {
     /// Primera página: casilla 7×5 (col 0–6, row 0–4; fila 0 = cabecera del PDF).
     #[serde(default)]
     pub signature_grid: Option<SignatureGridDto>,
+    /// Consumido si la firma viene de `POST /api/v1/batch/sign/intent`.
+    #[serde(default)]
+    pub intent_request_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -165,6 +186,7 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/health", get(get_health))
         .route("/api/v1/ping", post(post_ping))
         .route("/api/v1/demo-progress", post(post_demo_progress))
+        .route("/api/v1/batch/sign/intent", post(post_batch_sign_intent))
         .route("/api/v1/batch/sign", post(post_batch_sign))
         .layer(cors)
         .with_state(state)
@@ -216,6 +238,53 @@ async fn post_demo_progress(
     }
 
     Json(serde_json::json!({ "emitted": true })).into_response()
+}
+
+/// Registra rutas de PDF para firmar **sin encolar** hasta que el usuario complete el asistente en la app.
+async fn post_batch_sign_intent(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(body): Json<BatchSignIntentBody>,
+) -> impl IntoResponse {
+    if let Err(resp) = gate_batch_origin(&state, &headers) {
+        return resp;
+    }
+
+    if let Err(msg) = validate_batch_inputs(&body.inputs) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response();
+    }
+
+    let output_dir = match validate_optional_output_dir(body.output_dir) {
+        Ok(d) => d,
+        Err(msg) => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response();
+        }
+    };
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let intent = PendingBatchIntent::new(body.inputs, output_dir);
+
+    {
+        let mut g = match state.pending_batch_intents.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "estado intents bloqueado" })),
+                )
+                    .into_response();
+            }
+        };
+        g.insert(request_id.clone(), intent);
+    }
+
+    let deep_link = format!("nexosign://sign?intent={}", request_id);
+
+    Json(BatchSignIntentResponse {
+        request_id,
+        deep_link,
+    })
+    .into_response()
 }
 
 async fn post_batch_sign(
@@ -333,11 +402,18 @@ async fn post_batch_sign(
     };
 
     match tx.try_send(job) {
-        Ok(()) => Json(BatchSignResponse {
-            job_id,
-            queued: true,
-        })
-        .into_response(),
+        Ok(()) => {
+            if let Some(rid) = body.intent_request_id.clone() {
+                if let Ok(mut p) = state.pending_batch_intents.lock() {
+                    p.remove(&rid);
+                }
+            }
+            Json(BatchSignResponse {
+                job_id,
+                queued: true,
+            })
+            .into_response()
+        }
         Err(tokio::sync::mpsc::error::TrySendError::Full(j)) => {
             if let Ok(mut g) = state.batch_cancel.lock() {
                 g.remove(&j.job_id);

@@ -2,11 +2,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
+use serde::Serialize;
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 
 use crate::adapters::http::LOCAL_API_PORT;
+use crate::adapters::http::state::PendingBatchIntents;
 use crate::adapters::persistence::{AllowedOriginsDb, Pkcs11PathsDb};
 use crate::adapters::pkcs11::driver::find_all_pkcs11_modules;
 use crate::adapters::pkcs11::token::{Pkcs11Diagnostics, Pkcs11TokenManager, SessionStatusDto};
@@ -30,6 +32,40 @@ async fn pkcs11_blocking<R: Send + 'static>(
     tokio::task::spawn_blocking(f)
         .await
         .map_err(|e| format!("pkcs11 task: {e}"))?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchSignIntentPayload {
+    pub inputs: Vec<String>,
+    pub output_dir: Option<String>,
+}
+
+/// Lee una solicitud guardada por `POST /api/v1/batch/sign/intent` (solo proceso NexoSign).
+#[tauri::command]
+pub fn get_batch_sign_intent(
+    request_id: String,
+    pending: tauri::State<'_, PendingBatchIntents>,
+) -> Result<Option<BatchSignIntentPayload>, String> {
+    let mut g = pending.0.lock().map_err(|e| e.to_string())?;
+    let Some(ent) = g.get(&request_id) else {
+        return Ok(None);
+    };
+    if ent.is_expired() {
+        g.remove(&request_id);
+        return Ok(None);
+    }
+    Ok(Some(BatchSignIntentPayload {
+        inputs: ent
+            .inputs
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect(),
+        output_dir: ent
+            .output_dir
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned()),
+    }))
 }
 
 #[tauri::command]

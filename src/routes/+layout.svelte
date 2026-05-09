@@ -38,7 +38,21 @@
 					),
 				);
 				unsubs.push(
-					await listen("nexosign-deep-link", async () => {
+					await listen<{ urls: string[] }>("nexosign-deep-link", async (event) => {
+						const urls = event.payload.urls ?? [];
+						for (const urlStr of urls) {
+							try {
+								const u = new URL(urlStr);
+								if (u.protocol !== "nexosign:") continue;
+								const intent = u.searchParams.get("intent");
+								if (intent) {
+									await goto(`/sign?intent=${encodeURIComponent(intent)}`);
+									return;
+								}
+							} catch {
+								/* URL inválida */
+							}
+						}
 						await goto("/sign");
 					}),
 				);

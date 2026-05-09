@@ -12,11 +12,13 @@
 	import { Progress } from "$lib/components/ui/progress/index.js";
 	import * as ScrollArea from "$lib/components/ui/scroll-area/index.js";
 	import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert/index.js";
+	import { page } from "$app/state";
 	import { postBatchSign, type BatchSignBody } from "$lib/api/local-api";
 	import { subscribeProgress, type ProgressPayload } from "$lib/events/progress";
 	import * as pkcs11 from "$lib/tauri/pkcs11";
 	import type { SigningCertSummary } from "$lib/tauri/pkcs11";
 	import { enumeratePdfsUnderFolder } from "$lib/tauri/batch";
+	import { getBatchSignIntent } from "$lib/tauri/batch-sign-intent";
 	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
 	import { cancelBatchJob, getLocalApiBaseUrl } from "$lib/tauri/settings";
 	import { isTauriRuntime } from "$lib/tauri/env";
@@ -56,6 +58,11 @@
 
 	let sigGridCol = $state(3);
 	let sigGridRow = $state(4);
+
+	/** Si viene de `POST /api/v1/batch/sign/intent`, se envía al confirmar para cerrar la intención. */
+	let intentRequestId = $state<string | null>(null);
+	/** Evita ejecutar dos veces la misma `?intent=` si `replaceState` no actualiza al instante el store de rutas. */
+	let handledIntentQuery = $state<string | null>(null);
 
 	let activeJobId = $state<string | null>(null);
 	const activeJobRef: { current: string | null } = { current: null };
@@ -110,6 +117,7 @@
 		outputDirForJob = null;
 		const unique = [...new Set(list)];
 		paths = unique;
+		intentRequestId = null;
 	}
 
 	async function pickFolder() {
@@ -126,6 +134,7 @@
 			sourceMode = "folder";
 			folderPath = sel;
 			outputDirForJob = await computeFirmadosDir(sel);
+			intentRequestId = null;
 			if (pdfs.length === 0) {
 				toast.message("No hay PDFs en esa carpeta.");
 			}
@@ -136,11 +145,33 @@
 		}
 	}
 
+	async function applyPendingIntent(intentParam: string) {
+		const payload = await getBatchSignIntent(intentParam);
+		if (!payload) {
+			toast.error("La solicitud no existe o caducó (30 min). Abre el enlace desde la integración de nuevo.");
+			return;
+		}
+		paths = [...payload.inputs];
+		sourceMode = "files";
+		folderPath = null;
+		outputDirForJob = payload.outputDir ?? null;
+		intentRequestId = intentParam;
+		await refreshCerts();
+		wizardStep = 1;
+		toast.message("Lote recibido desde la integración: revisa los pasos y confirma aquí.");
+		if (typeof window !== "undefined") {
+			const u = new URL(window.location.href);
+			u.searchParams.delete("intent");
+			history.replaceState({}, "", `${u.pathname}${u.search}${u.hash}`);
+		}
+	}
+
 	function clearPaths() {
 		paths = [];
 		sourceMode = null;
 		folderPath = null;
 		outputDirForJob = null;
+		intentRequestId = null;
 	}
 
 	function removeAt(i: number) {
@@ -211,9 +242,13 @@
 			if (outputDirForJob) {
 				body.output_dir = outputDirForJob;
 			}
+			if (intentRequestId) {
+				body.intent_request_id = intentRequestId;
+			}
 			const res = await postBatchSign(body, apiBase);
 			activeJobId = res.job_id;
 			activeJobRef.current = res.job_id;
+			intentRequestId = null;
 			toast.success("Firma en curso");
 		} catch (e) {
 			toast.error(String(e));
@@ -236,6 +271,14 @@
 			toast.error(String(e));
 		}
 	}
+
+	$effect(() => {
+		const q = page.url.searchParams.get("intent");
+		if (!isTauriRuntime() || !q) return;
+		if (handledIntentQuery === q) return;
+		handledIntentQuery = q;
+		void applyPendingIntent(q);
+	});
 
 	onMount(() => {
 		let unlisten: (() => void) | undefined;

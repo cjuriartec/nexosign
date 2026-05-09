@@ -6,6 +6,7 @@ use tauri::AppHandle;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::adapters::http::pending_batch_intent::PendingBatchIntent;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::adapters::worker::batch::BatchJob;
 use crate::domain::allowed_origins::AllowedOrigins;
@@ -20,7 +21,13 @@ pub struct SharedState {
     pub batch_cancel: Arc<Mutex<HashMap<String, CancellationToken>>>,
     /// Para `POST /batch/sign` con PIN opcional (solo proceso real Tauri).
     pub pkcs11: Option<std::sync::Arc<Pkcs11TokenManager>>,
+    /// Firma diferida: POST `/batch/sign/intent` registra aquí; la UI consume al confirmar.
+    pub pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
 }
+
+/// Referencia compartida para comandos Tauri (misma que [`SharedState::pending_batch_intents`]).
+#[derive(Clone)]
+pub struct PendingBatchIntents(pub Arc<Mutex<HashMap<String, PendingBatchIntent>>>);
 
 impl SharedState {
     pub fn new(
@@ -29,6 +36,7 @@ impl SharedState {
         batch_tx: Option<mpsc::Sender<BatchJob>>,
         batch_cancel: Arc<Mutex<HashMap<String, CancellationToken>>>,
         pkcs11: Option<std::sync::Arc<Pkcs11TokenManager>>,
+        pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
     ) -> Self {
         Self {
             origins,
@@ -36,6 +44,7 @@ impl SharedState {
             batch_tx,
             batch_cancel,
             pkcs11,
+            pending_batch_intents,
         }
     }
 
@@ -47,6 +56,7 @@ impl SharedState {
             batch_tx: None,
             batch_cancel: Arc::new(Mutex::new(HashMap::new())),
             pkcs11: None,
+            pending_batch_intents: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -58,6 +68,7 @@ impl SharedState {
             batch_tx: Some(sender),
             batch_cancel: Arc::new(Mutex::new(HashMap::new())),
             pkcs11: None,
+            pending_batch_intents: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }

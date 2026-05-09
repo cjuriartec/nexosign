@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use tauri::AppHandle;
 
+use crate::adapters::http::PendingBatchIntent;
 use crate::adapters::http::{build_router, LOCAL_API_PORT};
 use crate::adapters::http::state::SharedState;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
@@ -16,6 +18,7 @@ pub fn spawn_local_api(
     batch_cancel: std::sync::Arc<
         std::sync::Mutex<std::collections::HashMap<String, tokio_util::sync::CancellationToken>>,
     >,
+    pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
 ) {
     let (tx, rx) = tokio::sync::mpsc::channel(16);
     crate::adapters::worker::batch::spawn_batch_worker(
@@ -31,6 +34,7 @@ pub fn spawn_local_api(
         Some(tx),
         batch_cancel,
         Some(pkcs11),
+        pending_batch_intents,
     );
     let router = build_router(state);
     let addr = SocketAddr::from(([127, 0, 0, 1], LOCAL_API_PORT));

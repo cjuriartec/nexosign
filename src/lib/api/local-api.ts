@@ -24,6 +24,18 @@ export type BatchSignBody = {
 	output_dir?: string;
 	/** Primera página: casilla en rejilla 7×5 (`col` 0–6 izquierda→derecha, `row` 0–4 arriba→abajo). */
 	signature_grid?: { col: number; row: number };
+	/** Si la firma sigue a `POST /api/v1/batch/sign/intent`, elimina la intención pendiente al encolar. */
+	intent_request_id?: string;
+};
+
+export type BatchSignIntentBody = {
+	inputs: string[];
+	output_dir?: string;
+};
+
+export type BatchSignIntentResponse = {
+	request_id: string;
+	deep_link: string;
 };
 
 /** GET /health — sin credenciales; CORS debe incluir el origen del frontend en dev. */
@@ -76,6 +88,29 @@ export async function postBatchSign(
 		);
 	}
 	return res.json() as Promise<BatchSignResponse>;
+}
+
+/** POST /api/v1/batch/sign/intent — registra PDFs para firmar tras el asistente en la app (no encola aún). */
+export async function postBatchSignIntent(
+	body: BatchSignIntentBody,
+	baseUrl: string = LOCAL_API_BASE,
+): Promise<BatchSignIntentResponse> {
+	const headers: Record<string, string> = {
+		"Content-Type": "application/json",
+	};
+	if (typeof window === "undefined") {
+		headers["Origin"] = "http://localhost:1420";
+	}
+	const res = await fetch(`${baseUrl}/api/v1/batch/sign/intent`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify(body),
+	});
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({}));
+		throw new Error(`batch sign intent failed: ${res.status} ${JSON.stringify(err)}`);
+	}
+	return res.json() as Promise<BatchSignIntentResponse>;
 }
 
 /** POST /api/v1/demo-progress — dispara evento Tauri `progreso` (stub). */

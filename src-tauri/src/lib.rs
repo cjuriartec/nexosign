@@ -16,6 +16,8 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tokio_util::sync::CancellationToken;
 
+use crate::adapters::http::PendingBatchIntent;
+use crate::adapters::http::state::PendingBatchIntents;
 use crate::commands::BatchCancelRegistry;
 
 static INIT_TRACING: Once = Once::new();
@@ -40,6 +42,8 @@ pub fn run() {
     let app_db_slot = Arc::new(Mutex::new(None::<std::path::PathBuf>));
     let pkcs11 = Arc::new(Pkcs11TokenManager::new(app_db_slot.clone()));
     let batch_cancel = Arc::new(Mutex::new(HashMap::<String, CancellationToken>::new()));
+    let pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -48,6 +52,7 @@ pub fn run() {
         .manage(origins.clone())
         .manage(pkcs11.clone())
         .manage(BatchCancelRegistry(batch_cancel.clone()))
+        .manage(PendingBatchIntents(pending_batch_intents.clone()))
         .invoke_handler(tauri::generate_handler![
             greet,
             commands::get_local_api_base_url,
@@ -71,6 +76,7 @@ pub fn run() {
             commands::pkcs11_login,
             commands::pkcs11_logout,
             commands::pkcs11_session_status,
+            commands::get_batch_sign_intent,
             commands::enumerate_pdfs_under_folder,
         ])
         .setup(move |app| {
@@ -105,6 +111,7 @@ pub fn run() {
                 origins.clone(),
                 pkcs11.clone(),
                 batch_cancel.clone(),
+                pending_batch_intents.clone(),
             );
 
             Ok(())
