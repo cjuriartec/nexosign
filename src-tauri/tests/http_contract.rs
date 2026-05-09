@@ -49,6 +49,7 @@ async fn integration_batch_sign_returns_queued_and_enqueues_job() {
             Request::builder()
                 .method("POST")
                 .uri("/api/v1/batch/sign")
+                .header("Origin", "http://localhost:1420")
                 .header("Content-Type", "application/json")
                 .body(Body::from(body.to_string()))
                 .unwrap(),

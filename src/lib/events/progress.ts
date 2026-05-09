@@ -4,6 +4,9 @@ export type ProgressPayload = {
 	actual: number;
 	total: number;
 	job_id: string;
+	nombre_archivo?: string;
+	path?: string;
+	error?: string | null;
 };
 
 /** Suscripción al canal `progreso` emitido desde Rust (HTTP o comandos). */

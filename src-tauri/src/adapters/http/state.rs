@@ -1,8 +1,10 @@
-use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock};
 
 use serde::Serialize;
 use tauri::AppHandle;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::adapters::worker::batch::BatchJob;
 use crate::domain::allowed_origins::AllowedOrigins;
@@ -13,6 +15,8 @@ pub struct SharedState {
     pub origins: Arc<RwLock<AllowedOrigins>>,
     pub app_handle: Option<AppHandle>,
     pub batch_tx: Option<mpsc::Sender<BatchJob>>,
+    /// Tokens de cancelación por `job_id` (HTTP registra; worker elimina al terminar).
+    pub batch_cancel: Arc<Mutex<HashMap<String, CancellationToken>>>,
 }
 
 impl SharedState {
@@ -20,11 +24,13 @@ impl SharedState {
         origins: Arc<RwLock<AllowedOrigins>>,
         app_handle: Option<AppHandle>,
         batch_tx: Option<mpsc::Sender<BatchJob>>,
+        batch_cancel: Arc<Mutex<HashMap<String, CancellationToken>>>,
     ) -> Self {
         Self {
             origins,
             app_handle,
             batch_tx,
+            batch_cancel,
         }
     }
 
@@ -34,6 +40,7 @@ impl SharedState {
             origins: Arc::new(RwLock::new(AllowedOrigins::development_defaults())),
             app_handle: None,
             batch_tx: None,
+            batch_cancel: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -43,6 +50,7 @@ impl SharedState {
             origins: Arc::new(RwLock::new(AllowedOrigins::development_defaults())),
             app_handle: None,
             batch_tx: Some(sender),
+            batch_cancel: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }

@@ -3,15 +3,18 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::adapters::pdf::pades;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
-use crate::ports::{ProgressEvent, ProgressNotifier};
 use crate::application::errors::SignBatchError;
+use crate::ports::{ProgressEvent, ProgressNotifier};
 
 pub struct SignBatchInput {
     pub job_id: String,
     pub cert_id_hex: String,
     pub inputs: Vec<PathBuf>,
+    pub cancel: CancellationToken,
 }
 
 fn output_path_for(input: &Path) -> PathBuf {
@@ -34,6 +37,18 @@ pub fn process_batch<P: ProgressNotifier>(
 ) -> Result<(), SignBatchError> {
     let total = input.inputs.len().try_into().unwrap_or(u32::MAX);
     for (idx, path) in input.inputs.iter().enumerate() {
+        if input.cancel.is_cancelled() {
+            progress.notify(ProgressEvent {
+                job_id: input.job_id.clone(),
+                current: idx.try_into().unwrap_or(0),
+                total,
+                file_name: String::new(),
+                path: String::new(),
+                error: Some("lote cancelado".into()),
+            });
+            break;
+        }
+
         let current = (idx + 1).try_into().unwrap_or(u32::MAX);
         let file_name = path
             .file_name()

@@ -280,6 +280,7 @@
 					: `✗ ${apiDetail}`}
 		</p>
 		<div class="row">
+			<a class="btn" href="/batch">Vista firma masiva (batch)</a>
 			<button type="button" onclick={ping}>Ping POST</button>
 			<button type="button" onclick={demoHttpProgress}>Demo progreso (HTTP)</button>
 			<button type="button" onclick={demoCmdProgress}>Demo progreso (comando)</button>
@@ -334,6 +335,16 @@
 		border: 1px solid #ccc;
 		background: #fafafa;
 		cursor: pointer;
+	}
+	.btn {
+		display: inline-block;
+		padding: 0.4rem 0.75rem;
+		border-radius: 6px;
+		border: 1px solid #ccc;
+		background: #fafafa;
+		cursor: pointer;
+		text-decoration: none;
+		color: inherit;
 	}
 	code {
 		font-size: 0.9em;

@@ -1,17 +1,25 @@
-use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock};
 
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
+use tokio_util::sync::CancellationToken;
 
 use crate::adapters::http::LOCAL_API_PORT;
+use crate::adapters::persistence::AllowedOriginsDb;
 use crate::adapters::pkcs11::token::{Pkcs11Diagnostics, Pkcs11TokenManager, SessionStatusDto};
 use crate::domain::allowed_origins::AllowedOrigins;
 use crate::domain::signing_cert::SigningCertSummary;
+use crate::infrastructure::origin_db::OriginDbPath;
 
 /// Estado gestionado por Tauri (`.manage`) compartido con la API local.
 type OriginsStore = Arc<RwLock<AllowedOrigins>>;
 
 type Pkcs11Store = Arc<Pkcs11TokenManager>;
+
+/// Mismo `Arc` que [`crate::adapters::http::state::SharedState::batch_cancel`] para cancelar lotes vía IPC.
+#[derive(Clone)]
+pub struct BatchCancelRegistry(pub Arc<Mutex<HashMap<String, CancellationToken>>>);
 
 /// PKCS#11 bloquea el hilo (lector/tariffa); no debe ejecutarse en el runtime async de Tauri.
 async fn pkcs11_blocking<R: Send + 'static>(
@@ -35,6 +43,55 @@ pub fn list_allowed_origins(
         .read()
         .map(|o| o.origins().to_vec())
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn add_allowed_origin(
+    origin: String,
+    state: tauri::State<'_, OriginsStore>,
+    db_path: tauri::State<'_, OriginDbPath>,
+) -> Result<(), String> {
+    let db = AllowedOriginsDb::open(db_path.0.as_ref()).map_err(|e| e.to_string())?;
+    db.insert_origin(&origin).map_err(|e| e.to_string())?;
+    state
+        .write()
+        .map_err(|e| e.to_string())?
+        .add_if_absent(&origin);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn remove_allowed_origin(
+    origin: String,
+    state: tauri::State<'_, OriginsStore>,
+    db_path: tauri::State<'_, OriginDbPath>,
+) -> Result<(), String> {
+    let db = AllowedOriginsDb::open(db_path.0.as_ref()).map_err(|e| e.to_string())?;
+    db.delete_origin(&origin).map_err(|e| e.to_string())?;
+    state
+        .write()
+        .map_err(|e| e.to_string())?
+        .remove_matching(&origin);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cancel_batch_job(
+    job_id: String,
+    registry: tauri::State<'_, BatchCancelRegistry>,
+) -> Result<bool, String> {
+    let token = registry
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .remove(&job_id);
+    Ok(match token {
+        Some(t) => {
+            t.cancel();
+            true
+        }
+        None => false,
+    })
 }
 
 #[tauri::command]

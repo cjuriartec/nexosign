@@ -13,11 +13,19 @@ pub fn spawn_local_api(
     handle: AppHandle,
     origins: Arc<RwLock<AllowedOrigins>>,
     pkcs11: Arc<Pkcs11TokenManager>,
+    batch_cancel: std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<String, tokio_util::sync::CancellationToken>>,
+    >,
 ) {
     let (tx, rx) = tokio::sync::mpsc::channel(16);
-    crate::adapters::worker::batch::spawn_batch_worker(rx, pkcs11, Some(handle.clone()));
+    crate::adapters::worker::batch::spawn_batch_worker(
+        rx,
+        pkcs11,
+        Some(handle.clone()),
+        batch_cancel.clone(),
+    );
 
-    let state = SharedState::new(origins, Some(handle), Some(tx));
+    let state = SharedState::new(origins, Some(handle), Some(tx), batch_cancel);
     let router = build_router(state);
     let addr = SocketAddr::from(([127, 0, 0, 1], LOCAL_API_PORT));
 

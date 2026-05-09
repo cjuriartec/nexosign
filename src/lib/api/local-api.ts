@@ -51,9 +51,16 @@ export async function postBatchSign(
 	body: BatchSignBody,
 	baseUrl: string = LOCAL_API_BASE,
 ): Promise<BatchSignResponse> {
+	const headers: Record<string, string> = {
+		"Content-Type": "application/json",
+	};
+	// En tests Node (sin navegador) el header `Origin` no se añade solo; la API exige `Origin` en batch.
+	if (typeof window === "undefined") {
+		headers["Origin"] = "http://localhost:1420";
+	}
 	const res = await fetch(`${baseUrl}/api/v1/batch/sign`, {
 		method: "POST",
-		headers: { "Content-Type": "application/json" },
+		headers,
 		body: JSON.stringify(body),
 	});
 	if (!res.ok) {

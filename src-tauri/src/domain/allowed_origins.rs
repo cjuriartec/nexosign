@@ -50,6 +50,24 @@ impl AllowedOrigins {
     pub fn is_allowed_origin(&self, origin_header: &str) -> bool {
         crate::domain::origin_policy::is_origin_allowed(origin_header, &self.origins)
     }
+
+    /// Añade un origen normalizado si no estaba (persistencia SQLite / UI).
+    pub fn add_if_absent(&mut self, raw: &str) {
+        let n = crate::domain::origin_policy::normalize_origin(raw);
+        if n.is_empty() {
+            return;
+        }
+        if !self.origins.iter().any(|x| crate::domain::origin_policy::normalize_origin(x) == n) {
+            self.origins.push(n);
+        }
+    }
+
+    /// Quita un origen de la lista en memoria (tras borrar en SQLite).
+    pub fn remove_matching(&mut self, raw: &str) {
+        let n = crate::domain::origin_policy::normalize_origin(raw);
+        self.origins
+            .retain(|x| crate::domain::origin_policy::normalize_origin(x) != n);
+    }
 }
 
 #[cfg(test)]

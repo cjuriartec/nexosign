@@ -63,7 +63,10 @@ test.describe("API local opcional", () => {
 					inputs: [tmpPdf],
 					job_id: "e2e-batch-contract",
 				}),
-				headers: { "Content-Type": "application/json" },
+				headers: {
+					"Content-Type": "application/json",
+					Origin: "http://localhost:1420",
+				},
 				timeout: 10_000,
 			});
 		} catch {

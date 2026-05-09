@@ -44,4 +44,8 @@ signature = "2.2"
 pkcs1 = "0.7.5"
 x509-cert = "0.2.5"
 spki = "0.7.3"
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+tokio-util = "0.7.18"
+tauri-plugin-deep-link = "2.4.9"
+tauri-plugin-dialog = "2.7.1"
 

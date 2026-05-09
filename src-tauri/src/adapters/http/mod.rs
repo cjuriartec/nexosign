@@ -2,14 +2,15 @@ pub mod state;
 
 use axum::{
     extract::State,
-    http::{header, HeaderValue, Method, StatusCode},
-    response::{IntoResponse, Json},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
+    response::{IntoResponse, Json, Response},
     routing::{get, post},
     Router,
 };
 use http::request::Parts;
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
+use tokio_util::sync::CancellationToken;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::adapters::http::state::{HealthResponse, PingResponse, SharedState};
@@ -47,6 +48,50 @@ fn validate_batch_inputs(paths: &[std::path::PathBuf]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Exige `Origin` conocido (lista CORS / SQLite) antes de encolar firma batch.
+fn gate_batch_origin(state: &SharedState, headers: &HeaderMap) -> Result<(), Response> {
+    let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
+        return Err(
+            (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "missing_origin",
+                    "hint": "El navegador debe enviar el header Origin; para curl use -H \"Origin: http://localhost:1420\""
+                })),
+            )
+                .into_response(),
+        );
+    };
+
+    let allowed = state
+        .origins
+        .read()
+        .map(|g| g.is_allowed_origin(origin))
+        .unwrap_or(false);
+
+    if allowed {
+        return Ok(());
+    }
+
+    if let Some(ref h) = state.app_handle {
+        let _ = h.emit(
+            "origin_trust_request",
+            serde_json::json!({ "origin": origin }),
+        );
+    }
+
+    Err(
+        (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "origin_not_trusted",
+                "origin": origin,
+            })),
+        )
+            .into_response(),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -145,6 +190,7 @@ async fn post_demo_progress(
 
 async fn post_batch_sign(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(body): Json<BatchSignBody>,
 ) -> impl IntoResponse {
     let Some(tx) = state.batch_tx.clone() else {
@@ -154,6 +200,10 @@ async fn post_batch_sign(
         )
             .into_response();
     };
+
+    if let Err(resp) = gate_batch_origin(&state, &headers) {
+        return resp;
+    }
 
     if body.cert_id_hex.trim().is_empty() {
         return (
@@ -171,10 +221,26 @@ async fn post_batch_sign(
         .job_id
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
+    let cancel = CancellationToken::new();
+    {
+        let mut g = match state.batch_cancel.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "estado batch bloqueado" })),
+                )
+                    .into_response();
+            }
+        };
+        g.insert(job_id.clone(), cancel.clone());
+    }
+
     let job = BatchJob {
         job_id: job_id.clone(),
         cert_id_hex: body.cert_id_hex,
         inputs: body.inputs,
+        cancel,
     };
 
     match tx.try_send(job) {
@@ -183,16 +249,26 @@ async fn post_batch_sign(
             queued: true,
         })
         .into_response(),
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "cola batch llena, reintente" })),
-        )
-            .into_response(),
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "cola batch cerrada" })),
-        )
-            .into_response(),
+        Err(tokio::sync::mpsc::error::TrySendError::Full(j)) => {
+            if let Ok(mut g) = state.batch_cancel.lock() {
+                g.remove(&j.job_id);
+            }
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": "cola batch llena, reintente" })),
+            )
+                .into_response()
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(j)) => {
+            if let Ok(mut g) = state.batch_cancel.lock() {
+                g.remove(&j.job_id);
+            }
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": "cola batch cerrada" })),
+            )
+                .into_response()
+        }
     }
 }
 

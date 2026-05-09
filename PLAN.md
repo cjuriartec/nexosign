@@ -19,7 +19,7 @@ todos:
     status: completed
   - id: f4-security-ux
     content: Diálogo origen + SQLite, UI batch, deep link nexosign://
-    status: pending
+    status: completed
   - id: f5-test-pack
     content: Prueba 100x10MB, timeouts; build MSI y documentar notarización macOS
     status: pending
