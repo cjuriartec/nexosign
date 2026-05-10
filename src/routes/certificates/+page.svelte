@@ -9,6 +9,7 @@
 	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
 	import { isTauriRuntime } from "$lib/tauri/env";
 	import SignatureAppearanceCard from "$lib/components/signature-appearance-card.svelte";
+	import { getHumanNameFromDn, extractDniFromDn, extractPurposeFromDn } from "$lib/signature-appearance";
 
 	let certs = $state<SigningCertSummary[]>([]);
 	let busy = $state(false);
@@ -76,17 +77,21 @@
 					<Table.Root>
 						<Table.Header>
 							<Table.Row>
-								<Table.Head>Etiqueta</Table.Head>
-								<Table.Head>Subject</Table.Head>
-								<Table.Head class="w-[120px] text-right">id (hex)</Table.Head>
+								<Table.Head>Titular</Table.Head>
+								<Table.Head>Documento</Table.Head>
+								<Table.Head class="text-right">Uso</Table.Head>
 							</Table.Row>
 						</Table.Header>
 						<Table.Body>
 							{#each certs as c}
 								<Table.Row>
-									<Table.Cell class="font-medium">{c.label || "—"}</Table.Cell>
-									<Table.Cell class="max-w-[280px] truncate text-xs">{c.subject_dn}</Table.Cell>
-									<Table.Cell class="text-right font-mono text-xs">{c.id_hex}</Table.Cell>
+									<Table.Cell class="font-medium">{getHumanNameFromDn(c.subject_dn) || c.label || "—"}</Table.Cell>
+									<Table.Cell class="text-muted-foreground text-sm">{extractDniFromDn(c.subject_dn) || "—"}</Table.Cell>
+									<Table.Cell class="text-right">
+										<span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80">
+											{extractPurposeFromDn(c.subject_dn)}
+										</span>
+									</Table.Cell>
 								</Table.Row>
 							{/each}
 						</Table.Body>

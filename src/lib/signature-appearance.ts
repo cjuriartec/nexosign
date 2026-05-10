@@ -179,12 +179,33 @@ export function extractCnFromDn(dn: string): string | null {
 	return m?.[1]?.trim().replace(/^"|"$/g, "") ?? null;
 }
 
+export function getHumanNameFromDn(dn: string): string | null {
+	const gnMatch = /(?:^|,)\s*givenName=([^,]+)/i.exec(dn);
+	const snMatch = /(?:^|,)\s*surname=([^,]+)/i.exec(dn);
+	if (gnMatch && snMatch) {
+		return `${gnMatch[1].trim()} ${snMatch[1].trim()}`.replace(/^"|"$/g, "");
+	}
+	return extractCnFromDn(dn);
+}
+
+export function extractDniFromDn(dn: string): string | null {
+	const m = /(?:^|,)\s*serialNumber=(?:PNOPE-)?([^,]+)/i.exec(dn);
+	return m?.[1]?.trim().replace(/^"|"$/g, "") ?? null;
+}
+
+export function extractPurposeFromDn(dn: string): string {
+	const cn = extractCnFromDn(dn) || "";
+	if (cn.includes(" FIR ")) return "Firma Digital";
+	if (cn.includes(" AUT ")) return "Autenticación";
+	return "Certificado";
+}
+
 function resolveToken(id: SigTokenId, cert: SigningCertSummary | null, now: Date): string {
 	switch (id) {
 		case "firmante":
 			return (
+				(cert?.subject_dn ? getHumanNameFromDn(cert.subject_dn) : null) ||
 				cert?.label?.trim() ||
-				(cert?.subject_dn ? extractCnFromDn(cert.subject_dn) : null) ||
 				"Firmante"
 			);
 		case "fecha_corta":
@@ -205,7 +226,7 @@ function resolveToken(id: SigTokenId, cert: SigningCertSummary | null, now: Date
 				minute: "2-digit",
 			});
 		case "certificado":
-			return cert?.subject_dn?.trim() || "Certificado";
+			return (cert?.subject_dn ? extractCnFromDn(cert.subject_dn) : null) || "Certificado";
 		default:
 			return "";
 	}

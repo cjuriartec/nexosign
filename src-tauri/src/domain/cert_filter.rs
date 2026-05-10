@@ -2,7 +2,7 @@
 
 use x509_parser::prelude::*;
 
-/// `true` si Key Usage incluye **digitalSignature** y/o **nonRepudiation**.
+/// `true` si Key Usage incluye **nonRepudiation** (exclusivo para firma de documentos con valor legal).
 pub fn der_is_signing_certificate(der: &[u8]) -> bool {
     let Ok((_, cert)) = X509Certificate::from_der(der) else {
         return false;
@@ -11,7 +11,9 @@ pub fn der_is_signing_certificate(der: &[u8]) -> bool {
         return false;
     };
     let v = ext.value;
-    v.digital_signature() || v.non_repudiation()
+    // Las tarjetas como el DNIe tienen el certificado de Autenticación con `digital_signature`.
+    // El verdadero certificado para firmar contratos DEBE tener `non_repudiation`.
+    v.non_repudiation()
 }
 
 #[cfg(test)]

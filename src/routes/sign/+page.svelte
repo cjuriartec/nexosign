@@ -22,6 +22,7 @@
 	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
 	import { cancelBatchJob, getLocalApiBaseUrl } from "$lib/tauri/settings";
 	import { isTauriRuntime } from "$lib/tauri/env";
+	import { getHumanNameFromDn, extractDniFromDn } from "$lib/signature-appearance";
 	import FileStackIcon from "@lucide/svelte/icons/files";
 	import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
@@ -50,6 +51,7 @@
 	let certs = $state<SigningCertSummary[]>([]);
 	let certId = $state("");
 	let pin = $state("");
+	let pinError = $state<string | null>(null);
 	let apiBase = $state("");
 	let busy = $state(false);
 
@@ -193,9 +195,27 @@
 		wizardStep = 3;
 	}
 
-	function pinStepContinue() {
+	async function pinStepContinue() {
 		if (!pin.trim()) return;
-		wizardStep = 4;
+		busy = true;
+		pinError = null;
+		try {
+			if (isTauriRuntime()) {
+				await pkcs11.pkcs11Login(pin.trim());
+			}
+			wizardStep = 4;
+		} catch (e) {
+			const msg = String(e);
+			if (msg.includes("PIN is incorrect") || msg.includes("CKR_PIN_INCORRECT")) {
+				pinError = "El PIN ingresado es incorrecto. Inténtalo de nuevo.";
+			} else if (msg.includes("LOCKED") || msg.includes("CKR_PIN_LOCKED")) {
+				pinError = "El DNI/Token ha sido bloqueado por múltiples intentos fallidos.";
+			} else {
+				pinError = `Error al verificar: ${msg}`;
+			}
+		} finally {
+			busy = false;
+		}
 	}
 
 	function placementStepContinue() {
@@ -479,15 +499,22 @@
 					<div class="grid gap-2">
 						<Label>Certificado</Label>
 						<Select.Root type="single" bind:value={certId}>
-							<Select.Trigger class="w-full max-w-xl justify-between">
-								{certs.find((c) => c.id_hex === certId)?.label || "Selecciona un certificado"}
+							<Select.Trigger class="w-full justify-between">
+								{@const selected = certs.find((c) => c.id_hex === certId)}
+								{#if selected}
+									<span class="truncate font-medium">
+										{getHumanNameFromDn(selected.subject_dn) || selected.label} <span class="text-muted-foreground font-normal ml-1">(DNI: {extractDniFromDn(selected.subject_dn) || "—"})</span>
+									</span>
+								{:else}
+									<span class="text-muted-foreground">Selecciona un certificado</span>
+								{/if}
 							</Select.Trigger>
-							<Select.Content>
+							<Select.Content class="w-full max-h-[300px]">
 								{#each certs as c}
-									<Select.Item value={c.id_hex} label={c.label}>
-										<div class="flex flex-col text-left">
-											<span class="font-medium">{c.label || "(sin etiqueta)"}</span>
-											<span class="text-muted-foreground text-xs">{c.subject_dn}</span>
+									<Select.Item value={c.id_hex} label={getHumanNameFromDn(c.subject_dn) || c.label || ""}>
+										<div class="flex flex-col text-left py-1">
+											<span class="font-medium text-base">{getHumanNameFromDn(c.subject_dn) || c.label || "(sin etiqueta)"}</span>
+											<span class="text-muted-foreground text-xs">DNI: {extractDniFromDn(c.subject_dn) || "—"}</span>
 										</div>
 									</Select.Item>
 								{/each}
@@ -530,8 +557,18 @@
 						autocomplete="off"
 						bind:value={pin}
 						placeholder="PIN"
-						onkeydown={(e) => e.key === "Enter" && pinStepContinue()}
+						class={pinError ? "border-destructive focus-visible:ring-destructive" : ""}
+						oninput={() => { pinError = null; }}
+						onkeydown={(e) => {
+							if (e.key === "Enter") {
+								e.preventDefault();
+								pinStepContinue();
+							}
+						}}
 					/>
+					{#if pinError}
+						<p class="text-sm font-medium text-destructive">{pinError}</p>
+					{/if}
 				</div>
 				<Button
 					type="button"
