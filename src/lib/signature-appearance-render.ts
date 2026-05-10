@@ -71,7 +71,10 @@ export async function renderSignatureSealPngBase64(
 	const imgSrc = previewImageSrc(appearance);
 	const rawLines = resolvePartsToPreviewLines(appearance.parts, cert);
 
-	const dpr = Math.min(2, typeof window !== "undefined" ? window.devicePixelRatio || 1 : 2);
+	// Usar un factor de escala muy alto (8x) para "supermuestreo".
+	// Como la caja es de apenas 120px, 120 * 8 = 960px de ancho final,
+	// lo cual garantiza que el texto se vea súper nítido y de alta calidad en el PDF.
+	const renderScale = 8;
 
 	const innerW = 280;
 	const imgMaxH = 72;
@@ -122,9 +125,10 @@ export async function renderSignatureSealPngBase64(
 	const textBlockH = displayLines.length * lineLeading;
 	const layoutH = drawH + 4 + textBlockH;
 
-	canvas.width = Math.ceil(layoutW * dpr);
-	canvas.height = Math.ceil(layoutH * dpr);
-	ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+	canvas.width = Math.ceil(layoutW * renderScale);
+	canvas.height = Math.ceil(layoutH * renderScale);
+	ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+	ctx.imageSmoothingQuality = "high";
 
 	ctx.clearRect(0, 0, layoutW, layoutH);
 

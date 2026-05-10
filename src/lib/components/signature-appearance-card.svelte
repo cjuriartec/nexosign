@@ -462,7 +462,7 @@
 			</div>
 
 			<div class="mx-auto w-min min-w-[120px] overflow-hidden rounded-md border border-border bg-background shadow-sm ring-1 ring-black/5 dark:ring-white/10">
-				<div class="flex justify-center border-b bg-muted/20 pb-1">
+				<div class="flex justify-center pb-1">
 					<img src={imgSrc} alt="" class="w-[120px] object-contain" />
 				</div>
 				<div class="px-2 pt-1 pb-2 text-justify">

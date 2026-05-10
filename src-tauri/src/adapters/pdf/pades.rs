@@ -689,6 +689,14 @@ fn append_signature_objects(
         ]),
     );
     annot.set("F", Object::Integer(132));
+    annot.set(
+        "Border",
+        Object::Array(vec![
+            Object::Integer(0),
+            Object::Integer(0),
+            Object::Integer(0),
+        ]),
+    );
     annot.set("AP", Object::Dictionary(ap_dict));
 
     let annot_id = doc.new_document.add_object(Object::Dictionary(annot));
