@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { page } from "$app/state";
-	import NexoLogo from "@lucide/svelte/icons/shield-check";
 	import FilePenLineIcon from "@lucide/svelte/icons/file-pen-line";
 	import ListOrderedIcon from "@lucide/svelte/icons/list-ordered";
 	import IdCardIcon from "@lucide/svelte/icons/id-card";
@@ -21,16 +20,23 @@
 	>
 		<a
 			href="/sign"
-			class="flex min-w-0 items-center gap-2 rounded-md px-2 outline-none ring-sidebar-ring hover:bg-sidebar-accent/50 focus-visible:ring-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:px-0"
+			aria-label="NexoSign"
+			class="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 outline-none ring-sidebar-ring hover:bg-sidebar-accent/50 focus-visible:ring-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:px-0"
 		>
 			<div
-				class="bg-sidebar-primary text-sidebar-primary-foreground flex size-8 shrink-0 items-center justify-center rounded-lg group-data-[collapsible=icon]:size-7"
+				class="flex size-8 shrink-0 overflow-hidden rounded-lg ring-1 ring-sidebar-border/50 group-data-[collapsible=icon]:size-7"
 			>
-				<NexoLogo class="size-5 group-data-[collapsible=icon]:size-4" />
+				<img
+					src="/favicon.png"
+					alt=""
+					width="24"
+					height="24"
+					class="size-full object-cover"
+					draggable="false"
+				/>
 			</div>
 			<div class="grid min-w-0 flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
 				<span class="truncate font-semibold">NexoSign</span>
-				<span class="text-muted-foreground truncate text-xs">Firma con DNIe</span>
 			</div>
 		</a>
 	</Sidebar.Header>

@@ -4,6 +4,9 @@
   "description": "NexoSign — firma con DNIe y bridge web (Tauri)",
   "type": "module",
   "scripts": {
+    "sync:web-icon": "node -e \"require('fs').copyFileSync('src-tauri/icons/128x128.png','static/favicon.png')\"",
+    "predev": "npm run sync:web-icon",
+    "prebuild": "npm run sync:web-icon",
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
