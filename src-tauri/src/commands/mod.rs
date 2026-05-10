@@ -274,9 +274,31 @@ pub async fn list_signing_certificates(
 }
 
 #[tauri::command]
-pub async fn pkcs11_login(state: tauri::State<'_, Pkcs11Store>, pin: String) -> Result<(), String> {
+pub async fn pkcs11_login(
+    state: tauri::State<'_, Pkcs11Store>,
+    pin: String,
+    cert_id_hex: Option<String>,
+) -> Result<(), String> {
     let mgr = Arc::clone(&*state);
-    pkcs11_blocking(move || mgr.login(pin).map_err(|e| e.to_string())).await
+    pkcs11_blocking(move || {
+        match cert_id_hex
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(hex) => mgr.login_for_certificate(pin, hex),
+            None => mgr.login(pin),
+        }
+        .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// Valida PDFs del mismo modo que la API batch (tamaño máx., `.pdf`, rutas absolutas).
+#[tauri::command]
+pub fn validate_batch_pdf_paths(paths: Vec<String>) -> Result<(), String> {
+    let pb: Vec<std::path::PathBuf> = paths.into_iter().map(std::path::PathBuf::from).collect();
+    crate::infrastructure::batch_pdf_validation::validate_batch_pdf_inputs(&pb)
 }
 
 #[tauri::command]

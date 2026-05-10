@@ -44,8 +44,17 @@ export async function listSigningCertificates(): Promise<SigningCertSummary[]> {
 	return invoke<SigningCertSummary[]>("list_signing_certificates");
 }
 
-export async function pkcs11Login(pin: string): Promise<void> {
-	return invoke<void>("pkcs11_login", { pin });
+/**
+ * Desbloquea el token con el PIN.
+ * Si indicas `certIdHex`, la sesión PKCS#11 se abre en el mismo slot que ese certificado (recomendado antes de firmar).
+ */
+export async function pkcs11Login(pin: string, certIdHex?: string): Promise<void> {
+	const payload: Record<string, unknown> = { pin };
+	const id = certIdHex?.trim();
+	if (id) {
+		payload.certIdHex = id;
+	}
+	return invoke<void>("pkcs11_login", payload);
 }
 
 export async function pkcs11Logout(): Promise<void> {

@@ -9,6 +9,7 @@ use cryptoki::mechanism::Mechanism;
 use cryptoki::object::{Attribute, AttributeType, CertificateType, ObjectClass};
 use cryptoki::session::UserType;
 use cryptoki::slot::Slot;
+use cryptoki::error::{Error as CryptokiError, RvError};
 use cryptoki::types::AuthPin;
 use x509_parser::prelude::*;
 
@@ -367,11 +368,17 @@ impl Pkcs11TokenManager {
         }
         let mut inner = self.lock_inner()?;
         ensure_session_rw(&mut inner)?;
-        let session = inner.session.as_mut().expect("session");
         let auth = AuthPin::new(pin.into());
-        let login_result = session.login(UserType::User, Some(&auth));
+        let login_result = {
+            let session = inner.session.as_mut().expect("session");
+            session.login(UserType::User, Some(&auth))
+        };
         match login_result {
             Ok(()) => {
+                inner.logged_in = true;
+                Ok(())
+            }
+            Err(CryptokiError::Pkcs11(RvError::UserAlreadyLoggedIn, _)) => {
                 inner.logged_in = true;
                 Ok(())
             }
@@ -390,11 +397,17 @@ impl Pkcs11TokenManager {
         }
         let mut inner = self.lock_inner()?;
         ensure_pkcs11_and_session_for_cert(&mut inner, cert_id_hex)?;
-        let session = inner.session.as_mut().expect("session");
         let auth = AuthPin::new(pin.into());
-        let login_result = session.login(UserType::User, Some(&auth));
+        let login_result = {
+            let session = inner.session.as_mut().expect("session");
+            session.login(UserType::User, Some(&auth))
+        };
         match login_result {
             Ok(()) => {
+                inner.logged_in = true;
+                Ok(())
+            }
+            Err(CryptokiError::Pkcs11(RvError::UserAlreadyLoggedIn, _)) => {
                 inner.logged_in = true;
                 Ok(())
             }

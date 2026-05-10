@@ -17,7 +17,8 @@ export async function removeAllowedOrigin(origin: string): Promise<void> {
 }
 
 export async function cancelBatchJob(job_id: string): Promise<boolean> {
-	return invoke<boolean>("cancel_batch_job", { job_id });
+	/** Tauri serializa argumentos en camelCase (`job_id` en Rust → `jobId` desde JS). */
+	return invoke<boolean>("cancel_batch_job", { jobId: job_id });
 }
 
 /** Rutas PKCS#11 guardadas en SQLite (orden = prioridad respecto a las incorporadas en driver). */

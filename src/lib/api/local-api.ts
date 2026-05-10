@@ -1,5 +1,36 @@
 import { LOCAL_API_BASE } from "$lib/config/constants";
 
+/** Body JSON típico `{ "error": "..." }` de la API local. */
+export type JsonErrorBody = {
+	error?: string;
+};
+
+/** Error HTTP de `postBatchSign` / `postBatchSignIntent` con `status` y cuerpo parseado. */
+export class LocalApiHttpError extends Error {
+	readonly status: number;
+	readonly body: unknown;
+
+	constructor(operation: string, status: number, body: unknown) {
+		const detail = extractJsonErrorMessage(body);
+		super(detail ? `${operation}: ${detail}` : `${operation} (${status})`);
+		this.name = "LocalApiHttpError";
+		this.status = status;
+		this.body = body;
+	}
+}
+
+export function extractJsonErrorMessage(body: unknown): string | undefined {
+	if (
+		body &&
+		typeof body === "object" &&
+		"error" in body &&
+		typeof (body as JsonErrorBody).error === "string"
+	) {
+		return (body as JsonErrorBody).error;
+	}
+	return undefined;
+}
+
 export type HealthResponse = {
 	status: string;
 	service: string;
@@ -83,9 +114,7 @@ export async function postBatchSign(
 	});
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}));
-		throw new Error(
-			`batch sign failed: ${res.status} ${JSON.stringify(err)}`,
-		);
+		throw new LocalApiHttpError("Firma por lotes", res.status, err);
 	}
 	return res.json() as Promise<BatchSignResponse>;
 }
@@ -108,7 +137,7 @@ export async function postBatchSignIntent(
 	});
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}));
-		throw new Error(`batch sign intent failed: ${res.status} ${JSON.stringify(err)}`);
+		throw new LocalApiHttpError("Registro de intención de firma", res.status, err);
 	}
 	return res.json() as Promise<BatchSignIntentResponse>;
 }

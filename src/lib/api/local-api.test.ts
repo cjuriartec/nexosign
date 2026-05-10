@@ -138,6 +138,6 @@ describe("local-api", () => {
 		});
 		await expect(
 			postBatchSignIntent({ inputs: ["/x.pdf"] }, "http://mock.test"),
-		).rejects.toThrow("batch sign intent failed");
+		).rejects.toThrow(/bad/);
 	});
 });

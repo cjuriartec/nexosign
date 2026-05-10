@@ -20,11 +20,9 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use crate::adapters::http::state::{HealthResponse, PingResponse, SharedState};
 use crate::adapters::pdf::pades::SignatureGridPlacement;
 use crate::adapters::worker::batch::BatchJob;
+use crate::infrastructure::batch_pdf_validation::validate_batch_pdf_inputs;
 
 pub const LOCAL_API_PORT: u16 = 14500;
-
-/// Tamaño máximo por PDF en un lote (50 MiB).
-const MAX_BATCH_PDF_BYTES: u64 = 50 * 1024 * 1024;
 
 fn validate_optional_output_dir(path: Option<std::path::PathBuf>) -> Result<Option<std::path::PathBuf>, String> {
     let Some(p) = path else {
@@ -38,35 +36,6 @@ fn validate_optional_output_dir(path: Option<std::path::PathBuf>) -> Result<Opti
     }
     std::fs::create_dir_all(&p).map_err(|e| format!("output_dir: {e}"))?;
     Ok(Some(p))
-}
-
-fn validate_batch_inputs(paths: &[std::path::PathBuf]) -> Result<(), String> {
-    if paths.is_empty() {
-        return Err("inputs no puede estar vacío".into());
-    }
-    for p in paths {
-        if !p.is_absolute() {
-            return Err(format!(
-                "cada ruta debe ser absoluta (recibido: {})",
-                p.display()
-            ));
-        }
-        let meta = std::fs::metadata(p).map_err(|e| format!("{}: {e}", p.display()))?;
-        if !meta.is_file() {
-            return Err(format!("no es un archivo regular: {}", p.display()));
-        }
-        if meta.len() > MAX_BATCH_PDF_BYTES {
-            return Err(format!(
-                "archivo demasiado grande (máx. 50 MiB): {}",
-                p.display()
-            ));
-        }
-        let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("");
-        if !ext.eq_ignore_ascii_case("pdf") {
-            return Err(format!("solo se admiten .pdf: {}", p.display()));
-        }
-    }
-    Ok(())
 }
 
 /// Exige `Origin` conocido (lista CORS / SQLite) antes de encolar firma batch.
@@ -250,7 +219,7 @@ async fn post_batch_sign_intent(
         return resp;
     }
 
-    if let Err(msg) = validate_batch_inputs(&body.inputs) {
+    if let Err(msg) = validate_batch_pdf_inputs(&body.inputs) {
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response();
     }
 
@@ -312,7 +281,7 @@ async fn post_batch_sign(
             .into_response();
     }
 
-    if let Err(msg) = validate_batch_inputs(&body.inputs) {
+    if let Err(msg) = validate_batch_pdf_inputs(&body.inputs) {
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response();
     }
 

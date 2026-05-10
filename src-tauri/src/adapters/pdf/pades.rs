@@ -342,7 +342,12 @@ fn append_signature_objects(
 
 fn patch_byte_range(buf: &mut [u8]) -> Result<(), SignBatchError> {
     let marker = b"/SubFilter /adbe.pkcs7.detached";
-    let base = find_sub(buf, marker).ok_or_else(|| SignBatchError::Pades("marker".into()))?;
+    let base = find_sub(buf, marker).ok_or_else(|| {
+        SignBatchError::Pades(
+            "no se encontró la firma provisional (/SubFilter /adbe.pkcs7.detached) en el PDF incremental"
+                .into(),
+        )
+    })?;
     let slice = &buf[base..];
     let rel = find_sub(slice, b"/Contents <").ok_or_else(|| SignBatchError::Pades("contents".into()))?;
     let lt = base + rel + b"/Contents ".len();

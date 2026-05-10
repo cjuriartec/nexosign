@@ -13,11 +13,11 @@
 	import * as ScrollArea from "$lib/components/ui/scroll-area/index.js";
 	import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert/index.js";
 	import { page } from "$app/state";
-	import { postBatchSign, type BatchSignBody } from "$lib/api/local-api";
+	import { postBatchSign, type BatchSignBody, LocalApiHttpError, extractJsonErrorMessage } from "$lib/api/local-api";
 	import { subscribeProgress, type ProgressPayload } from "$lib/events/progress";
 	import * as pkcs11 from "$lib/tauri/pkcs11";
 	import type { SigningCertSummary } from "$lib/tauri/pkcs11";
-	import { enumeratePdfsUnderFolder } from "$lib/tauri/batch";
+	import { validateBatchPdfPaths } from "$lib/tauri/batch-validation";
 	import { getBatchSignIntent } from "$lib/tauri/batch-sign-intent";
 	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
 	import { cancelBatchJob, getLocalApiBaseUrl } from "$lib/tauri/settings";
@@ -81,6 +81,17 @@
 
 	function pushLog(line: string) {
 		logLines = [...logLines, line].slice(-120);
+	}
+
+	async function warnIfPathsInvalid(list: string[]): Promise<boolean> {
+		if (!isTauriRuntime() || list.length === 0) return true;
+		try {
+			await validateBatchPdfPaths(list);
+			return true;
+		} catch (e) {
+			toast.error(String(e));
+			return false;
+		}
 	}
 
 	async function refreshCerts(): Promise<number> {
@@ -157,6 +168,7 @@
 		const unique = [...new Set(list)];
 		paths = unique;
 		intentRequestId = null;
+		await warnIfPathsInvalid(unique);
 	}
 
 	async function pickFolder() {
@@ -174,6 +186,7 @@
 			folderPath = sel;
 			outputDirForJob = await computeFirmadosDir(sel);
 			intentRequestId = null;
+			await warnIfPathsInvalid(pdfs);
 			if (pdfs.length === 0) {
 				toast.message("No hay PDFs en esa carpeta.");
 			}
@@ -197,6 +210,7 @@
 		intentRequestId = intentParam;
 		await refreshCerts();
 		wizardStep = 1;
+		void warnIfPathsInvalid([...payload.inputs]);
 		toast.message("Lote recibido desde la integración: revisa los pasos y confirma aquí.");
 		if (typeof window !== "undefined") {
 			const u = new URL(window.location.href);
@@ -220,6 +234,7 @@
 
 	async function step1Continue() {
 		if (paths.length === 0) return;
+		if (!(await warnIfPathsInvalid(paths))) return;
 		await refreshCerts();
 		wizardStep = 2;
 	}
@@ -238,7 +253,7 @@
 		pinError = null;
 		try {
 			if (isTauriRuntime()) {
-				await pkcs11.pkcs11Login(pin.trim());
+				await pkcs11.pkcs11Login(pin.trim(), certId.trim());
 			}
 			wizardStep = 4;
 		} catch (e) {
@@ -247,6 +262,13 @@
 				pinError = "El PIN ingresado es incorrecto. Inténtalo de nuevo.";
 			} else if (msg.includes("LOCKED") || msg.includes("CKR_PIN_LOCKED")) {
 				pinError = "El DNI/Token ha sido bloqueado por múltiples intentos fallidos.";
+			} else if (
+				msg.includes("already logged") ||
+				msg.includes("UserAlreadyLoggedIn") ||
+				msg.includes("USER_ALREADY_LOGGED_IN")
+			) {
+				pinError = null;
+				wizardStep = 4;
 			} else {
 				pinError = `Error al verificar: ${msg}`;
 			}
@@ -308,7 +330,26 @@
 			intentRequestId = null;
 			toast.success("Firma en curso");
 		} catch (e) {
-			toast.error(String(e));
+			if (e instanceof LocalApiHttpError) {
+				const detail = extractJsonErrorMessage(e.body) ?? e.message;
+				if (e.status === 400 && detail.includes("demasiado grande")) {
+					toast.error(
+						"Uno o más PDF superan 50 MiB. Reduce el tamaño, divide el documento o quítalo del lote.",
+					);
+				} else if (e.status === 401) {
+					toast.error(
+						"No se pudo desbloquear el token con ese PIN o la sesión del lector está bloqueada. Vuelve al paso del PIN, o en Certificados usa «Volver a detectar la tarjeta».",
+					);
+				} else if (e.status === 403 && String(detail).toLowerCase().includes("origin")) {
+					toast.error(
+						"Origen no autorizado para la API local. Añade este origen en Ajustes → Orígenes permitidos.",
+					);
+				} else {
+					toast.error(detail);
+				}
+			} else {
+				toast.error(String(e));
+			}
 		} finally {
 			busy = false;
 		}
