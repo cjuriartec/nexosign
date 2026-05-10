@@ -52,7 +52,7 @@ export function defaultSignatureAppearance(): SignatureAppearanceState {
 		parts: [
 			{ kind: "token", id: "firmante" },
 			{ kind: "break" },
-			{ kind: "token", id: "fecha_larga" },
+			{ kind: "token", id: "fecha_corta" },
 			{ kind: "break" },
 			{ kind: "token", id: "certificado" },
 		],

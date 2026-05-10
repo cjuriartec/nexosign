@@ -461,22 +461,20 @@
 				/>
 			</div>
 
-			<div
-				class="border-border bg-background overflow-hidden rounded-lg border shadow-sm ring-1 ring-black/5 dark:ring-white/10"
-			>
-				<div class="bg-muted/20 flex justify-center border-b px-2 py-2">
-					<img src={imgSrc} alt="" class="max-h-[72px] w-auto object-contain" width="210" height="148" />
+			<div class="mx-auto w-min min-w-[140px] overflow-hidden rounded-md border border-border bg-background shadow-sm ring-1 ring-black/5 dark:ring-white/10">
+				<div class="flex justify-center border-b bg-muted/20 pb-2">
+					<img src={imgSrc} alt="" class="max-h-[72px] object-contain" />
 				</div>
-				<div class="space-y-0.5 px-2 py-2">
+				<div class="px-2 py-2 text-center">
 					{#each previewLines as line}
-						<p class="text-center text-[11px] leading-snug text-foreground">{line}</p>
+						<p class="text-[11px] leading-snug text-foreground break-words">{line}</p>
 					{/each}
 				</div>
+				{#if !previewCert}
+					<p class="text-muted-foreground text-[11px] leading-snug">Sin token: vista de ejemplo.</p>
+				{/if}
 			</div>
 
-			{#if !previewCert}
-				<p class="text-muted-foreground text-[11px] leading-snug">Sin token: vista de ejemplo.</p>
-			{/if}
 		</div>
 	</div>
 </div>

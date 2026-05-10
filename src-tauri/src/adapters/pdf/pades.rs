@@ -299,7 +299,7 @@ fn rect_from_grid(page_box: [f64; 4], g: SignatureGridPlacement) -> [i64; 4] {
     let page_ury = page_box[3];
     let w = (page_urx - page_llx).max(1.0);
     let h = (page_ury - page_lly).max(1.0);
-    let margin = (w.min(h) * 0.028).clamp(16.0, 44.0);
+    let margin = 0.0;
     let inner_w = w - 2.0 * margin;
     let inner_h = h - 2.0 * margin;
     let cell_w = inner_w / SIG_GRID_COLS;
@@ -345,7 +345,7 @@ fn rect_from_grid_with_aspect(page_box: [f64; 4], g: SignatureGridPlacement, asp
     let page_ury = page_box[3];
     let w = (page_urx - page_llx).max(1.0);
     let h = (page_ury - page_lly).max(1.0);
-    let margin = (w.min(h) * 0.028).clamp(16.0, 44.0);
+    let margin = 0.0;
     let inner_w = w - 2.0 * margin;
     let inner_h = h - 2.0 * margin;
     let cell_w = inner_w / SIG_GRID_COLS;
@@ -356,8 +356,8 @@ fn rect_from_grid_with_aspect(page_box: [f64; 4], g: SignatureGridPlacement, asp
     let y_cell_bottom = page_ury - margin - (row + 1.0) * cell_h;
 
     let ar = aspect.clamp(0.25, 4.0);
-    let max_w = cell_w * 0.94;
-    let max_h = cell_h * 0.94;
+    let max_w = cell_w * 0.55;
+    let max_h = cell_h * 0.55;
     let mut widget_w = max_w;
     let mut widget_h = widget_w / ar;
     if widget_h > max_h {
@@ -365,8 +365,22 @@ fn rect_from_grid_with_aspect(page_box: [f64; 4], g: SignatureGridPlacement, asp
         widget_w = widget_h * ar;
     }
 
-    let llx = x0 + (cell_w - widget_w) * 0.5;
-    let lly = y_cell_bottom + (cell_h - widget_h) * 0.5;
+    let llx = if g.col == 0 {
+        x0
+    } else if f64::from(g.col) >= SIG_GRID_COLS - 1.0 {
+        x0 + cell_w - widget_w
+    } else {
+        x0 + (cell_w - widget_w) * 0.5
+    };
+
+    let lly = if g.row == 0 {
+        y_cell_bottom + cell_h - widget_h
+    } else if f64::from(g.row) >= SIG_GRID_ROWS - 1.0 {
+        y_cell_bottom
+    } else {
+        y_cell_bottom + (cell_h - widget_h) * 0.5
+    };
+
     let urx = llx + widget_w;
     let ury = lly + widget_h;
     let llx = llx.max(page_llx);
@@ -393,7 +407,14 @@ fn seal_png_dimensions(bytes: &[u8]) -> Result<(u32, u32), SignBatchError> {
     Ok(img.dimensions())
 }
 
-fn seal_png_to_jpeg_bytes(png_bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), SignBatchError> {
+fn create_image_and_smask(
+    doc: &mut IncrementalDocument,
+    png_bytes: &[u8],
+) -> Result<(lopdf::ObjectId, u32, u32), SignBatchError> {
+    use std::io::Write;
+    use flate2::write::ZlibEncoder;
+    use flate2::Compression;
+
     let dyn_img = image::load_from_memory(png_bytes)
         .map_err(|e| SignBatchError::Pades(format!("imagen sello: {e}")))?;
     let rgba = dyn_img.to_rgba8();
@@ -403,32 +424,42 @@ fn seal_png_to_jpeg_bytes(png_bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), SignB
     }
 
     let mut rgb = Vec::with_capacity((iw * ih * 3) as usize);
+    let mut alpha = Vec::with_capacity((iw * ih) as usize);
+    let mut has_alpha = false;
+
     for p in rgba.pixels() {
-        let a = p[3] as f32 / 255.0;
-        let r = ((p[0] as f32) * a + 255.0 * (1.0 - a)).round() as u8;
-        let g = ((p[1] as f32) * a + 255.0 * (1.0 - a)).round() as u8;
-        let b = ((p[2] as f32) * a + 255.0 * (1.0 - a)).round() as u8;
-        rgb.extend_from_slice(&[r, g, b]);
+        if p[3] < 255 {
+            has_alpha = true;
+        }
+        if p[3] == 0 {
+            rgb.extend_from_slice(&[255, 255, 255]);
+        } else {
+            rgb.extend_from_slice(&[p[0], p[1], p[2]]);
+        }
+        alpha.push(p[3]);
     }
 
-    let mut jpeg_buf = Vec::new();
-    let encoder = JpegEncoder::new_with_quality(&mut jpeg_buf, 90);
-    encoder
-        .write_image(&rgb, iw, ih, image::ExtendedColorType::Rgb8)
-        .map_err(|e| SignBatchError::Pades(format!("JPEG sello: {e}")))?;
+    let mut rgb_z = ZlibEncoder::new(Vec::new(), Compression::default());
+    rgb_z.write_all(&rgb).map_err(|e| SignBatchError::Pades(format!("zlib rgb: {e}")))?;
+    let rgb_compressed = rgb_z.finish().map_err(|e| SignBatchError::Pades(format!("zlib rgb: {e}")))?;
 
-    Ok((jpeg_buf, iw, ih))
-}
+    let mut smask_ref = None;
+    if has_alpha {
+        let mut a_z = ZlibEncoder::new(Vec::new(), Compression::default());
+        a_z.write_all(&alpha).map_err(|e| SignBatchError::Pades(format!("zlib alpha: {e}")))?;
+        let alpha_compressed = a_z.finish().map_err(|e| SignBatchError::Pades(format!("zlib alpha: {e}")))?;
 
-fn create_appearance_from_seal_png(
-    doc: &mut IncrementalDocument,
-    rect: [i64; 4],
-    png_bytes: &[u8],
-) -> Result<Object, SignBatchError> {
-    let (jpeg_bytes, iw, ih) = seal_png_to_jpeg_bytes(png_bytes)?;
-
-    let fw = (rect[2] - rect[0]).abs() as f64;
-    let fh = (rect[3] - rect[1]).abs() as f64;
+        let mut smask_dict = Dictionary::new();
+        smask_dict.set("Type", Object::Name(b"XObject".to_vec()));
+        smask_dict.set("Subtype", Object::Name(b"Image".to_vec()));
+        smask_dict.set("Width", Object::Integer(iw.into()));
+        smask_dict.set("Height", Object::Integer(ih.into()));
+        smask_dict.set("ColorSpace", Object::Name(b"DeviceGray".to_vec()));
+        smask_dict.set("BitsPerComponent", Object::Integer(8));
+        smask_dict.set("Filter", Object::Name(b"FlateDecode".to_vec()));
+        let smask_stream = Stream::new(smask_dict, alpha_compressed);
+        smask_ref = Some(doc.new_document.add_object(Object::Stream(smask_stream)));
+    }
 
     let mut img_dict = Dictionary::new();
     img_dict.set("Type", Object::Name(b"XObject".to_vec()));
@@ -436,15 +467,28 @@ fn create_appearance_from_seal_png(
     img_dict.set("Width", Object::Integer(iw.into()));
     img_dict.set("Height", Object::Integer(ih.into()));
     img_dict.set("ColorSpace", Object::Name(b"DeviceRGB".to_vec()));
-    img_dict.set("Filter", Object::Name(b"DCTDecode".to_vec()));
-    let img_stream = Stream::new(img_dict, jpeg_bytes);
-    let img_ref = doc
-        .new_document
-        .add_object(Object::Stream(img_stream));
+    img_dict.set("BitsPerComponent", Object::Integer(8));
+    img_dict.set("Filter", Object::Name(b"FlateDecode".to_vec()));
+    if let Some(sm_ref) = smask_ref {
+        img_dict.set("SMask", Object::Reference(sm_ref));
+    }
+    let img_stream = Stream::new(img_dict, rgb_compressed);
+    let img_ref = doc.new_document.add_object(Object::Stream(img_stream));
 
-    let sx = fw / f64::from(iw);
-    let sy = fh / f64::from(ih);
-    let content = format!("q {} 0 0 {} 0 0 cm /Img0 Do Q", sx, sy);
+    Ok((img_ref, iw, ih))
+}
+
+fn create_appearance_from_seal_png(
+    doc: &mut IncrementalDocument,
+    rect: [i64; 4],
+    png_bytes: &[u8],
+) -> Result<Object, SignBatchError> {
+    let (img_ref, iw, ih) = create_image_and_smask(doc, png_bytes)?;
+
+    let fw = (rect[2] - rect[0]).abs() as f64;
+    let fh = (rect[3] - rect[1]).abs() as f64;
+
+    let content = format!("q {} 0 0 {} 0 0 cm /Img0 Do Q", fw, fh);
 
     let mut xobj = Dictionary::new();
     xobj.set("Img0", Object::Reference(img_ref));
@@ -455,6 +499,18 @@ fn create_appearance_from_seal_png(
     let mut form_dict = Dictionary::new();
     form_dict.set("Type", Object::Name(b"XObject".to_vec()));
     form_dict.set("Subtype", Object::Name(b"Form".to_vec()));
+    form_dict.set("FormType", Object::Integer(1));
+    form_dict.set(
+        "Matrix",
+        Object::Array(vec![
+            Object::Integer(1),
+            Object::Integer(0),
+            Object::Integer(0),
+            Object::Integer(1),
+            Object::Integer(0),
+            Object::Integer(0),
+        ]),
+    );
     form_dict.set(
         "BBox",
         Object::Array(vec![
@@ -494,6 +550,18 @@ fn create_appearance_stream(
     let mut xobject = Dictionary::new();
     xobject.set("Type", Object::Name(b"XObject".to_vec()));
     xobject.set("Subtype", Object::Name(b"Form".to_vec()));
+    xobject.set("FormType", Object::Integer(1));
+    xobject.set(
+        "Matrix",
+        Object::Array(vec![
+            Object::Integer(1),
+            Object::Integer(0),
+            Object::Integer(0),
+            Object::Integer(1),
+            Object::Integer(0),
+            Object::Integer(0),
+        ]),
+    );
     xobject.set(
         "BBox",
         Object::Array(vec![
@@ -615,18 +683,6 @@ fn append_signature_objects(
         ]),
     );
     annot.set("F", Object::Integer(132));
-    // Borde suave para que el campo sea visible aunque el visor oculte la AP hasta firmar.
-    let mut mk = Dictionary::new();
-    mk.set(
-        "BC",
-        Object::Array(vec![
-            Object::Real(0.72),
-            Object::Real(0.76),
-            Object::Real(0.82),
-        ]),
-    );
-    mk.set("W", Object::Integer(1));
-    annot.set("MK", Object::Dictionary(mk));
     annot.set("AP", Object::Dictionary(ap_dict));
 
     let annot_id = doc.new_document.add_object(Object::Dictionary(annot));

@@ -73,12 +73,10 @@ export async function renderSignatureSealPngBase64(
 
 	const dpr = Math.min(2, typeof window !== "undefined" ? window.devicePixelRatio || 1 : 2);
 
-	const pad = 14;
 	const innerW = 280;
 	const imgMaxH = 72;
 	const textSize = 11;
 	const lineLeading = 14;
-	const layoutW = innerW + pad * 2;
 
 	let imgEl: HTMLImageElement;
 	try {
@@ -114,36 +112,26 @@ export async function renderSignatureSealPngBase64(
 
 	ctx.font = `${textSize}px ui-sans-serif, system-ui, sans-serif`;
 
-	const textMaxW = innerW;
+	const layoutW = Math.max(drawW, 140);
+	const textMaxW = layoutW;
 	const wrapped: string[] = [];
 	for (const line of rawLines) {
 		wrapped.push(...wrapLine(ctx, line, textMaxW));
 	}
 	const displayLines = wrapped.length ? wrapped : ["—"];
 
-	const textBlockH = displayLines.length * lineLeading + 8;
-	const layoutH = pad + drawH + 10 + textBlockH + pad;
+	const textBlockH = displayLines.length * lineLeading;
+	const layoutH = drawH + 10 + textBlockH;
 
 	canvas.width = Math.ceil(layoutW * dpr);
 	canvas.height = Math.ceil(layoutH * dpr);
 	ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-	ctx.fillStyle = "#fafafa";
-	ctx.fillRect(0, 0, layoutW, layoutH);
-
-	ctx.strokeStyle = "rgba(15, 23, 42, 0.07)";
-	ctx.lineWidth = 1;
-	ctx.strokeRect(0.5, 0.5, layoutW - 1, layoutH - 1);
+	ctx.clearRect(0, 0, layoutW, layoutH);
 
 	const imgX = (layoutW - drawW) / 2;
-	const imgY = pad;
+	const imgY = 0;
 	ctx.drawImage(imgEl, imgX, imgY, drawW, drawH);
-
-	ctx.strokeStyle = "rgba(15, 23, 42, 0.1)";
-	ctx.beginPath();
-	ctx.moveTo(pad, imgY + drawH + 6);
-	ctx.lineTo(layoutW - pad, imgY + drawH + 6);
-	ctx.stroke();
 
 	ctx.fillStyle = "#0f172a";
 	ctx.font = `${textSize}px ui-sans-serif, system-ui, sans-serif`;
