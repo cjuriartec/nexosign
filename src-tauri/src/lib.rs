@@ -74,6 +74,7 @@ pub fn run() {
             commands::pkcs11_slot_count,
             commands::list_signing_certificates,
             commands::pkcs11_login,
+            commands::pkcs11_verify_pin,
             commands::pkcs11_logout,
             commands::pkcs11_session_status,
             commands::pkcs11_reset_connection,

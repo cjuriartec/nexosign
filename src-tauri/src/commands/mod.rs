@@ -294,6 +294,19 @@ pub async fn pkcs11_login(
     .await
 }
 
+#[tauri::command]
+pub async fn pkcs11_verify_pin(
+    state: tauri::State<'_, Pkcs11Store>,
+    pin: String,
+    cert_id_hex: String,
+) -> Result<(), String> {
+    let mgr = Arc::clone(&*state);
+    pkcs11_blocking(move || {
+        mgr.verify_pin(pin, &cert_id_hex).map_err(|e| e.to_string())
+    })
+    .await
+}
+
 /// Valida PDFs del mismo modo que la API batch (tamaño máx., `.pdf`, rutas absolutas).
 #[tauri::command]
 pub fn validate_batch_pdf_paths(paths: Vec<String>) -> Result<(), String> {

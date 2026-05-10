@@ -15,11 +15,12 @@ use cms::signed_data::{
 use const_oid::db::rfc5911::{ID_DATA, ID_SIGNED_DATA};
 use const_oid::db::rfc5912::ID_SHA_256;
 use der::{Any, AnyRef, Decode, Encode};
-use lopdf::{Dictionary, Document, IncrementalDocument, Object, StringFormat};
+use lopdf::{Dictionary, Document, IncrementalDocument, Object, Stream, StringFormat};
 use sha2::{Digest, Sha256};
 use spki::AlgorithmIdentifierOwned;
 use x509_cert::Certificate;
 use x509_cert::builder::Builder;
+use chrono;
 
 use crate::adapters::pdf::cms_signer::Pkcs11RsaCmsSigner;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
@@ -323,10 +324,76 @@ fn rect_from_grid(page_box: [f64; 4], g: SignatureGridPlacement) -> [i64; 4] {
     ]
 }
 
+fn create_appearance_stream(
+    doc: &mut IncrementalDocument,
+    rect: [i64; 4],
+    signer_name: &str,
+) -> Result<Object, SignBatchError> {
+    let w = (rect[2] - rect[0]).abs() as f64;
+    let h = (rect[3] - rect[1]).abs() as f64;
+
+    let mut resources = Dictionary::new();
+    let mut font_dict = Dictionary::new();
+    font_dict.set("Type", Object::Name(b"Font".to_vec()));
+    font_dict.set("Subtype", Object::Name(b"Type1".to_vec()));
+    font_dict.set("BaseFont", Object::Name(b"Helvetica-Bold".to_vec()));
+    let font_id = doc.new_document.add_object(Object::Dictionary(font_dict));
+
+    let mut fonts = Dictionary::new();
+    fonts.set("F1", Object::Reference(font_id));
+    resources.set("Font", Object::Dictionary(fonts));
+
+    let mut xobject = Dictionary::new();
+    xobject.set("Type", Object::Name(b"XObject".to_vec()));
+    xobject.set("Subtype", Object::Name(b"Form".to_vec()));
+    xobject.set(
+        "BBox",
+        Object::Array(vec![
+            Object::Real(0.0),
+            Object::Real(0.0),
+            Object::Real(w as f32),
+            Object::Real(h as f32),
+        ]),
+    );
+    xobject.set("Resources", Object::Dictionary(resources));
+
+    let now = chrono::Local::now().format("%Y/%m/%d %H:%M").to_string();
+    let signer_sanitized = signer_name.replace('(', "\\(").replace(')', "\\)");
+
+    let content = format!(
+        "q 0.1 0.5 0.8 rg 0.5 0.5 {w_minus} {h_minus} re s Q \
+         BT /F1 7 Tf 0.2 0.2 0.2 rg 6 {y1} Td (Firmado digitalmente por:) Tj \
+         /F1 8 Tf 0 0 0 rg 0 -10 Td ({name}) Tj \
+         /F1 6 Tf 0.4 0.4 0.4 rg 0 -8 Td (Fecha: {now}) Tj ET",
+        w_minus = w - 1.0,
+        h_minus = h - 1.0,
+        y1 = h - 12.0,
+        name = signer_sanitized,
+        now = now
+    );
+
+    let stream = Stream::new(xobject, content.into_bytes());
+    Ok(Object::Reference(doc.new_document.add_object(Object::Stream(stream))))
+}
+
+fn get_signer_name_from_der(der: &[u8]) -> String {
+    let Ok((_, cert)) = x509_parser::parse_x509_certificate(der) else {
+        return "Firmante Desconocido".into();
+    };
+    let name = cert.subject()
+        .iter_common_name()
+        .next()
+        .and_then(|cn| cn.as_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| cert.subject().to_string());
+    name
+}
+
 fn append_signature_objects(
     doc: &mut IncrementalDocument,
     der_placeholder_len: usize,
     rect: [i64; 4],
+    signer_name: &str,
 ) -> Result<(), SignBatchError> {
     let prev = doc.get_prev_documents();
     let page_id = prev
@@ -362,15 +429,21 @@ fn append_signature_objects(
             Object::Integer(999_999_999_999_999),
         ]),
     );
+
+    let now_pdf = chrono::Local::now().format("D:%Y%m%d%H%M%S%:z").to_string().replace(':', "'") + "'";
     sig_dict.set(
         "M",
         Object::String(
-            b"D:20260101120000Z".to_vec(),
+            now_pdf.into_bytes(),
             StringFormat::Literal,
         ),
     );
 
     let sig_id = doc.new_document.add_object(Object::Dictionary(sig_dict));
+
+    let ap_ref = create_appearance_stream(doc, rect, signer_name)?;
+    let mut ap_dict = Dictionary::new();
+    ap_dict.set("N", ap_ref);
 
     let mut annot = Dictionary::new();
     annot.set("Type", Object::Name(b"Annot".to_vec()));
@@ -389,6 +462,7 @@ fn append_signature_objects(
         ]),
     );
     annot.set("F", Object::Integer(132));
+    annot.set("AP", Object::Dictionary(ap_dict));
 
     let annot_id = doc.new_document.add_object(Object::Dictionary(annot));
 
@@ -472,6 +546,7 @@ pub fn sign_pdf_pades_bes(
     let page_box = read_first_page_box(&pdf_bytes)?;
     let rect = rect_from_grid(page_box, placement);
 
+    let signer_name = get_signer_name_from_der(&cert_der);
     let mut der_cap = 8192usize;
 
     for _ in 0..25 {
@@ -480,7 +555,7 @@ pub fn sign_pdf_pades_bes(
             .try_into()
             .map_err(|e| SignBatchError::Pades(format!("PDF lectura: {e}")))?;
 
-        append_signature_objects(&mut doc, der_cap, rect)?;
+        append_signature_objects(&mut doc, der_cap, rect, &signer_name)?;
 
         let mut buf = Vec::new();
         doc.save_to(&mut buf)

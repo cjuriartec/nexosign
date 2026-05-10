@@ -53,26 +53,35 @@ pub fn process_batch<P: ProgressNotifier>(
     if let Some(ref p) = input.pin {
         let pt = p.trim();
         if !pt.is_empty() {
-            // Reset completo: descargamos el módulo PKCS#11 y cualquier sesión previa para que
-            // `Pkcs11::new` + `C_Initialize` + `C_OpenSession` + `C_Login` + `C_Sign` ocurran
-            // **todos** en este hilo. Algunos drivers (SafeNet eToken/Bit4id/etc.) atan el estado
-            // de login al hilo OS que invocó `C_Initialize` o `C_Login`, así que reabrimos limpio.
+            eprintln!("[NexoSign DIAG] Worker: PIN presente ({} chars), cert_id_hex={}", pt.len(), &input.cert_id_hex);
+            eprintln!("[NexoSign DIAG] Worker: reset_pkcs11_driver_state...");
             let _ = token.reset_pkcs11_driver_state();
-            if let Err(e) = token.login_for_certificate(pt.to_string(), &input.cert_id_hex) {
-                progress.notify(ProgressEvent {
-                    job_id: input.job_id.clone(),
-                    current: 1,
-                    total: total.max(1),
-                    file_name: String::new(),
-                    path: String::new(),
-                    error: Some(format!(
-                        "Sesión PKCS#11 en el proceso de firma: {e}"
-                    )),
-                });
-                let _ = token.logout();
-                return Ok(());
+            eprintln!("[NexoSign DIAG] Worker: login_for_certificate...");
+            match token.login_for_certificate(pt.to_string(), &input.cert_id_hex) {
+                Ok(()) => {
+                    eprintln!("[NexoSign DIAG] Worker: login_for_certificate OK ✓");
+                }
+                Err(e) => {
+                    eprintln!("[NexoSign DIAG] Worker: login_for_certificate FAILED: {e}");
+                    progress.notify(ProgressEvent {
+                        job_id: input.job_id.clone(),
+                        current: 1,
+                        total: total.max(1),
+                        file_name: String::new(),
+                        path: String::new(),
+                        error: Some(format!(
+                            "Sesión PKCS#11 en el proceso de firma: {e}"
+                        )),
+                    });
+                    let _ = token.logout();
+                    return Ok(());
+                }
             }
+        } else {
+            eprintln!("[NexoSign DIAG] Worker: PIN presente pero vacío tras trim");
         }
+    } else {
+        eprintln!("[NexoSign DIAG] Worker: input.pin es None — NO SE HARÁ LOGIN");
     }
 
     for (idx, path) in input.inputs.iter().enumerate() {

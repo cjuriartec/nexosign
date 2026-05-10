@@ -61,6 +61,11 @@ export async function pkcs11Logout(): Promise<void> {
 	return invoke<void>("pkcs11_logout");
 }
 
+/** Verifica el PIN contra el certificado seleccionado sin dejar sesión abierta. */
+export async function pkcs11VerifyPin(pin: string, certIdHex: string): Promise<void> {
+	return invoke<void>("pkcs11_verify_pin", { pin, certIdHex });
+}
+
 export async function pkcs11ResetConnection(): Promise<void> {
 	return invoke<void>("pkcs11_reset_connection");
 }

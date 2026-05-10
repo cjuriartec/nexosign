@@ -253,7 +253,7 @@
 		pinError = null;
 		try {
 			if (isTauriRuntime()) {
-				await pkcs11.pkcs11Login(pin.trim(), certId.trim());
+				await pkcs11.pkcs11VerifyPin(pin.trim(), certId.trim());
 			}
 			wizardStep = 4;
 		} catch (e) {

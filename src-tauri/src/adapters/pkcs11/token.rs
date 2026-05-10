@@ -211,6 +211,8 @@ struct Inner {
     active_module_path: Option<PathBuf>,
     session: Option<cryptoki::session::Session>,
     logged_in: bool,
+    /// PIN almacenado para re-autenticación `CKU_CONTEXT_SPECIFIC` (`CKA_ALWAYS_AUTHENTICATE`).
+    pin: Option<String>,
     /// Misma base SQLite que orígenes permitidos (`OriginDbPath`).
     app_database_path: Arc<Mutex<Option<PathBuf>>>,
 }
@@ -223,6 +225,7 @@ fn reset_pkcs11_inner_state(inner: &mut Inner) {
     inner.pkcs11 = None;
     inner.active_module_path = None;
     inner.logged_in = false;
+    inner.pin = None;
 }
 
 impl Pkcs11TokenManager {
@@ -234,6 +237,7 @@ impl Pkcs11TokenManager {
                 active_module_path: None,
                 session: None,
                 logged_in: false,
+                pin: None,
                 app_database_path,
             }),
         }
@@ -357,6 +361,9 @@ impl Pkcs11TokenManager {
     }
 
     /// Firma RSA SHA-256 PKCS#1 v1.5 (`CKM_SHA256_RSA_PKCS`). Requiere PIN (`login` / `login_for_certificate`).
+    ///
+    /// Realiza `C_Login(CKU_CONTEXT_SPECIFIC)` antes de cada `C_Sign` para soportar
+    /// claves con `CKA_ALWAYS_AUTHENTICATE = true` (típico en DNIe/eID).
     pub fn rsa_sha256_pkcs1_sign(
         &self,
         cert_id_hex: &str,
@@ -367,6 +374,10 @@ impl Pkcs11TokenManager {
         if !inner.logged_in {
             return Err(TokenError::NotLoggedIn);
         }
+
+        // Extraemos el PIN antes de pedir la sesión mutably para evitar errores del borrow checker (E0502).
+        let pin_for_auth = inner.pin.clone();
+
         let session = inner.session.as_mut().expect("session");
         let (_, id_bytes) = cert_der_and_id_for_hex(session, cert_id_hex)?;
         let search_key = vec![
@@ -375,7 +386,34 @@ impl Pkcs11TokenManager {
         ];
         let handles = session.find_objects(&search_key)?;
         let key = handles.into_iter().next().ok_or(TokenError::NoPrivateKey)?;
-        Ok(session.sign(&Mechanism::Sha256RsaPkcs, key, data)?)
+
+        // CKA_ALWAYS_AUTHENTICATE: re-autenticación por operación antes de firmar.
+        // El estándar PKCS#11 exige: C_SignInit -> C_Login(ContextSpecific) -> C_Sign.
+        
+        // 1. Inicializar la operación de firma
+        session.sign_init(&Mechanism::Sha256RsaPkcs, key)?;
+
+        // 2. Realizar re-autenticación si tenemos el PIN
+        if let Some(pin_str) = pin_for_auth {
+            let auth = AuthPin::new(pin_str.into());
+            match session.login(UserType::ContextSpecific, Some(&auth)) {
+                Ok(()) => {
+                    eprintln!("[NexoSign DIAG] ContextSpecific login OK ✓");
+                }
+                // Algunos drivers no soportan ContextSpecific o ya están logueados; ignorar y probar firma.
+                Err(CryptokiError::Pkcs11(RvError::UserAlreadyLoggedIn, _)) => {}
+                Err(CryptokiError::Pkcs11(RvError::OperationNotInitialized, _)) => {
+                    eprintln!("[NexoSign DIAG] ContextSpecific login: OperationNotInitialized (posiblemente el driver no sigue el estándar)");
+                }
+                Err(e) => {
+                    eprintln!("[NexoSign DIAG] ContextSpecific login error: {e}");
+                }
+            }
+        }
+
+        // 3. Ejecutar la firma (usamos update + final para evitar el re-init interno de cryptoki)
+        session.sign_update(data)?;
+        Ok(session.sign_final()?)
     }
 
     pub fn login(&self, pin: String) -> Result<(), TokenError> {
@@ -384,6 +422,7 @@ impl Pkcs11TokenManager {
         }
         let mut inner = self.lock_inner()?;
         ensure_session_rw(&mut inner)?;
+        let pin_saved = pin.clone();
         let auth = AuthPin::new(pin.into());
         let login_result = {
             let session = inner.session.as_mut().expect("session");
@@ -392,10 +431,12 @@ impl Pkcs11TokenManager {
         match login_result {
             Ok(()) => {
                 inner.logged_in = true;
+                inner.pin = Some(pin_saved);
                 Ok(())
             }
             Err(CryptokiError::Pkcs11(RvError::UserAlreadyLoggedIn, _)) => {
                 inner.logged_in = true;
+                inner.pin = Some(pin_saved);
                 Ok(())
             }
             Err(e) => {
@@ -413,6 +454,7 @@ impl Pkcs11TokenManager {
         }
         let mut inner = self.lock_inner()?;
         ensure_pkcs11_and_session_for_cert(&mut inner, cert_id_hex)?;
+        let pin_saved = pin.clone();
         let auth = AuthPin::new(pin.into());
         let login_result = {
             let session = inner.session.as_mut().expect("session");
@@ -421,10 +463,12 @@ impl Pkcs11TokenManager {
         match login_result {
             Ok(()) => {
                 inner.logged_in = true;
+                inner.pin = Some(pin_saved);
                 Ok(())
             }
             Err(CryptokiError::Pkcs11(RvError::UserAlreadyLoggedIn, _)) => {
                 inner.logged_in = true;
+                inner.pin = Some(pin_saved);
                 Ok(())
             }
             Err(e) => {
@@ -442,6 +486,7 @@ impl Pkcs11TokenManager {
             }
         }
         inner.logged_in = false;
+        inner.pin = None;
         Ok(())
     }
 
@@ -454,6 +499,34 @@ impl Pkcs11TokenManager {
             logged_in,
             idle_timeout_secs: 0,
             seconds_until_auto_logout: None,
+        }
+    }
+
+    /// Verifica que el PIN sea correcto sin dejar sesión abierta.
+    ///
+    /// Abre sesión → login → logout → reset, de forma que el worker de firma
+    /// pueda hacer `C_Initialize` + `C_Login` en su propio hilo sin conflictos.
+    pub fn verify_pin(&self, pin: String, cert_id_hex: &str) -> Result<(), TokenError> {
+        if pin.is_empty() {
+            return Err(TokenError::EmptyPin);
+        }
+        let mut inner = self.lock_inner()?;
+        ensure_pkcs11_and_session_for_cert(&mut inner, cert_id_hex)?;
+        let auth = AuthPin::new(pin.into());
+        let login_result = {
+            let session = inner.session.as_mut().expect("session");
+            session.login(UserType::User, Some(&auth))
+        };
+        match login_result {
+            Ok(()) | Err(CryptokiError::Pkcs11(RvError::UserAlreadyLoggedIn, _)) => {
+                // PIN correcto; limpiar sesión para que el worker arranque limpio.
+                reset_pkcs11_inner_state(&mut inner);
+                Ok(())
+            }
+            Err(e) => {
+                reset_pkcs11_inner_state(&mut inner);
+                Err(e.into())
+            }
         }
     }
 }

@@ -309,44 +309,15 @@ async fn post_batch_sign(
     };
 
     if let Some(ref pin_raw) = body.pin {
-        let pin_trim = pin_raw.trim();
-        if !pin_trim.is_empty() {
-            let Some(mgr) = state.pkcs11.clone() else {
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    Json(serde_json::json!({ "error": "PIN vía API no disponible (modo prueba o sin token)" })),
-                )
-                    .into_response();
-            };
-            let cert_hex = body.cert_id_hex.trim().to_string();
-            let pin_owned = pin_trim.to_string();
-            // Validación temprana del PIN: tras login OK descargamos PKCS#11 entero para que el
-            // worker recargue módulo + sesión + login + firma en su propio hilo (algunos drivers
-            // atan `C_Initialize`/`C_Login` al hilo OS que los invocó).
-            let login_res = tokio::task::spawn_blocking(move || {
-                let r = mgr.login_for_certificate(pin_owned, &cert_hex);
-                let _ = mgr.reset_pkcs11_driver_state();
-                r
-            })
-            .await;
-            match login_res {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        Json(serde_json::json!({ "error": e.to_string() })),
-                    )
-                        .into_response();
-                }
-                Err(e) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({ "error": e.to_string() })),
-                    )
-                        .into_response();
-                }
-            }
+        if pin_raw.trim().is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "PIN vacío" })),
+            )
+                .into_response();
         }
+        // La validación real del PIN se hace en el worker (spawn_blocking) para
+        // que C_Initialize, C_Login y C_Sign ocurran en el mismo hilo OS.
     }
 
     let pin_for_worker = body
