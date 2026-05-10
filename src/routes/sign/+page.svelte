@@ -45,10 +45,10 @@
 	}
 
 	const SIGN_STEPS = [
-		{ step: 1, title: "Archivos", hint: "PDF sueltos o carpeta entera" },
-		{ step: 2, title: "Ubicación", hint: "Casilla en la 1.ª página (pie discreto)" },
-		{ step: 3, title: "Certificado", hint: "Tu identidad para firmar" },
-		{ step: 4, title: "Confirmar", hint: "PIN y firma (no se guarda el PIN)" },
+		{ step: 1, title: "Archivos" },
+		{ step: 2, title: "Ubicación" },
+		{ step: 3, title: "Certificado" },
+		{ step: 4, title: "Confirmar" },
 	] as const;
 
 	/** Rejilla 3×5: 3 columnas (ancho) × 5 filas (alto); col 0 izquierda, fila 0 cabecera del PDF. */
@@ -490,14 +490,9 @@
 	<title>Firmar — NexoSign</title>
 </svelte:head>
 
-<div class="space-y-8">
-	<div class="flex flex-wrap items-start justify-between gap-4">
-		<div>
-			<h1 class="text-3xl font-semibold tracking-tight">Firmar</h1>
-			<p class="text-muted-foreground mt-1 text-sm">
-				Paso <span class="text-foreground font-medium">{wizardStep}</span> de 4 · sigue el orden o vuelve atrás con el botón o tocando un paso ya hecho.
-			</p>
-		</div>
+<div class="space-y-4 pb-6">
+	<div class="flex flex-wrap items-center justify-between gap-3">
+		<h1 class="text-2xl font-semibold tracking-tight">Firmar</h1>
 		{#if wizardStep > 1}
 			<Button variant="outline" size="sm" onclick={() => goBack()} class="gap-1">
 				<ChevronLeftIcon class="size-4" />
@@ -506,8 +501,8 @@
 		{/if}
 	</div>
 
-	<nav class="space-y-3" aria-label="Pasos del asistente de firma">
-		<div class="grid grid-cols-4 gap-1.5 sm:gap-2">
+	<nav class="space-y-2" aria-label="Pasos del asistente de firma">
+		<div class="grid grid-cols-4 gap-1 sm:gap-1.5">
 			{#each SIGN_STEPS as s}
 				{@const done = wizardStep > s.step}
 				{@const active = wizardStep === s.step}
@@ -516,7 +511,7 @@
 					disabled={s.step >= wizardStep}
 					title={s.step >= wizardStep ? "" : `Ir al paso ${s.step}: ${s.title}`}
 					class={cn(
-						"flex flex-col items-center gap-1 rounded-lg border px-1 py-2 text-center transition-colors sm:px-2 sm:py-3",
+						"flex flex-col items-center gap-0.5 rounded-md border px-1 py-1.5 text-center transition-colors sm:px-2 sm:py-2",
 						active && "border-primary bg-primary/5 ring-primary/25 ring-2",
 						done && !active && "border-border bg-muted/40 hover:bg-muted/70 text-foreground",
 						!done && !active && "border-border/60 opacity-55",
@@ -525,25 +520,24 @@
 				>
 					<span
 						class={cn(
-							"flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold sm:size-9 sm:text-sm",
+							"flex size-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold sm:size-8 sm:text-xs",
 							active && "bg-primary text-primary-foreground",
 							done && !active && "bg-muted-foreground/25 text-muted-foreground",
 							!done && !active && "bg-muted text-muted-foreground",
 						)}
 					>
 						{#if done}
-							<CheckIcon class="size-3.5 sm:size-4" aria-hidden="true" />
+							<CheckIcon class="size-3 sm:size-3.5" aria-hidden="true" />
 							<span class="sr-only">Completado</span>
 						{:else}
 							{s.step}
 						{/if}
 					</span>
-					<span class="text-[10px] font-medium leading-tight sm:text-xs">{s.title}</span>
-					<span class="text-muted-foreground hidden leading-tight sm:block sm:text-[11px]">{s.hint}</span>
+					<span class="text-[10px] font-medium leading-none sm:text-[11px]">{s.title}</span>
 				</button>
 			{/each}
 		</div>
-		<div class="bg-muted h-1.5 overflow-hidden rounded-full" role="progressbar" aria-valuenow={wizardBarPct} aria-valuemin={0} aria-valuemax={100} aria-label="Avance del asistente">
+		<div class="bg-muted h-1 overflow-hidden rounded-full" role="progressbar" aria-valuenow={wizardBarPct} aria-valuemin={0} aria-valuemax={100} aria-label="Avance del asistente">
 			<div
 				class="bg-primary h-full rounded-full transition-[width] duration-300 ease-out"
 				style="width: {wizardBarPct}%"
@@ -552,31 +546,22 @@
 	</nav>
 
 	<div
-		class="border-border/70 bg-background/92 supports-backdrop-filter:bg-background/85 sticky top-0 z-30 -mx-5 mb-6 flex flex-wrap items-center justify-between gap-3 border-y px-5 py-3 shadow-[0_6px_24px_-12px_rgba(0,0,0,0.12)] backdrop-blur-md md:-mx-6 md:px-6"
+		class="border-border/60 bg-background/92 supports-backdrop-filter:bg-background/85 sticky top-0 z-30 -mx-5 mb-4 flex flex-wrap items-center justify-end gap-2 border-y px-5 py-2 backdrop-blur-sm md:-mx-6 md:px-6"
 		aria-label="Acciones del paso actual"
 	>
-		<p class="text-muted-foreground max-w-[min(100%,28rem)] text-xs leading-snug">
-			{#if wizardStep === 1}
-				{#if paths.length === 0}
-					Selecciona al menos un PDF para continuar.
-				{:else}
-					Revisa la lista y pulsa <span class="text-foreground font-medium">Continuar</span>.
-				{/if}
-			{:else if wizardStep === 2}
-				Elige la casilla del sello en la 1.ª página y continúa.
-			{:else if wizardStep === 3}
-				Selecciona tu certificado y continúa.
-			{:else if wizardStep === 4}
-				Introduce el PIN abajo y pulsa <span class="text-foreground font-medium">Firmar</span>.
-			{/if}
-		</p>
+		{#if wizardStep === 1 && paths.length === 0}
+			<p class="text-muted-foreground mr-auto max-w-[min(100%,18rem)] text-[11px] leading-snug">
+				Selecciona PDF o carpeta.
+			</p>
+		{/if}
 		<div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
 			{#if wizardStep === 4}
-				<Button type="button" variant="outline" disabled={busy} onclick={() => cancelJob()}>
+				<Button type="button" variant="outline" size="sm" disabled={busy} onclick={() => cancelJob()}>
 					Cancelar cola
 				</Button>
 				<Button
 					type="button"
+					size="sm"
 					disabled={busy || paths.length === 0 || !certId.trim() || !pin.trim()}
 					onclick={() => void submitBatch()}
 					class="gap-1"
@@ -587,6 +572,7 @@
 			{:else if wizardStep === 3}
 				<Button
 					type="button"
+					size="sm"
 					disabled={busy || !certId.trim() || certs.length === 0}
 					onclick={() => step3CertContinue()}
 					class="gap-1"
@@ -598,6 +584,7 @@
 			{:else if wizardStep === 2}
 				<Button
 					type="button"
+					size="sm"
 					onclick={() => step2PlacementContinue()}
 					class="gap-1"
 					aria-label={`Siguiente paso: ${SIGN_STEPS[2].title}`}
@@ -608,6 +595,7 @@
 			{:else if wizardStep === 1}
 				<Button
 					type="button"
+					size="sm"
 					disabled={busy || paths.length === 0}
 					onclick={() => step1Continue()}
 					class="gap-1"
@@ -621,57 +609,54 @@
 	</div>
 
 	{#if !isTauriRuntime()}
-		<Alert>
+		<Alert class="py-2">
 			<FileStackIcon class="size-4" />
-			<AlertTitle>Vista limitada</AlertTitle>
-			<AlertDescription>Usa la app de escritorio para elegir archivos y el lector.</AlertDescription>
+			<AlertTitle class="text-sm">Solo en la app de escritorio</AlertTitle>
+			<AlertDescription class="text-xs">Archivos, lector y token requieren Tauri.</AlertDescription>
 		</Alert>
 	{/if}
 
 	{#if wizardStep === 1}
-		<Card.Root>
-			<Card.Header>
-				<Card.Title class="text-base">{SIGN_STEPS[0].title}</Card.Title>
+		<Card.Root size="sm">
+			<Card.Header class="pb-2">
+				<Card.Title class="text-sm font-medium">Archivos</Card.Title>
 				<Card.Description class="text-xs">
-					{SIGN_STEPS[0].hint}. Si eliges carpeta, se incluyen subcarpetas y los PDFs aparecen en la tabla.
+					Incluye subcarpetas al elegir carpeta. Salida: carpeta hermana <code class="bg-muted rounded px-1 font-mono text-[11px]">…_firmados</code>.
 				</Card.Description>
 			</Card.Header>
-			<Card.Content class="space-y-4">
+			<Card.Content class="space-y-3 pt-0">
 				<div class="flex flex-wrap gap-2">
-					<Button type="button" onclick={() => pickPdfs()} disabled={busy}>
-						<FileStackIcon class="mr-2 size-4" />
-						Elegir PDFs…
+					<Button type="button" size="sm" onclick={() => pickPdfs()} disabled={busy}>
+						<FileStackIcon class="mr-1.5 size-4" />
+						PDF…
 					</Button>
-					<Button type="button" variant="secondary" onclick={() => pickFolder()} disabled={busy}>
-						<FolderOpenIcon class="mr-2 size-4" />
-						Elegir carpeta…
+					<Button type="button" variant="secondary" size="sm" onclick={() => pickFolder()} disabled={busy}>
+						<FolderOpenIcon class="mr-1.5 size-4" />
+						Carpeta…
 					</Button>
-					<Button type="button" variant="outline" disabled={busy || paths.length === 0} onclick={() => clearPaths()}>
+					<Button type="button" variant="outline" size="sm" disabled={busy || paths.length === 0} onclick={() => clearPaths()}>
 						Limpiar
 					</Button>
 				</div>
 				{#if outputDirForJob && sourceMode === "folder"}
-					<p class="text-muted-foreground text-xs">
-						Salida:
-						<code class="bg-muted ml-1 rounded px-1 py-0.5 font-mono">{outputDirForJob}</code>
-					</p>
+					<p class="text-muted-foreground truncate font-mono text-[11px]" title={outputDirForJob}>{outputDirForJob}</p>
 				{/if}
 				{#if paths.length === 0}
-					<p class="text-muted-foreground text-sm">Nada seleccionado.</p>
+					<p class="text-muted-foreground text-xs">Sin archivos.</p>
 				{:else}
 					<Table.Root>
 						<Table.Header>
 							<Table.Row>
-								<Table.Head class="w-10">#</Table.Head>
-								<Table.Head>Ruta</Table.Head>
-								<Table.Head class="w-14"></Table.Head>
+								<Table.Head class="w-8 py-2 text-xs">#</Table.Head>
+								<Table.Head class="py-2 text-xs">Ruta ({paths.length})</Table.Head>
+								<Table.Head class="w-10 py-2"></Table.Head>
 							</Table.Row>
 						</Table.Header>
 						<Table.Body>
 							{#each paths as p, i}
-								<Table.Row>
-									<Table.Cell>{i + 1}</Table.Cell>
-									<Table.Cell class="max-w-0 font-mono text-xs">
+								<Table.Row class="[&_td]:py-1.5">
+									<Table.Cell class="text-muted-foreground text-xs">{i + 1}</Table.Cell>
+									<Table.Cell class="max-w-0 font-mono text-[11px]">
 										<span class="block truncate" title={p}>{p}</span>
 									</Table.Cell>
 									<Table.Cell>
@@ -689,33 +674,26 @@
 							{/each}
 						</Table.Body>
 					</Table.Root>
-					<p class="text-muted-foreground text-xs">{paths.length} PDF</p>
 				{/if}
 			</Card.Content>
 		</Card.Root>
 	{/if}
 
 	{#if wizardStep === 2}
-		<Card.Root>
-			<Card.Header>
-				<Card.Title class="text-base">{SIGN_STEPS[1].title}</Card.Title>
-				<Card.Description class="text-xs">
-					{SIGN_STEPS[1].hint}. La firma usa tu certificado y el sello de Certificados; aquí solo eliges la casilla visible en la primera página.
-				</Card.Description>
+		<Card.Root size="sm">
+			<Card.Header class="pb-2">
+				<Card.Title class="text-sm font-medium">Ubicación del sello</Card.Title>
+				<Card.Description class="text-xs">1.ª página, rejilla 3×5 (fila 1 = cabecera del PDF).</Card.Description>
 			</Card.Header>
-			<Card.Content class="space-y-4">
-				<p class="text-muted-foreground text-xs leading-snug">
-					Primera página del PDF: rejilla de <span class="text-foreground font-medium">3 columnas × 5 filas</span>.
-					La fila superior corresponde a la cabecera del documento. El mismo hueco se usa para todos los PDF del lote.
-				</p>
-				<div class="mx-auto w-fit overflow-hidden rounded-lg border border-border bg-muted/25 shadow-sm">
+			<Card.Content class="flex flex-col items-center gap-2 pt-0 sm:flex-row sm:items-start sm:justify-center sm:gap-6">
+				<div class="w-fit overflow-hidden rounded-md border border-border bg-muted/25">
 					{#each [0, 1, 2, 3, 4] as row}
 						<div class="flex border-b border-border/70 last:border-b-0">
 							{#each [0, 1, 2] as col}
 								<button
 									type="button"
 									class={cn(
-										"flex h-9 w-9 shrink-0 items-center justify-center border-r border-border/70 text-[10px] font-medium transition-colors last:border-r-0 sm:h-10 sm:w-10",
+										"flex h-8 w-8 shrink-0 items-center justify-center border-r border-border/70 text-[10px] font-medium transition-colors last:border-r-0 sm:h-9 sm:w-9",
 										sigGridCol === col && sigGridRow === row
 											? "bg-primary/20 text-foreground ring-2 ring-primary/35 ring-inset"
 											: "bg-background/90 text-muted-foreground hover:bg-muted/80",
@@ -733,47 +711,42 @@
 						</div>
 					{/each}
 				</div>
-				<p class="text-muted-foreground text-xs">
-					Casilla activa: columna {sigGridCol + 1}, fila {sigGridRow + 1} (números 1–15 en la cuadrícula).
+				<p class="text-muted-foreground text-center text-[11px] sm:min-w-32 sm:text-left">
+					Columna {sigGridCol + 1}, fila {sigGridRow + 1}
 				</p>
 			</Card.Content>
 		</Card.Root>
 	{/if}
 
 	{#if wizardStep === 3}
-		<Card.Root>
-			<Card.Header>
-				<Card.Title class="text-base">{SIGN_STEPS[2].title}</Card.Title>
-				<Card.Description class="text-xs leading-relaxed">
-					Selecciona el certificado con el que quieres firmar (suele ser el del DNIe). Si acabas de enchufar el
-					lector, espera unos segundos y pulsa <span class="text-foreground font-medium">Actualizar lista</span>.
-				</Card.Description>
+		<Card.Root size="sm">
+			<Card.Header class="pb-2">
+				<Card.Title class="text-sm font-medium">Certificado</Card.Title>
+				<Card.Description class="text-xs">¿No ves el DNIe? Espera unos segundos y actualiza.</Card.Description>
 			</Card.Header>
-			<Card.Content class="space-y-4">
+			<Card.Content class="space-y-3 pt-0">
 				{#if certs.length === 0}
-					<p class="text-muted-foreground text-sm">
-						Sin certificados todavía. Comprueba la tarjeta o el lector y pulsa «Actualizar lista».
-					</p>
+					<p class="text-muted-foreground text-xs">Sin certificados.</p>
 				{:else}
-					<div class="grid gap-2">
-						<Label>Certificado</Label>
+					<div class="grid gap-1.5">
+						<Label class="text-xs">Certificado</Label>
 						<Select.Root type="single" bind:value={certId}>
-							<Select.Trigger class="w-full justify-between">
+							<Select.Trigger class="h-9 w-full justify-between">
 								{@const selected = certs.find((c) => c.id_hex === certId)}
 								{#if selected}
-									<span class="truncate font-medium">
-										{getHumanNameFromDn(selected.subject_dn) || selected.label} <span class="text-muted-foreground font-normal ml-1">(DNI: {extractDniFromDn(selected.subject_dn) || "—"})</span>
+									<span class="truncate text-sm font-medium">
+										{getHumanNameFromDn(selected.subject_dn) || selected.label} <span class="text-muted-foreground font-normal">({extractDniFromDn(selected.subject_dn) || "—"})</span>
 									</span>
 								{:else}
-									<span class="text-muted-foreground">Selecciona un certificado</span>
+									<span class="text-muted-foreground text-sm">Elegir…</span>
 								{/if}
 							</Select.Trigger>
-							<Select.Content class="w-full max-h-[300px]">
+							<Select.Content class="max-h-[280px]">
 								{#each certs as c}
 									<Select.Item value={c.id_hex} label={getHumanNameFromDn(c.subject_dn) || c.label || ""}>
-										<div class="flex flex-col text-left py-1">
-											<span class="font-medium text-base">{getHumanNameFromDn(c.subject_dn) || c.label || "(sin etiqueta)"}</span>
-											<span class="text-muted-foreground text-xs">DNI: {extractDniFromDn(c.subject_dn) || "—"}</span>
+										<div class="flex flex-col py-0.5 text-left">
+											<span class="text-sm font-medium">{getHumanNameFromDn(c.subject_dn) || c.label || "(sin etiqueta)"}</span>
+											<span class="text-muted-foreground text-[11px]">{extractDniFromDn(c.subject_dn) || "—"}</span>
 										</div>
 									</Select.Item>
 								{/each}
@@ -781,115 +754,88 @@
 						</Select.Root>
 					</div>
 				{/if}
-				<div class="flex flex-wrap items-center gap-2">
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						class="gap-1.5"
-						onclick={() => void refreshCerts()}
-						disabled={busy}
-					>
-						<RefreshCwIcon class="size-4 shrink-0 opacity-80" aria-hidden="true" />
-						Actualizar lista
-					</Button>
-				</div>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					class="gap-1.5"
+					onclick={() => void refreshCerts()}
+					disabled={busy}
+				>
+					<RefreshCwIcon class="size-4 opacity-80" aria-hidden="true" />
+					Actualizar
+				</Button>
 
 				<details
-						class="group rounded-md border border-dashed border-transparent bg-muted/10 text-muted-foreground opacity-60 transition-opacity hover:opacity-90 open:border-border/50 open:bg-muted/20 open:opacity-100 dark:open:border-border/35"
+					class="group rounded border border-dashed border-border/40 bg-muted/15 text-[11px] text-muted-foreground open:bg-muted/25"
+				>
+					<summary
+						class="cursor-pointer list-none px-2 py-1.5 outline-none marker:content-none [&::-webkit-details-marker]:hidden"
 					>
-						<summary
-							class="cursor-pointer list-none px-2 py-1.5 text-[11px] leading-snug outline-none marker:content-none [&::-webkit-details-marker]:hidden"
+						Problemas con el lector
+					</summary>
+					<div class="space-y-2 border-t border-border/40 px-2 pb-2 pt-2 leading-snug">
+						<p>Solo si no aparece ningún certificado tras comprobar la tarjeta.</p>
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							class="h-8 text-xs"
+							disabled={busy}
+							onclick={() => confirmResetReader()}
 						>
-							<span class="opacity-75 group-open:opacity-90">
-								Solo si el lector falla o hubo problemas con el PIN…
-							</span>
-						</summary>
-						<div class="space-y-2 border-t border-border/40 px-2 pb-2 pt-2 text-[11px] leading-relaxed">
-							<p>
-								Reinicia la conexión con la tarjeta solo cuando «Actualizar lista» no muestra nada y ya has
-								comprobado la tarjeta. No lo uses en circunstancias normales.
-							</p>
-							<Button
-								type="button"
-								variant="outline"
-								size="sm"
-								class="h-8 text-xs"
-								disabled={busy}
-								onclick={() => confirmResetReader()}
-							>
-								Reconectar lector
-							</Button>
-						</div>
-					</details>
+							Reconectar lector
+						</Button>
+					</div>
+				</details>
 			</Card.Content>
 		</Card.Root>
 	{/if}
 
 	{#if wizardStep === 4}
-		<Card.Root>
-			<Card.Header>
-				<Card.Title class="text-base">{SIGN_STEPS[3].title}</Card.Title>
-				<Card.Description class="text-xs">
-					Introduce el PIN del token y pulsa <span class="text-foreground font-medium">Firmar</span> (o Enter). El PIN no se guarda.
-				</Card.Description>
+		<Card.Root size="sm">
+			<Card.Header class="pb-2">
+				<Card.Title class="text-sm font-medium">Confirmar</Card.Title>
+				<Card.Description class="text-xs">PIN del token (no se guarda).</Card.Description>
 			</Card.Header>
-			<Card.Content class="space-y-4 text-sm">
-				<dl
-					class="border-border/60 bg-muted/25 grid max-w-lg gap-3 rounded-xl border px-4 py-3 text-xs shadow-sm"
-				>
-					<div
-						class="flex flex-col gap-0.5 border-border/50 border-b pb-3 last:border-b-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between sm:gap-6 sm:border-b-0 sm:pb-0"
-					>
-						<dt class="text-muted-foreground shrink-0 font-medium">PDF a firmar</dt>
-						<dd class="text-foreground font-semibold tabular-nums sm:text-right">{paths.length}</dd>
+			<Card.Content class="space-y-3 pt-0 text-sm">
+				<dl class="border-border/50 bg-muted/20 divide-border/40 grid max-w-lg divide-y rounded-lg border text-xs">
+					<div class="flex items-start justify-between gap-3 px-3 py-2">
+						<dt class="text-muted-foreground shrink-0">PDF</dt>
+						<dd class="text-foreground font-medium tabular-nums">{paths.length}</dd>
 					</div>
-					<div
-						class="flex flex-col gap-0.5 border-border/50 border-b pb-3 last:border-b-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between sm:gap-6 sm:border-b-0 sm:pb-0"
-					>
-						<dt class="text-muted-foreground shrink-0 font-medium">Certificado</dt>
-						<dd class="min-w-0 text-right leading-snug">
+					<div class="flex items-start justify-between gap-3 px-3 py-2">
+						<dt class="text-muted-foreground shrink-0">Firma</dt>
+						<dd class="min-w-0 text-right leading-tight">
 							{#if selectedCert}
 								<span class="text-foreground font-medium">
-									{getHumanNameFromDn(selectedCert.subject_dn) || "Titular del certificado"}
+									{getHumanNameFromDn(selectedCert.subject_dn) || "Titular"}
 								</span>
 								{#if extractDniFromDn(selectedCert.subject_dn)}
-									<span class="text-muted-foreground mt-1 block text-[11px] font-normal">
-										DNI/NIE {extractDniFromDn(selectedCert.subject_dn)}
-									</span>
+									<span class="text-muted-foreground mt-0.5 block text-[11px]">{extractDniFromDn(selectedCert.subject_dn)}</span>
 								{/if}
 							{:else}
 								<span class="text-muted-foreground">—</span>
 							{/if}
 						</dd>
 					</div>
-					<div
-						class="flex flex-col gap-0.5 border-border/50 border-b pb-3 last:border-b-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between sm:gap-6 sm:border-b-0 sm:pb-0"
-					>
-						<dt class="text-muted-foreground shrink-0 font-medium">Sello visible</dt>
-						<dd class="text-foreground text-right font-medium">
-							1.ª página · columna {sigGridCol + 1}, fila {sigGridRow + 1}
-						</dd>
+					<div class="flex items-start justify-between gap-3 px-3 py-2">
+						<dt class="text-muted-foreground shrink-0">Sello</dt>
+						<dd class="text-foreground text-right font-medium">Col. {sigGridCol + 1}, fila {sigGridRow + 1}</dd>
 					</div>
-					<div class="flex flex-col gap-0.5 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
-						<dt class="text-muted-foreground shrink-0 font-medium">Salida</dt>
-						<dd class="min-w-0 text-right leading-snug">
+					<div class="flex items-start justify-between gap-3 px-3 py-2">
+						<dt class="text-muted-foreground shrink-0">Salida</dt>
+						<dd class="min-w-0 text-right leading-tight">
 							{#if outputDirForJob}
-								<span class="text-foreground font-medium" title={outputDirForJob}>
-									Carpeta «{pathBasename(outputDirForJob)}»
-								</span>
+								<span class="font-medium" title={outputDirForJob}>«{pathBasename(outputDirForJob)}»</span>
 							{:else}
-								<span class="text-foreground font-normal">
-									Junto a cada PDF (<code class="bg-muted rounded px-1.5 py-0.5 font-mono text-[11px]"
-										>*_firmado.pdf</code
-									>)
-								</span>
+								<code class="bg-muted rounded px-1 py-0.5 font-mono text-[11px]">*_firmado.pdf</code>
 							{/if}
 						</dd>
 					</div>
 				</dl>
-				<div class="grid max-w-md gap-2">
-					<Label for="pin-confirm">PIN del token</Label>
+				<div class="grid max-w-md gap-1.5">
+					<Label for="pin-confirm" class="text-xs">PIN</Label>
 					<div class="relative">
 						<Input
 							id="pin-confirm"
@@ -898,7 +844,7 @@
 							bind:value={pin}
 							placeholder="PIN"
 							class={cn(
-								"pr-10",
+								"h-9 pr-10",
 								pinError ? "border-destructive focus-visible:ring-destructive" : "",
 							)}
 							oninput={() => {
@@ -915,7 +861,7 @@
 							type="button"
 							variant="ghost"
 							size="icon"
-							class="text-muted-foreground absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2"
+							class="text-muted-foreground absolute right-0.5 top-1/2 h-8 w-8 -translate-y-1/2"
 							aria-label={pinVisible ? "Ocultar PIN" : "Mostrar PIN"}
 							title={pinVisible ? "Ocultar PIN" : "Mostrar PIN"}
 							onclick={() => {
@@ -930,7 +876,7 @@
 						</Button>
 					</div>
 					{#if pinError}
-						<p class="text-sm font-medium text-destructive">{pinError}</p>
+						<p class="text-xs font-medium text-destructive">{pinError}</p>
 					{/if}
 				</div>
 			</Card.Content>
@@ -944,76 +890,55 @@
 			)}
 			size="sm"
 		>
-			<Card.Header class="border-border/60 gap-3 border-b pb-4">
-				<div class="flex flex-wrap items-start justify-between gap-3">
-					<div class="space-y-1">
-						<div class="flex flex-wrap items-center gap-2">
-							<Card.Title class="text-base tracking-tight">Ejecución del lote</Card.Title>
-							{#if activeJobId && !executionFinished}
-								<Badge variant="secondary" class="gap-1 font-normal">
-									<Loader2Icon class="size-3 animate-spin" aria-hidden="true" />
-									En curso
-								</Badge>
-							{:else if executionFinished}
-								<Badge variant="outline" class="gap-1 border-emerald-500/40 font-normal text-emerald-700 dark:text-emerald-400">
-									<CircleCheckIcon class="size-3" aria-hidden="true" />
-									Listo
-								</Badge>
-							{/if}
-						</div>
-						<Card.Description class="text-xs leading-snug">
-							{#if progressSubtitle}
-								{progressSubtitle}
-							{:else}
-								Esperando el primer evento del firmador…
-							{/if}
-						</Card.Description>
+			<Card.Header class="border-border/50 gap-2 border-b py-3">
+				<div class="flex flex-wrap items-center justify-between gap-2">
+					<div class="flex flex-wrap items-center gap-2">
+						<Card.Title class="text-sm font-medium">Firma en curso</Card.Title>
+						{#if activeJobId && !executionFinished}
+							<Badge variant="secondary" class="h-5 gap-1 px-1.5 text-[10px] font-normal">
+								<Loader2Icon class="size-3 animate-spin" aria-hidden="true" />
+								En curso
+							</Badge>
+						{:else if executionFinished}
+							<Badge variant="outline" class="h-5 gap-1 border-emerald-500/40 px-1.5 text-[10px] font-normal text-emerald-700 dark:text-emerald-400">
+								<CircleCheckIcon class="size-3" aria-hidden="true" />
+								Listo
+							</Badge>
+						{/if}
 					</div>
 					{#if activeJobId}
-						<span
-							class="bg-muted/80 text-muted-foreground max-w-[min(100%,14rem)] truncate rounded-md px-2 py-1 font-mono text-[10px] leading-none"
-							title={activeJobId}
-						>
-							Job {activeJobId.slice(0, 8)}…
-						</span>
+						<span class="text-muted-foreground font-mono text-[10px]" title={activeJobId}>{activeJobId.slice(0, 8)}…</span>
 					{/if}
 				</div>
-				<div class="flex flex-wrap items-end justify-between gap-4 pt-1">
-					<div class="flex items-baseline gap-1.5">
-						<span class="text-foreground tabular-nums text-4xl font-semibold tracking-tight">{progressPct}</span>
-						<span class="text-muted-foreground pb-1 text-sm font-medium">%</span>
+				{#if progressSubtitle}
+					<p class="text-muted-foreground truncate text-xs">{progressSubtitle}</p>
+				{/if}
+				<div class="flex items-end justify-between gap-3 pt-1">
+					<div class="flex items-baseline gap-1">
+						<span class="text-foreground tabular-nums text-2xl font-semibold">{progressPct}</span>
+						<span class="text-muted-foreground text-xs">%</span>
 					</div>
 					{#if progressSnapshot}
-						<p class="text-muted-foreground text-xs tabular-nums">
-							{progressSnapshot.actual} / {progressSnapshot.total} PDF
-						</p>
+						<p class="text-muted-foreground text-xs tabular-nums">{progressSnapshot.actual}/{progressSnapshot.total}</p>
 					{/if}
 				</div>
-				<Progress value={progressPct} max={100} class="h-2.5 rounded-full" />
+				<Progress value={progressPct} max={100} class="h-2 rounded-full" />
 			</Card.Header>
-			<Card.Content class="space-y-3 pt-2">
-				<div class="flex items-center justify-between gap-2">
-					<p class="text-muted-foreground text-xs font-medium uppercase tracking-wider">Registro</p>
-					{#if logLines.length > 0}
-						<span class="text-muted-foreground font-mono text-[10px] tabular-nums">{logLines.length} línea(s)</span>
-					{/if}
-				</div>
+			<Card.Content class="space-y-2 pt-2">
 				<ScrollArea.Root
 					bind:viewportRef={logViewportEl}
-					class="bg-muted/25 dark:bg-muted/15 h-52 rounded-lg border shadow-inner"
+					class="bg-muted/20 dark:bg-muted/10 h-36 rounded-md border text-[11px]"
 				>
-					<div class="space-y-0 p-2 font-mono text-[11px] leading-relaxed">
+					<div class="space-y-0 p-2 font-mono leading-relaxed">
 						{#if logLines.length === 0}
-							<p class="text-muted-foreground px-2 py-6 text-center text-xs">
-								Cuando la firma avance, aquí verás cada paso (archivo actual, avisos y errores).
-							</p>
+							<p class="text-muted-foreground px-1 py-4 text-center text-[11px]">Esperando eventos…</p>
 						{:else}
 							{#each logLines as line, i}
 								{@const tone = logLineTone(line)}
 								<div
 									class={cn(
-										"border-border/50 rounded-md border-l-2 py-1.5 pl-2 pr-1 transition-colors",
-										i === logLines.length - 1 ? "border-primary bg-primary/6" : "border-transparent",
+										"rounded py-1 pl-2 transition-colors",
+										i === logLines.length - 1 ? "bg-primary/6 border-primary/40 border-l-2" : "border-l-2 border-transparent",
 										tone === "err" && "text-destructive",
 										tone === "ok" && "text-emerald-700 dark:text-emerald-400",
 										tone === "muted" && "text-foreground/85",
