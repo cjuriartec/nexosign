@@ -241,13 +241,13 @@
 		</Button>
 	</div>
 
-	{#if listEmpty}
-		<p class="text-muted-foreground py-4 text-center text-sm">
-			{filter === "all" ? "Sin entradas." : "Sin resultados."}
-		</p>
-	{:else}
-		<Card.Root>
-			<Card.Content class="pt-6">
+	<Card.Root>
+		<Card.Content class="pt-6">
+			{#if listEmpty}
+				<p class="text-muted-foreground py-6 text-center text-sm">
+					{filter === "all" ? "Sin entradas." : "Sin resultados."}
+				</p>
+			{:else}
 				<ScrollArea.Root class="max-h-[min(60vh,560px)] pr-3">
 					<div class="space-y-6">
 						{#if showIntentBlock && intentQueue.items.length > 0}
@@ -371,7 +371,7 @@
 						{/if}
 					</div>
 				</ScrollArea.Root>
-			</Card.Content>
-		</Card.Root>
-	{/if}
+			{/if}
+		</Card.Content>
+	</Card.Root>
 </div>
