@@ -7,9 +7,12 @@
 	import { cancelActiveBatchJob } from "$lib/batch/cancel-active-batch";
 	import { ask } from "@tauri-apps/plugin-dialog";
 	import { toast } from "svelte-sonner";
+	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
+	import * as Progress from "$lib/components/ui/progress/index.js";
 	import { cn } from "$lib/utils.js";
 	import {
+		ACTIVE_BATCH_STATUSES,
 		batchQueue,
 		clearBatchQueue,
 		clearTerminalBatchQueueItems,
@@ -63,21 +66,60 @@
 	function statusLabel(s: BatchQueueStatus): string {
 		switch (s) {
 			case "preparing":
-				return "Prep.";
+				return "Preparando";
 			case "queued":
-				return "Cola";
+				return "En cola";
 			case "running":
-				return "Firma";
+				return "En curso";
 			case "cancelling":
-				return "Cancel…";
+				return "Cancelando";
 			case "cancelled":
-				return "Cancel.";
+				return "Cancelado";
 			case "finished":
-				return "OK";
+				return "Completado";
 			case "error":
 				return "Error";
 			default:
 				return s;
+		}
+	}
+
+	function shortJobId(id: string): string {
+		if (id.length <= 18) return id;
+		return `${id.slice(0, 10)}…${id.slice(-6)}`;
+	}
+
+	function badgeVariantForStatus(
+		s: BatchQueueStatus,
+	): "default" | "secondary" | "destructive" | "outline" {
+		switch (s) {
+			case "running":
+			case "queued":
+			case "preparing":
+				return "default";
+			case "cancelling":
+				return "secondary";
+			case "error":
+				return "destructive";
+			case "finished":
+				return "outline";
+			default:
+				return "outline";
+		}
+	}
+
+	function activeStepHint(s: BatchQueueStatus): string {
+		switch (s) {
+			case "running":
+				return "Procesando PDFs…";
+			case "queued":
+				return "Esperando turno en la cola…";
+			case "preparing":
+				return "Preparando el lote…";
+			case "cancelling":
+				return "Deteniendo la firma…";
+			default:
+				return "";
 		}
 	}
 
@@ -199,14 +241,14 @@
 		</Button>
 	</div>
 
-	<Card.Root>
-		<Card.Content class="pt-6">
-			{#if listEmpty}
-				<p class="text-muted-foreground py-8 text-center text-sm">
-					{filter === "all" ? "Sin entradas." : "Sin resultados."}
-				</p>
-			{:else}
-				<ScrollArea.Root class="h-[min(60vh,560px)] pr-3">
+	{#if listEmpty}
+		<p class="text-muted-foreground py-4 text-center text-sm">
+			{filter === "all" ? "Sin entradas." : "Sin resultados."}
+		</p>
+	{:else}
+		<Card.Root>
+			<Card.Content class="pt-6">
+				<ScrollArea.Root class="max-h-[min(60vh,560px)] pr-3">
 					<div class="space-y-6">
 						{#if showIntentBlock && intentQueue.items.length > 0}
 							<div class="space-y-2">
@@ -255,40 +297,81 @@
 									<p class="text-muted-foreground text-xs font-medium uppercase tracking-wide">Firma</p>
 								{/if}
 								{#each filteredJobs as q (q.jobId)}
+									{@const isActive = ACTIVE_BATCH_STATUSES.includes(q.status)}
 									<div
 										class={cn(
-											"bg-muted/25 border-border/70 flex flex-wrap items-start justify-between gap-3 rounded-lg border px-3 py-2.5 text-sm",
+											"overflow-hidden rounded-xl border text-sm transition-colors",
+											isActive
+												? "border-primary/40 bg-linear-to-b from-primary/[0.07] to-transparent"
+												: "bg-muted/25 border-border/70",
 											batchQueue.activeBatchJobId === q.jobId &&
 												batchQueueHasActiveWork &&
-												"ring-primary/40 ring-2",
+												"ring-primary/30 ring-2 ring-offset-2 ring-offset-background",
 										)}
 									>
-										<div class="min-w-0 flex-1 space-y-1">
-											<p class="truncate font-mono text-xs" title={q.jobId}>{q.jobId}</p>
-											<p class="text-muted-foreground truncate text-xs">{q.label}</p>
-											<p class="text-muted-foreground text-[11px]">{formatJobWhen(q)}</p>
+										<div class="flex flex-wrap items-start gap-3 px-3 py-3">
+											<div class="min-w-0 flex-1 space-y-1">
+												<div class="flex flex-wrap items-center gap-2">
+													<p class="truncate font-medium leading-snug">{q.label}</p>
+													{#if q.status === "running"}
+														<Loader2Icon
+															class="text-primary size-3.5 shrink-0 animate-spin"
+															aria-hidden="true"
+														/>
+													{/if}
+												</div>
+												<p
+													class="text-muted-foreground truncate font-mono text-[11px]"
+													title={q.jobId}
+												>
+													{shortJobId(q.jobId)}
+												</p>
+												<p class="text-muted-foreground text-[11px]">{formatJobWhen(q)}</p>
+											</div>
+											<div class="flex shrink-0 items-start gap-2">
+												<div class="flex flex-col items-end gap-1">
+													<Badge
+														variant={badgeVariantForStatus(q.status)}
+														class="text-[10px] font-medium"
+													>
+														{statusLabel(q.status)}
+													</Badge>
+													<span
+														class={cn(
+															"tabular-nums text-[11px]",
+															isActive ? "text-primary font-semibold" : "text-muted-foreground",
+														)}
+													>
+														{q.progressPct}%
+													</span>
+												</div>
+												<Button
+													type="button"
+													variant="ghost"
+													size="icon"
+													class="text-muted-foreground hover:text-foreground size-8 shrink-0"
+													title="Quitar"
+													onclick={() => removeJob(q.jobId)}
+												>
+													<Trash2Icon class="size-4" />
+												</Button>
+											</div>
 										</div>
-										<div class="flex shrink-0 items-center gap-2">
-											<Badge variant="secondary" class="text-[10px]">{statusLabel(q.status)}</Badge>
-											<span class="text-muted-foreground tabular-nums text-[11px]">{q.progressPct}%</span>
-											<Button
-												type="button"
-												variant="ghost"
-												size="icon"
-												class="size-8 shrink-0"
-												title="Quitar"
-												onclick={() => removeJob(q.jobId)}
-											>
-												<Trash2Icon class="size-4" />
-											</Button>
-										</div>
+										{#if isActive}
+											<div class="border-border/50 bg-background/40 border-t px-3 pb-3 pt-2">
+												<Progress.Root class="h-2" value={q.progressPct} max={100} />
+												<p class="text-muted-foreground mt-2 text-[11px] leading-snug">
+													{activeStepHint(q.status)}
+												</p>
+											</div>
+										{/if}
 									</div>
 								{/each}
 							</div>
 						{/if}
 					</div>
 				</ScrollArea.Root>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+			</Card.Content>
+		</Card.Root>
+	{/if}
 </div>

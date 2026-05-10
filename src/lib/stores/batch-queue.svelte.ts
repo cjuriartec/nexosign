@@ -36,7 +36,13 @@ export type IntentQueueItem = {
 	createdAt: number;
 };
 
-const ACTIVE_STATUSES: BatchQueueStatus[] = ["preparing", "queued", "running", "cancelling"];
+/** Estados que cuentan como trabajo activo (cola, polling). */
+export const ACTIVE_BATCH_STATUSES: BatchQueueStatus[] = [
+	"preparing",
+	"queued",
+	"running",
+	"cancelling",
+];
 
 export const TERMINAL_BATCH_STATUSES: BatchQueueStatus[] = ["finished", "error", "cancelled"];
 
@@ -99,7 +105,7 @@ function touchTerminalTimestamp(prev: BatchQueueItem, next: Partial<BatchQueueIt
 function normalizeItemsAfterLoad(items: BatchQueueItem[]): BatchQueueItem[] {
 	const now = Date.now();
 	return items.map((it) => {
-		if (ACTIVE_STATUSES.includes(it.status)) {
+		if (ACTIVE_BATCH_STATUSES.includes(it.status)) {
 			return {
 				...it,
 				status: "error",
@@ -139,7 +145,7 @@ export function setActiveBatchJobId(id: string | null): void {
 }
 
 export function computeBatchQueueHasActiveWork(): boolean {
-	return batchQueue.items.some((q) => ACTIVE_STATUSES.includes(q.status));
+	return batchQueue.items.some((q) => ACTIVE_BATCH_STATUSES.includes(q.status));
 }
 
 function mapBackendPhaseToQueueStatus(phase: BatchJobPhase): BatchQueueStatus {
@@ -162,7 +168,7 @@ function mapBackendPhaseToQueueStatus(phase: BatchJobPhase): BatchQueueStatus {
 /** Refresca ítems activos contra `GET …/batch/jobs/{job_id}/status` (estado en el proceso NexoSign). */
 export async function syncBatchQueueFromApi(baseUrl: string): Promise<void> {
 	for (const item of batchQueue.items) {
-		if (!ACTIVE_STATUSES.includes(item.status)) continue;
+		if (!ACTIVE_BATCH_STATUSES.includes(item.status)) continue;
 		if (!item.jobId || item.jobId.startsWith("pending-")) continue;
 		let snap: Awaited<ReturnType<typeof fetchBatchJobStatus>>;
 		try {
