@@ -320,11 +320,12 @@ async fn post_batch_sign(
             };
             let cert_hex = body.cert_id_hex.trim().to_string();
             let pin_owned = pin_trim.to_string();
-            // Validación temprana del PIN: tras login OK liberamos la sesión para que el worker
-            // abra una nueva en su propio hilo (algunos drivers atan `C_Login` al hilo OS).
+            // Validación temprana del PIN: tras login OK descargamos PKCS#11 entero para que el
+            // worker recargue módulo + sesión + login + firma en su propio hilo (algunos drivers
+            // atan `C_Initialize`/`C_Login` al hilo OS que los invocó).
             let login_res = tokio::task::spawn_blocking(move || {
                 let r = mgr.login_for_certificate(pin_owned, &cert_hex);
-                let _ = mgr.release_session();
+                let _ = mgr.reset_pkcs11_driver_state();
                 r
             })
             .await;
