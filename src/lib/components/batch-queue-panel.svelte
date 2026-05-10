@@ -20,11 +20,33 @@
 
 	interface Props {
 		showWizardLockHint?: boolean;
+		/**
+		 * En Firmar: solo lotes activos (cola, preparando, firmando, cancelando) y el intent de esta sesión.
+		 */
+		activeWorkOnly?: boolean;
 	}
 
-	let { showWizardLockHint = false }: Props = $props();
+	let { showWizardLockHint = false, activeWorkOnly = false }: Props = $props();
 
-	const showCard = $derived(batchQueue.items.length > 0 || intentQueue.items.length > 0);
+	const visibleBatchItems = $derived(
+		activeWorkOnly
+			? batchQueue.items.filter((q) => ACTIVE_BATCH_STATUSES.includes(q.status))
+			: batchQueue.items,
+	);
+
+	const visibleIntentItems = $derived(
+		activeWorkOnly
+			? intentQueue.activeRequestId
+				? intentQueue.items.filter(
+						(it) => it.requestId === intentQueue.activeRequestId,
+					)
+				: []
+			: intentQueue.items,
+	);
+
+	const showCard = $derived(
+		visibleBatchItems.length > 0 || visibleIntentItems.length > 0,
+	);
 </script>
 
 {#if showCard}
@@ -42,7 +64,7 @@
 			{/if}
 		</Card.Header>
 		<Card.Content class="space-y-1.5 pt-0">
-			{#each intentQueue.items as it}
+			{#each visibleIntentItems as it}
 				<div
 					class="bg-muted/30 border-border/60 flex items-center justify-between gap-2 rounded border px-2.5 py-2 text-xs"
 				>
@@ -53,7 +75,7 @@
 					<Badge variant="outline" class="h-5 text-[10px]">Pendientes</Badge>
 				</div>
 			{/each}
-			{#each batchQueue.items as q}
+			{#each visibleBatchItems as q}
 				{@const isActive = ACTIVE_BATCH_STATUSES.includes(q.status)}
 				<div
 					class={cn(

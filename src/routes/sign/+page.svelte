@@ -554,7 +554,7 @@
 		{/if}
 	</div>
 
-	<BatchQueuePanel showWizardLockHint />
+	<BatchQueuePanel showWizardLockHint activeWorkOnly />
 
 	<nav class="space-y-2" aria-label="Pasos del asistente de firma">
 		<div class="grid grid-cols-5 gap-0.5 sm:gap-1">

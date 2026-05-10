@@ -397,9 +397,11 @@
 	<Card.Root>
 		<Card.Header>
 			<Card.Title class="text-base">Apariencia</Card.Title>
-			<Card.Description>Claro, oscuro o el mismo tema que el sistema.</Card.Description>
+			<Card.Description>
+				Aplica en toda la aplicación. «Sistema» sigue el modo claro u oscuro del dispositivo.
+			</Card.Description>
 		</Card.Header>
-		<Card.Content class="flex items-center gap-3">
+		<Card.Content class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 			<ThemeToggle />
 		</Card.Content>
 	</Card.Root>
