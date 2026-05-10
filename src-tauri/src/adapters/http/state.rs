@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::adapters::http::pending_batch_intent::PendingBatchIntent;
+use crate::ports::BatchJobSnapshot;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::adapters::worker::batch::BatchJob;
 use crate::domain::allowed_origins::AllowedOrigins;
@@ -28,6 +29,8 @@ pub struct SharedState {
     pub intent_request_to_job: Arc<Mutex<HashMap<String, String>>>,
     /// Firma diferida: POST `/batch/sign/intent` registra aquí; la UI consume al confirmar.
     pub pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
+    /// Estado del trabajo (`GET /api/v1/batch/jobs/{job_id}/status`), actualizado por el worker.
+    pub batch_job_snapshots: Arc<Mutex<HashMap<String, BatchJobSnapshot>>>,
 }
 
 /// Referencia compartida para comandos Tauri (misma que [`SharedState::pending_batch_intents`]).
@@ -43,6 +46,7 @@ impl SharedState {
         pkcs11: Option<std::sync::Arc<Pkcs11TokenManager>>,
         pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
         batch_signed_outputs: Arc<Mutex<HashMap<String, Vec<PathBuf>>>>,
+        batch_job_snapshots: Arc<Mutex<HashMap<String, BatchJobSnapshot>>>,
     ) -> Self {
         Self {
             origins,
@@ -53,6 +57,7 @@ impl SharedState {
             batch_signed_outputs,
             intent_request_to_job: Arc::new(Mutex::new(HashMap::new())),
             pending_batch_intents,
+            batch_job_snapshots,
         }
     }
 
@@ -67,6 +72,7 @@ impl SharedState {
             batch_signed_outputs: Arc::new(Mutex::new(HashMap::new())),
             intent_request_to_job: Arc::new(Mutex::new(HashMap::new())),
             pending_batch_intents: Arc::new(Mutex::new(HashMap::new())),
+            batch_job_snapshots: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -81,6 +87,7 @@ impl SharedState {
             batch_signed_outputs: Arc::new(Mutex::new(HashMap::new())),
             intent_request_to_job: Arc::new(Mutex::new(HashMap::new())),
             pending_batch_intents: Arc::new(Mutex::new(HashMap::new())),
+            batch_job_snapshots: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -98,6 +105,7 @@ impl SharedState {
             batch_signed_outputs: Arc::new(Mutex::new(HashMap::new())),
             intent_request_to_job: Arc::new(Mutex::new(HashMap::new())),
             pending_batch_intents,
+            batch_job_snapshots: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }

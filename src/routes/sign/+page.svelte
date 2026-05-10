@@ -531,13 +531,16 @@
 
 			try {
 				unlisten = await subscribeProgress((p: ProgressPayload) => {
-					if (!activeJobRef.current || p.job_id !== activeJobRef.current) return;
+					const jid =
+						typeof p.job_id === "string" && p.job_id.length > 0
+							? p.job_id
+							: (p as unknown as { jobId?: string }).jobId;
+					if (!jid) return;
+					const queueHas = batchQueue.items.some((q) => q.jobId === jid);
+					const activeMatches = activeJobRef.current === jid;
+					if (!queueHas && !activeMatches) return;
 					const total = Math.max(1, p.total);
 					progressPct = Math.min(100, Math.round((100 * p.actual) / total));
-					upsertBatchQueueItem(p.job_id, {
-						status: p.error ? "error" : p.actual >= total ? "finished" : "running",
-						progressPct: Math.min(100, Math.round((100 * p.actual) / total)),
-					});
 					const tail = p.nombre_archivo || p.path || "";
 					const baseLabel = tail.replace(/^.*[/\\]/, "") || tail;
 					progressSnapshot = {

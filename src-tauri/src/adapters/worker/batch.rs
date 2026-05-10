@@ -11,7 +11,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::application::sign_batch::{process_batch, SignBatchInput};
-use crate::ports::{NoopProgressNotifier, ProgressEvent, ProgressNotifier};
+use crate::ports::{
+    BatchJobPhase, BatchJobSnapshot, ProgressEvent, ProgressNotifier,
+};
 
 pub struct BatchJob {
     pub job_id: String,
@@ -28,21 +30,70 @@ pub struct BatchJob {
     pub cleanup_paths: Vec<PathBuf>,
 }
 
-struct TauriProgress(AppHandle);
+/// Actualiza el mapa compartido (API HTTP) y reenvía el mismo payload al frontend vía Tauri.
+struct SharedBatchProgress {
+    snapshots: Arc<Mutex<HashMap<String, BatchJobSnapshot>>>,
+    app: Option<AppHandle>,
+}
 
-impl ProgressNotifier for TauriProgress {
+impl ProgressNotifier for SharedBatchProgress {
     fn notify(&self, ev: ProgressEvent) {
-        let payload = serde_json::json!({
-            "actual": ev.current,
-            "total": ev.total,
-            "job_id": ev.job_id,
-            "nombre_archivo": ev.file_name,
-            "path": ev.path,
-            "output_path": ev.output_path,
-            "error": ev.error,
-        });
-        let _ = self.0.emit("progreso", &payload);
+        if let Ok(mut g) = self.snapshots.lock() {
+            let snap = g.entry(ev.job_id.clone()).or_insert_with(|| BatchJobSnapshot {
+                job_id: ev.job_id.clone(),
+                phase: BatchJobPhase::Running,
+                actual: 0,
+                total: ev.total.max(1),
+                current_file_name: None,
+                error: None,
+            });
+            snap.phase = BatchJobPhase::Running;
+            snap.actual = ev.current;
+            snap.total = ev.total.max(1);
+            snap.current_file_name = if ev.file_name.is_empty() {
+                None
+            } else {
+                Some(ev.file_name.clone())
+            };
+            snap.error = ev.error.clone();
+        }
+        if let Some(ref h) = self.app {
+            let payload = serde_json::json!({
+                "actual": ev.current,
+                "total": ev.total,
+                "job_id": ev.job_id,
+                "nombre_archivo": ev.file_name,
+                "path": ev.path,
+                "output_path": ev.output_path,
+                "error": ev.error,
+            });
+            let _ = h.emit("progreso", &payload);
+        }
     }
+}
+
+fn finalize_batch_job(
+    snapshots: &Arc<Mutex<HashMap<String, BatchJobSnapshot>>>,
+    job_id: &str,
+    cancelled: bool,
+    outputs_len: usize,
+    inputs_len: usize,
+) {
+    let Ok(mut g) = snapshots.lock() else {
+        return;
+    };
+    let Some(s) = g.get_mut(job_id) else {
+        return;
+    };
+    if cancelled {
+        s.phase = BatchJobPhase::Cancelled;
+        return;
+    }
+    if outputs_len == 0 && inputs_len > 0 && s.actual == 0 && s.error.is_some() {
+        s.phase = BatchJobPhase::Failed;
+        return;
+    }
+    s.phase = BatchJobPhase::Completed;
 }
 
 fn cleanup_staging_paths(paths: Vec<PathBuf>) {
@@ -66,6 +117,7 @@ pub fn spawn_batch_worker(
     app: Option<AppHandle>,
     cancel_registry: Arc<Mutex<HashMap<String, CancellationToken>>>,
     signed_outputs: Arc<Mutex<HashMap<String, Vec<PathBuf>>>>,
+    job_snapshots: Arc<Mutex<HashMap<String, BatchJobSnapshot>>>,
 ) {
     // Debe usar el runtime de Tauri (`setup` no tiene Tokio activo en el hilo actual).
     tauri::async_runtime::spawn(async move {
@@ -76,10 +128,13 @@ pub fn spawn_batch_worker(
             let reg_c = cancel_registry.clone();
             let cleanup = job.cleanup_paths.clone();
             let signed_outputs_c = signed_outputs.clone();
+            let snapshots_c = job_snapshots.clone();
             let run = tokio::task::spawn_blocking(move || {
-                let notifier: Box<dyn ProgressNotifier> = match app_c {
-                    Some(h) => Box::new(TauriProgress(h)),
-                    None => Box::new(NoopProgressNotifier),
+                let inputs_len = job.inputs.len();
+                let cancel_token = job.cancel.clone();
+                let notifier = SharedBatchProgress {
+                    snapshots: snapshots_c.clone(),
+                    app: app_c.clone(),
                 };
                 let input = SignBatchInput {
                     job_id: job.job_id.clone(),
@@ -92,6 +147,8 @@ pub fn spawn_batch_worker(
                     seal_png: job.seal_png,
                 };
                 let outputs = process_batch(input, token_c, notifier);
+                let cancelled = cancel_token.is_cancelled();
+                finalize_batch_job(&snapshots_c, &jid, cancelled, outputs.len(), inputs_len);
                 if let Ok(mut m) = signed_outputs_c.lock() {
                     m.insert(jid.clone(), outputs);
                 }

@@ -31,6 +31,7 @@ use crate::infrastructure::batch_pdf_validation::{
     MAX_PDFS_PER_BATCH_INTENT,
     MAX_TOTAL_BATCH_INTENT_BYTES,
 };
+use crate::ports::{BatchJobPhase, BatchJobSnapshot};
 
 /// Techo para servir por HTTP un PDF firmado (entrada máx. + margen por firma incrustada).
 const MAX_SIGNED_DOWNLOAD_BYTES: u64 =
@@ -187,6 +188,10 @@ pub fn build_router(state: SharedState) -> Router {
             get(get_batch_sign_intent_status),
         )
         .route("/api/v1/batch/sign", post(post_batch_sign))
+        .route(
+            "/api/v1/batch/jobs/{job_id}/status",
+            get(get_batch_job_status),
+        )
         .route(
             "/api/v1/batch/jobs/{job_id}/signed-files",
             get(get_batch_signed_manifest),
@@ -708,6 +713,7 @@ async fn post_batch_sign(
         .job_id
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
+    let input_count = body.inputs.len();
     let cancel = CancellationToken::new();
     {
         let mut g = match state.batch_cancel.lock() {
@@ -755,6 +761,19 @@ async fn post_batch_sign(
                 if let Ok(mut m) = state.intent_request_to_job.lock() {
                     m.insert(rid, job_id.clone());
                 }
+            }
+            if let Ok(mut m) = state.batch_job_snapshots.lock() {
+                m.insert(
+                    job_id.clone(),
+                    BatchJobSnapshot {
+                        job_id: job_id.clone(),
+                        phase: BatchJobPhase::Queued,
+                        actual: 0,
+                        total: u32::try_from(input_count).unwrap_or(1).max(1),
+                        current_file_name: None,
+                        error: None,
+                    },
+                );
             }
             Json(BatchSignResponse {
                 job_id,
@@ -868,6 +887,41 @@ async fn get_batch_sign_intent_status(
         }))
         .into_response(),
     }
+}
+
+/// Estado del trabajo de firma (fase, progreso). **No** figura en `openapi/nexosign-local-api.openapi.json` (contrato externo); lo usa la UI vía fetch local.
+async fn get_batch_job_status(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(job_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = gate_batch_origin(&state, &headers) {
+        return resp;
+    }
+    let snap = {
+        let guard = match state.batch_job_snapshots.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "estado batch snapshots bloqueado" })),
+                )
+                    .into_response();
+            }
+        };
+        guard.get(&job_id).cloned()
+    };
+    let Some(snap) = snap else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "job_not_found",
+                "detail": "Sin estado para este job_id."
+            })),
+        )
+            .into_response();
+    };
+    Json(snap).into_response()
 }
 
 /// Lista índices y URLs relativas para descargar los PDF firmados de un trabajo terminado.

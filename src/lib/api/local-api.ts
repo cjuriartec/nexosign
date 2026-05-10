@@ -44,6 +44,23 @@ export type BatchSignResponse = {
 	queued: boolean;
 };
 
+/** GET /api/v1/batch/jobs/{job_id}/status — estado autoritativo del proceso Rust. */
+export type BatchJobPhase =
+	| "queued"
+	| "running"
+	| "completed"
+	| "failed"
+	| "cancelled";
+
+export type BatchJobStatusResponse = {
+	job_id: string;
+	phase: BatchJobPhase;
+	actual: number;
+	total: number;
+	current_file_name?: string | null;
+	error?: string | null;
+};
+
 export type BatchSignBody = {
 	cert_id_hex: string;
 	/** Rutas absolutas a `.pdf` en el sistema de archivos local (la API valida existencia y tamaño). */
@@ -121,7 +138,26 @@ export async function postBatchSign(
 	return res.json() as Promise<BatchSignResponse>;
 }
 
-/** POST /api/v1/batch/sign/intent — registra PDFs para firmar tras el asistente en la app (no encola aún). Body JSON con rutas locales. */
+/** GET /api/v1/batch/jobs/{job_id}/status */
+export async function fetchBatchJobStatus(
+	jobId: string,
+	baseUrl: string = LOCAL_API_BASE,
+): Promise<BatchJobStatusResponse> {
+	const headers: Record<string, string> = {};
+	if (typeof window === "undefined") {
+		headers["Origin"] = "http://localhost:1420";
+	}
+	const res = await fetch(
+		`${baseUrl}/api/v1/batch/jobs/${encodeURIComponent(jobId)}/status`,
+		{ headers },
+	);
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({}));
+		throw new LocalApiHttpError("Estado del trabajo batch", res.status, err);
+	}
+	return res.json() as Promise<BatchJobStatusResponse>;
+}
+
 export async function postBatchSignIntent(
 	body: BatchSignIntentBody,
 	baseUrl: string = LOCAL_API_BASE,

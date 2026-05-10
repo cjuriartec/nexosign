@@ -11,7 +11,11 @@
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 	import AppSidebar from "$lib/components/app-sidebar.svelte";
 	import { extractIntentFromNexosignUrl } from "$lib/nexosign-deep-link";
-	import { initBatchQueuePersistence } from "$lib/stores/batch-queue.svelte";
+	import {
+		initBatchQueuePersistence,
+		syncBatchQueueFromLocalApi,
+	} from "$lib/stores/batch-queue.svelte";
+	import { isTauriRuntime } from "$lib/tauri/env";
 
 	let { children } = $props();
 
@@ -53,6 +57,13 @@
 						await goto("/sign");
 					}),
 				);
+				if (isTauriRuntime()) {
+					void syncBatchQueueFromLocalApi();
+					const poll = window.setInterval(() => {
+						void syncBatchQueueFromLocalApi();
+					}, 900);
+					unsubs.push(() => clearInterval(poll));
+				}
 			} catch {
 				/* Sin entorno Tauri */
 			}

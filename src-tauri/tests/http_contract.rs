@@ -10,7 +10,58 @@ use nexosign_lib::adapters::http::PendingBatchIntent;
 use nexosign_lib::adapters::http::state::SharedState;
 use nexosign_lib::adapters::http::{build_router, LOCAL_API_PORT};
 use nexosign_lib::adapters::worker::batch::BatchJob;
+use nexosign_lib::ports::{BatchJobPhase, BatchJobSnapshot};
 use tower::ServiceExt;
+
+#[tokio::test]
+async fn integration_batch_job_status_requires_origin_and_returns_snapshot() {
+    let state = SharedState::test_default();
+    state
+        .batch_job_snapshots
+        .lock()
+        .unwrap()
+        .insert(
+            "job-status-contract".to_string(),
+            BatchJobSnapshot {
+                job_id: "job-status-contract".into(),
+                phase: BatchJobPhase::Running,
+                actual: 2,
+                total: 5,
+                current_file_name: Some("doc.pdf".into()),
+                error: None,
+            },
+        );
+
+    let app = build_router(state.clone());
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/batch/jobs/job-status-contract/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    let app = build_router(state);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/batch/jobs/job-status-contract/status")
+                .header("Origin", "http://localhost:1420")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["phase"], "running");
+    assert_eq!(v["actual"], 2);
+    assert_eq!(v["total"], 5);
+}
 
 #[tokio::test]
 async fn integration_health_echoes_version_and_port_constant() {

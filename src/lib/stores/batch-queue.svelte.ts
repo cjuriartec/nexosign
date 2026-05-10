@@ -1,9 +1,14 @@
 import {
+	fetchBatchJobStatus,
+	type BatchJobPhase,
+} from "$lib/api/local-api";
+import {
 	backendLoadBatchQueueHistory,
 	backendSaveBatchQueueHistory,
 	type BatchQueueSnapshot,
 } from "$lib/tauri/batch-queue-history";
 import { isTauriRuntime } from "$lib/tauri/env";
+import { getLocalApiBaseUrl } from "$lib/tauri/settings";
 
 export type BatchQueueStatus =
 	| "preparing"
@@ -135,6 +140,53 @@ export function setActiveBatchJobId(id: string | null): void {
 
 export function computeBatchQueueHasActiveWork(): boolean {
 	return batchQueue.items.some((q) => ACTIVE_STATUSES.includes(q.status));
+}
+
+function mapBackendPhaseToQueueStatus(phase: BatchJobPhase): BatchQueueStatus {
+	switch (phase) {
+		case "queued":
+			return "queued";
+		case "running":
+			return "running";
+		case "completed":
+			return "finished";
+		case "failed":
+			return "error";
+		case "cancelled":
+			return "cancelled";
+		default:
+			return "running";
+	}
+}
+
+/** Refresca ítems activos contra `GET …/batch/jobs/{job_id}/status` (estado en el proceso NexoSign). */
+export async function syncBatchQueueFromApi(baseUrl: string): Promise<void> {
+	for (const item of batchQueue.items) {
+		if (!ACTIVE_STATUSES.includes(item.status)) continue;
+		if (!item.jobId || item.jobId.startsWith("pending-")) continue;
+		let snap: Awaited<ReturnType<typeof fetchBatchJobStatus>>;
+		try {
+			snap = await fetchBatchJobStatus(item.jobId, baseUrl);
+		} catch {
+			continue;
+		}
+		const total = Math.max(1, snap.total);
+		const pct = Math.min(100, Math.round((100 * snap.actual) / total));
+		upsertBatchQueueItem(item.jobId, {
+			status: mapBackendPhaseToQueueStatus(snap.phase),
+			progressPct: pct,
+		});
+	}
+}
+
+export async function syncBatchQueueFromLocalApi(): Promise<void> {
+	if (!isTauriRuntime()) return;
+	try {
+		const base = await getLocalApiBaseUrl();
+		await syncBatchQueueFromApi(base);
+	} catch {
+		/* API local no disponible */
+	}
 }
 
 export function upsertBatchQueueItem(jobId: string, patch: Partial<BatchQueueItem>): void {

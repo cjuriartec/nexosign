@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "NexoSign API local",
-    "description": "API HTTP en loopback (`127.0.0.1:14500`) cuando NexoSign está en ejecución.\n\n**CORS / origen:** los `POST` y los **`GET`** de batch (descargas, estado del intent) exigen cabecera **`Origin`** autorizada. Desde curl: `-H \"Origin: http://localhost:1420\"`.\n\n**Portal sin backend:** tras `POST …/batch/sign/intent`, sondea `GET /api/v1/batch/sign/intent/{request_id}/status` hasta `completed`; luego `GET …/jobs/{job_id}/signed-files` y cada `GET …/files/{i}`.\n\n**No incluido aquí:** la encolación directa de firma (`POST …/batch/sign`) la usa la app de escritorio y automatización local en la misma máquina; **no** forma parte de este contrato público.\n\n**Scalar / otros:** importa `http://127.0.0.1:14500/openapi.json` con la app abierta.",
+    "description": "API HTTP en loopback (`127.0.0.1:14500`) cuando NexoSign está en ejecución.\n\n**CORS / origen:** los `POST` y los **`GET`** de batch (descargas, estado del intent) exigen cabecera **`Origin`** autorizada. Desde curl: `-H \"Origin: http://localhost:1420\"`.\n\n**Portal sin backend:** tras `POST …/batch/sign/intent`, sondea `GET /api/v1/batch/sign/intent/{request_id}/status` hasta `completed`; luego `GET …/jobs/{job_id}/signed-files` y cada `GET …/files/{i}`.\n\n**No incluido aquí:** la encolación directa de firma (`POST …/batch/sign`), el sondeo fino de progreso por `job_id` que usa la app de escritorio, y otras rutas internas; **no** forman parte de este contrato público para integradores.\n\n**Scalar / otros:** importa `http://127.0.0.1:14500/openapi.json` con la app abierta.",
     "version": "0.1.0"
   },
   "servers": [
