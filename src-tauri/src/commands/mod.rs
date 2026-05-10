@@ -8,6 +8,7 @@ use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 
 use crate::adapters::http::LOCAL_API_PORT;
+use crate::adapters::http::PendingBatchIntent;
 use crate::adapters::http::state::PendingBatchIntents;
 use crate::adapters::persistence::{AllowedOriginsDb, Pkcs11PathsDb};
 use crate::adapters::pkcs11::driver::find_all_pkcs11_modules;
@@ -42,20 +43,19 @@ pub struct BatchSignIntentPayload {
 }
 
 /// Lee una solicitud guardada por `POST /api/v1/batch/sign/intent` (solo proceso NexoSign).
-#[tauri::command]
-pub fn get_batch_sign_intent(
-    request_id: String,
-    pending: tauri::State<'_, PendingBatchIntents>,
+fn get_batch_sign_intent_from_store(
+    request_id: &str,
+    store: &Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
 ) -> Result<Option<BatchSignIntentPayload>, String> {
-    let mut g = pending.0.lock().map_err(|e| e.to_string())?;
-    let Some(ent) = g.get(&request_id) else {
+    let mut g = store.lock().map_err(|e| e.to_string())?;
+    let Some(ent) = g.get(request_id) else {
         return Ok(None);
     };
     if ent.is_expired() {
         if let Some(ref dir) = ent.staging_dir {
             let _ = std::fs::remove_dir_all(dir);
         }
-        g.remove(&request_id);
+        g.remove(request_id);
         return Ok(None);
     }
     Ok(Some(BatchSignIntentPayload {
@@ -69,6 +69,15 @@ pub fn get_batch_sign_intent(
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned()),
     }))
+}
+
+/// Lee una solicitud guardada por `POST /api/v1/batch/sign/intent` (solo proceso NexoSign).
+#[tauri::command]
+pub fn get_batch_sign_intent(
+    request_id: String,
+    pending: tauri::State<'_, PendingBatchIntents>,
+) -> Result<Option<BatchSignIntentPayload>, String> {
+    get_batch_sign_intent_from_store(&request_id, &pending.0)
 }
 
 #[tauri::command]
@@ -389,4 +398,35 @@ pub fn enumerate_pdfs_under_folder(path: String) -> Result<Vec<String>, String> 
         .into_iter()
         .map(|x| x.to_string_lossy().into_owned())
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn get_batch_sign_intent_from_store_cleans_expired_staging() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let rid = "rid-expired".to_string();
+        let staging = std::env::temp_dir().join(format!("nexosign-cmd-expired-{}", std::process::id()));
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(staging.join("a.pdf"), b"%PDF-1.4\n").unwrap();
+
+        let ent = PendingBatchIntent {
+            inputs: vec![std::path::PathBuf::from("/tmp/a.pdf")],
+            output_dir: None,
+            staging_dir: Some(staging.clone()),
+            created_unix: now.saturating_sub(crate::adapters::http::PENDING_INTENT_TTL_SECS + 5),
+        };
+        let store = Arc::new(Mutex::new(HashMap::from([(rid.clone(), ent)])));
+
+        let out = get_batch_sign_intent_from_store(&rid, &store).unwrap();
+        assert!(out.is_none());
+        assert!(!staging.exists(), "staging debe borrarse al expirar");
+        assert!(store.lock().unwrap().is_empty());
+    }
 }

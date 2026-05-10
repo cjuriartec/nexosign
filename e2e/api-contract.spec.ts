@@ -176,6 +176,103 @@ test.describe("API local opcional", () => {
 		);
 	});
 
+	test("POST /api/v1/batch/sign/intent sin Origin devuelve 403", async ({
+		request,
+	}) => {
+		test.skip(
+			!process.env.NEXOSIGN_E2E_API,
+			"Sin NEXOSIGN_E2E_API: este test no se ejecuta.",
+		);
+
+		const tmpPdf = path.join(
+			os.tmpdir(),
+			`nexosign-e2e-intent-no-origin-${Date.now()}.pdf`,
+		);
+		fs.writeFileSync(tmpPdf, "%PDF-1.4\n");
+
+		let res: Awaited<ReturnType<typeof request.post>>;
+		try {
+			res = await request.post(`${BASE}/api/v1/batch/sign/intent`, {
+				data: JSON.stringify({ inputs: [tmpPdf] }),
+				headers: { "Content-Type": "application/json" },
+				timeout: 10_000,
+			});
+		} catch {
+			test.skip(
+				true,
+				"No hay servidor en 127.0.0.1:14500. Ejecuta primero: npm run tauri dev",
+			);
+			return;
+		} finally {
+			try {
+				fs.unlinkSync(tmpPdf);
+			} catch {
+				/* ignore */
+			}
+		}
+
+		expect(res.status()).toBe(403);
+		const body = await res.json();
+		expect(String(body.error)).toContain("missing_origin");
+	});
+
+	test("POST /api/v1/batch/sign/intent con content-type inválido devuelve 415", async ({
+		request,
+	}) => {
+		test.skip(
+			!process.env.NEXOSIGN_E2E_API,
+			"Sin NEXOSIGN_E2E_API: este test no se ejecuta.",
+		);
+
+		let res: Awaited<ReturnType<typeof request.post>>;
+		try {
+			res = await request.post(`${BASE}/api/v1/batch/sign/intent`, {
+				data: "plain-text",
+				headers: {
+					"Content-Type": "text/plain",
+					Origin: "http://localhost:1420",
+				},
+				timeout: 10_000,
+			});
+		} catch {
+			test.skip(
+				true,
+				"No hay servidor en 127.0.0.1:14500. Ejecuta primero: npm run tauri dev",
+			);
+			return;
+		}
+
+		expect(res.status()).toBe(415);
+	});
+
+	test("POST /api/v1/batch/sign/intent multipart sin archivo devuelve 400", async ({
+		request,
+	}) => {
+		test.skip(
+			!process.env.NEXOSIGN_E2E_API,
+			"Sin NEXOSIGN_E2E_API: este test no se ejecuta.",
+		);
+
+		let res: Awaited<ReturnType<typeof request.post>>;
+		try {
+			res = await request.post(`${BASE}/api/v1/batch/sign/intent`, {
+				multipart: { output_dir: "/tmp" },
+				headers: { Origin: "http://localhost:1420" },
+				timeout: 10_000,
+			});
+		} catch {
+			test.skip(
+				true,
+				"No hay servidor en 127.0.0.1:14500. Ejecuta primero: npm run tauri dev",
+			);
+			return;
+		}
+
+		expect(res.status()).toBe(400);
+		const body = await res.json();
+		expect(String(body.error)).toContain("no se recibió ningún PDF");
+	});
+
 	test("POST intent y luego batch con intent_request_id encola el trabajo", async ({
 		request,
 	}) => {

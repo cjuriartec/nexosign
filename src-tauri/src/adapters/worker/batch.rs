@@ -44,6 +44,20 @@ impl ProgressNotifier for TauriProgress {
     }
 }
 
+fn cleanup_staging_paths(paths: Vec<PathBuf>) {
+    for p in paths {
+        if p.is_dir() {
+            if let Err(e) = std::fs::remove_dir_all(&p) {
+                tracing::warn!(path = %p.display(), "staging cleanup: {e}");
+            }
+        } else if p.is_file() {
+            if let Err(e) = std::fs::remove_file(&p) {
+                tracing::warn!(path = %p.display(), "staging cleanup: {e}");
+            }
+        }
+    }
+}
+
 /// Arranca el consumidor único; debe llamarse una vez al iniciar la API local.
 pub fn spawn_batch_worker(
     mut rx: mpsc::Receiver<BatchJob>,
@@ -75,17 +89,7 @@ pub fn spawn_batch_worker(
                     seal_png: job.seal_png,
                 };
                 let _ = process_batch(input, token_c, notifier);
-                for p in cleanup {
-                    if p.is_dir() {
-                        if let Err(e) = std::fs::remove_dir_all(&p) {
-                            tracing::warn!(path = %p.display(), "staging cleanup: {e}");
-                        }
-                    } else if p.is_file() {
-                        if let Err(e) = std::fs::remove_file(&p) {
-                            tracing::warn!(path = %p.display(), "staging cleanup: {e}");
-                        }
-                    }
-                }
+                cleanup_staging_paths(cleanup);
                 if let Ok(mut g) = reg_c.lock() {
                     g.remove(&jid);
                 }
@@ -93,4 +97,25 @@ pub fn spawn_batch_worker(
             let _ = run.await;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleanup_staging_paths_removes_existing_file_and_dir() {
+        let root = std::env::temp_dir().join(format!("nexosign-worker-cleanup-{}", std::process::id()));
+        let dir = root.join("dir");
+        let file = root.join("a.pdf");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&file, b"%PDF-1.4\n").unwrap();
+
+        cleanup_staging_paths(vec![file.clone(), dir.clone(), root.join("missing.tmp")]);
+
+        assert!(!file.exists());
+        assert!(!dir.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

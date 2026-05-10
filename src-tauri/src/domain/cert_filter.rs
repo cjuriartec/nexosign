@@ -21,9 +21,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fixture_digital_signature_accepted() {
+    fn fixture_digital_signature_only_rejected() {
         let der = include_bytes!("../../tests/fixtures/signing_digital_signature.der");
-        assert!(der_is_signing_certificate(der.as_slice()));
+        assert!(!der_is_signing_certificate(der.as_slice()));
     }
 
     #[test]

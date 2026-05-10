@@ -1030,6 +1030,212 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn batch_sign_intent_rejects_unsupported_content_type() {
+        let app = build_router(SharedState::test_default());
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign/intent")
+                    .header("Origin", "http://localhost:1420")
+                    .header("Content-Type", "text/plain")
+                    .body(Body::from("x"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[tokio::test]
+    async fn batch_sign_intent_rejects_empty_inputs_json() {
+        let app = build_router(SharedState::test_default());
+        let body = serde_json::json!({ "inputs": [] });
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign/intent")
+                    .header("Origin", "http://localhost:1420")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn batch_sign_intent_multipart_rejects_missing_boundary() {
+        let app = build_router(SharedState::test_default());
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign/intent")
+                    .header("Origin", "http://localhost:1420")
+                    .header("Content-Type", "multipart/form-data")
+                    .body(Body::from("x"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn batch_sign_intent_multipart_rejects_without_files() {
+        let app = build_router(SharedState::test_default());
+        let boundary = "nexosign_mp_empty";
+        let ct = format!("multipart/form-data; boundary={boundary}");
+        let mp_body = format!(
+            "--{boundary}\r\n\
+             Content-Disposition: form-data; name=\"output_dir\"\r\n\r\n\
+             /tmp\r\n\
+             --{boundary}--\r\n"
+        );
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign/intent")
+                    .header("Origin", "http://localhost:1420")
+                    .header("Content-Type", &ct)
+                    .body(Body::from(mp_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn batch_sign_rejects_empty_cert_id() {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(1);
+        let app = build_router(SharedState::test_with_batch(tx));
+        let tmp = std::env::temp_dir().join(format!("nexosign-empty-cert-{}.pdf", std::process::id()));
+        std::fs::write(&tmp, b"%PDF-1.4\n").unwrap();
+        let abs = tmp.canonicalize().unwrap();
+        let body = serde_json::json!({
+            "cert_id_hex": " ",
+            "inputs": [abs.to_str().unwrap()],
+        });
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign")
+                    .header("Origin", "http://localhost:1420")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn batch_sign_rejects_empty_pin() {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(1);
+        let app = build_router(SharedState::test_with_batch(tx));
+        let tmp = std::env::temp_dir().join(format!("nexosign-empty-pin-{}.pdf", std::process::id()));
+        std::fs::write(&tmp, b"%PDF-1.4\n").unwrap();
+        let abs = tmp.canonicalize().unwrap();
+        let body = serde_json::json!({
+            "cert_id_hex": "aa",
+            "pin": "  ",
+            "inputs": [abs.to_str().unwrap()],
+        });
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign")
+                    .header("Origin", "http://localhost:1420")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn batch_sign_rejects_out_of_range_signature_grid() {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(1);
+        let app = build_router(SharedState::test_with_batch(tx));
+        let tmp = std::env::temp_dir().join(format!("nexosign-grid-{}.pdf", std::process::id()));
+        std::fs::write(&tmp, b"%PDF-1.4\n").unwrap();
+        let abs = tmp.canonicalize().unwrap();
+        let body = serde_json::json!({
+            "cert_id_hex": "aa",
+            "inputs": [abs.to_str().unwrap()],
+            "signature_grid": { "col": 4, "row": 9 }
+        });
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign")
+                    .header("Origin", "http://localhost:1420")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn batch_sign_returns_503_when_queue_is_full() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<BatchJob>(1);
+        let dummy = BatchJob {
+            job_id: "prefill".into(),
+            cert_id_hex: "00".into(),
+            inputs: vec![],
+            cancel: CancellationToken::new(),
+            output_dir: None,
+            signature_grid: None,
+            pin: None,
+            seal_png: None,
+            cleanup_paths: vec![],
+        };
+        tx.try_send(dummy).expect("prefill queue");
+        let app = build_router(SharedState::test_with_batch(tx));
+
+        let tmp = std::env::temp_dir().join(format!("nexosign-full-{}.pdf", std::process::id()));
+        std::fs::write(&tmp, b"%PDF-1.4\n").unwrap();
+        let abs = tmp.canonicalize().unwrap();
+        let body = serde_json::json!({
+            "cert_id_hex": "aa",
+            "inputs": [abs.to_str().unwrap()],
+            "job_id": "job-will-fail-full"
+        });
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign")
+                    .header("Origin", "http://localhost:1420")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let _ = rx.try_recv();
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
     async fn batch_sign_with_intent_request_id_clears_pending_after_enqueue() {
         use std::collections::HashMap;
         use std::sync::{Arc, Mutex};

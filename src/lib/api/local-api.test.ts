@@ -151,6 +151,39 @@ describe("local-api", () => {
 		expect(init.body).toBe(fd);
 		const h = init.headers as Record<string, string>;
 		expect(h["Content-Type"]).toBeUndefined();
+		expect(h["Origin"]).toBe("http://localhost:1420");
+	});
+
+	it("postBatchSign añade Origin en entorno Node", async () => {
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ job_id: "j3", queued: true }),
+		});
+		await postBatchSign(
+			{
+				cert_id_hex: "ef",
+				inputs: ["/tmp/c.pdf"],
+			},
+			"http://mock.test",
+		);
+		const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock
+			.calls[0] as [string, RequestInit];
+		const h = call[1].headers as Record<string, string>;
+		expect(h["Origin"]).toBe("http://localhost:1420");
+		expect(h["Content-Type"]).toBe("application/json");
+	});
+
+	it("postBatchSignIntentFormData mapea error HTTP con mensaje JSON", async () => {
+		const fd = new FormData();
+		fd.append("files", new Blob(["bad"], { type: "application/pdf" }), "bad.pdf");
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 400,
+			json: async () => ({ error: "no es un PDF válido" }),
+		});
+		await expect(
+			postBatchSignIntentFormData(fd, "http://mock.test"),
+		).rejects.toThrow(/no es un PDF válido/);
 	});
 
 	it("postBatchSignIntent lanza si no ok", async () => {
