@@ -214,6 +214,16 @@ struct Inner {
     app_database_path: Arc<Mutex<Option<PathBuf>>>,
 }
 
+/// Cierra sesión RW y descarga el módulo PKCS#11 en memoria (libera drivers tras PIN incorrecto o sesión colgada).
+fn reset_pkcs11_inner_state(inner: &mut Inner) {
+    if let Some(sess) = inner.session.take() {
+        let _ = sess.logout();
+    }
+    inner.pkcs11 = None;
+    inner.active_module_path = None;
+    inner.logged_in = false;
+}
+
 impl Pkcs11TokenManager {
     /// `app_database_path`: ruta al `.sqlite` de la app; `None` hasta que Tauri ejecuta `setup` (tests: `None`).
     pub fn new(app_database_path: Arc<Mutex<Option<PathBuf>>>) -> Self {
@@ -231,13 +241,7 @@ impl Pkcs11TokenManager {
     /// Cierra sesión PKCS#11 en memoria para volver a cargar el módulo tras cambiar rutas en BD.
     pub fn reset_pkcs11_driver_state(&self) -> Result<(), TokenError> {
         let mut inner = self.lock_inner()?;
-        if let Some(ref sess) = inner.session {
-            let _ = sess.logout();
-        }
-        inner.session = None;
-        inner.pkcs11 = None;
-        inner.active_module_path = None;
-        inner.logged_in = false;
+        reset_pkcs11_inner_state(&mut inner);
         Ok(())
     }
 
@@ -297,7 +301,16 @@ impl Pkcs11TokenManager {
 
     pub fn list_signing_certificates(&self) -> Result<Vec<SigningCertSummary>, TokenError> {
         let paths = {
-            let inner = self.lock_inner()?;
+            let mut inner = self.lock_inner()?;
+            // Si ya hay login PKCS#11 válido, no abrimos otro handle al middleware (evita conflicto con el driver).
+            if inner.logged_in {
+                if let Some(ref mut sess) = inner.session {
+                    return collect_signing_certs_from_session(sess);
+                }
+            }
+            // Sin login (o estado inconsistente): libera sesión/módulo internos antes de sondear rutas.
+            // Tras PIN incorrecto algunos drivers dejan una RW sesión colgada y bloquean nuevas aperturas.
+            reset_pkcs11_inner_state(&mut inner);
             merged_pkcs11_module_paths(&inner)?
         };
 
@@ -354,13 +367,19 @@ impl Pkcs11TokenManager {
         }
         let mut inner = self.lock_inner()?;
         ensure_session_rw(&mut inner)?;
-        {
-            let session = inner.session.as_mut().expect("session");
-            let auth = AuthPin::new(pin.into());
-            session.login(UserType::User, Some(&auth))?;
+        let session = inner.session.as_mut().expect("session");
+        let auth = AuthPin::new(pin.into());
+        let login_result = session.login(UserType::User, Some(&auth));
+        match login_result {
+            Ok(()) => {
+                inner.logged_in = true;
+                Ok(())
+            }
+            Err(e) => {
+                reset_pkcs11_inner_state(&mut inner);
+                Err(e.into())
+            }
         }
-        inner.logged_in = true;
-        Ok(())
     }
 
     /// Igual que [`login`], pero abre sesión en el **módulo PKCS#11 que contiene** `cert_id_hex`
@@ -371,13 +390,19 @@ impl Pkcs11TokenManager {
         }
         let mut inner = self.lock_inner()?;
         ensure_pkcs11_and_session_for_cert(&mut inner, cert_id_hex)?;
-        {
-            let session = inner.session.as_mut().expect("session");
-            let auth = AuthPin::new(pin.into());
-            session.login(UserType::User, Some(&auth))?;
+        let session = inner.session.as_mut().expect("session");
+        let auth = AuthPin::new(pin.into());
+        let login_result = session.login(UserType::User, Some(&auth));
+        match login_result {
+            Ok(()) => {
+                inner.logged_in = true;
+                Ok(())
+            }
+            Err(e) => {
+                reset_pkcs11_inner_state(&mut inner);
+                Err(e.into())
+            }
         }
-        inner.logged_in = true;
-        Ok(())
     }
 
     pub fn logout(&self) -> Result<(), TokenError> {

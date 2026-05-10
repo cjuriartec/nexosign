@@ -76,6 +76,7 @@ pub fn run() {
             commands::pkcs11_login,
             commands::pkcs11_logout,
             commands::pkcs11_session_status,
+            commands::pkcs11_reset_connection,
             commands::get_batch_sign_intent,
             commands::enumerate_pdfs_under_folder,
         ])

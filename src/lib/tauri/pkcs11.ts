@@ -52,6 +52,10 @@ export async function pkcs11Logout(): Promise<void> {
 	return invoke<void>("pkcs11_logout");
 }
 
+export async function pkcs11ResetConnection(): Promise<void> {
+	return invoke<void>("pkcs11_reset_connection");
+}
+
 export async function pkcs11SessionStatus(): Promise<SessionStatusDto> {
 	return invoke<SessionStatusDto>("pkcs11_session_status");
 }

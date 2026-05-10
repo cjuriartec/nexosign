@@ -295,6 +295,13 @@ pub async fn pkcs11_session_status(
         .map_err(|e| format!("pkcs11 task: {e}"))
 }
 
+/// Libera sesión y módulo PKCS#11 en memoria (tras PIN incorrecto o lector «colgado»).
+#[tauri::command]
+pub async fn pkcs11_reset_connection(state: tauri::State<'_, Pkcs11Store>) -> Result<(), String> {
+    let mgr = Arc::clone(&*state);
+    pkcs11_blocking(move || mgr.reset_pkcs11_driver_state().map_err(|e| e.to_string())).await
+}
+
 fn collect_pdfs_recursive(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;

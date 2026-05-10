@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from "svelte";
-	import { open } from "@tauri-apps/plugin-dialog";
+	import { open, ask } from "@tauri-apps/plugin-dialog";
 	import { basename, dirname, join } from "@tauri-apps/api/path";
 	import { toast } from "svelte-sonner";
 	import * as Card from "$lib/components/ui/card/index.js";
@@ -23,6 +23,7 @@
 	import { cancelBatchJob, getLocalApiBaseUrl } from "$lib/tauri/settings";
 	import { isTauriRuntime } from "$lib/tauri/env";
 	import { getHumanNameFromDn, extractDniFromDn } from "$lib/signature-appearance";
+	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import FileStackIcon from "@lucide/svelte/icons/files";
 	import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
@@ -81,20 +82,55 @@
 		logLines = [...logLines, line].slice(-120);
 	}
 
-	async function refreshCerts() {
-		if (!isTauriRuntime()) return;
+	async function refreshCerts(): Promise<number> {
+		if (!isTauriRuntime()) return 0;
 		try {
 			certs = await pkcs11.listSigningCertificates();
 			if (certs.length && !certId) {
 				certId = certs[0]?.id_hex ?? "";
 			}
+			return certs.length;
 		} catch (e) {
 			certs = [];
 			if (isPkcs11NoTokenError(e)) {
-				return;
+				return 0;
 			}
 			toast.error(String(e));
+			return 0;
 		}
+	}
+
+	/** Libera el driver del token en memoria y vuelve a enumerar certificados. */
+	async function resetPkcs11ConnectionAndRefresh() {
+		if (!isTauriRuntime()) return;
+		busy = true;
+		try {
+			await pkcs11.pkcs11ResetConnection();
+			const n = await refreshCerts();
+			toast.success(
+				n > 0
+					? "Listo: ya puedes elegir tu certificado."
+					: "Conexión reiniciada. Comprueba que la tarjeta esté bien puesta y pulsa «Actualizar lista».",
+			);
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			busy = false;
+		}
+	}
+
+	/** Confirma en lenguaje claro antes de cortar la sesión con el lector (evita clics accidentales). */
+	async function confirmResetReader() {
+		if (!isTauriRuntime()) return;
+		const ok = await ask(
+			"NexoSign cerrará la conexión con tu lector o tarjeta y volverá a buscar certificados. Tus PDF no se modifican.\n\n¿Seguir?",
+			{
+				title: "Volver a detectar la tarjeta",
+				kind: "info",
+			},
+		);
+		if (!ok) return;
+		await resetPkcs11ConnectionAndRefresh();
 	}
 
 	async function computeFirmadosDir(folderAbs: string): Promise<string> {
@@ -488,13 +524,16 @@
 		<Card.Root>
 			<Card.Header>
 				<Card.Title class="text-base">{SIGN_STEPS[1].title}</Card.Title>
-				<Card.Description class="text-xs">
-					{SIGN_STEPS[1].hint}. Conecta el lector o tarjeta y usa «Actualizar» si la lista está vacía.
+				<Card.Description class="text-xs leading-relaxed">
+					Selecciona el certificado con el que quieres firmar (suele ser el del DNIe). Si acabas de enchufar el
+					lector, espera unos segundos y pulsa <span class="text-foreground font-medium">Actualizar lista</span>.
 				</Card.Description>
 			</Card.Header>
 			<Card.Content class="space-y-4">
 				{#if certs.length === 0}
-					<p class="text-muted-foreground text-sm">Sin certificados (lector o token).</p>
+					<p class="text-muted-foreground text-sm">
+						Sin certificados todavía. Comprueba la tarjeta o el lector y pulsa «Actualizar lista».
+					</p>
 				{:else}
 					<div class="grid gap-2">
 						<Label>Certificado</Label>
@@ -522,21 +561,59 @@
 						</Select.Root>
 					</div>
 				{/if}
-				<div class="flex flex-wrap gap-2">
-					<Button type="button" variant="outline" size="sm" onclick={() => refreshCerts()} disabled={busy}>
-						Actualizar
-					</Button>
-					<Button
-						type="button"
-						disabled={busy || !certId.trim() || certs.length === 0}
-						onclick={() => step2Continue()}
-						aria-label={`Siguiente paso: ${SIGN_STEPS[2].title}`}
+				<div class="flex flex-col gap-3">
+					<div class="flex flex-wrap gap-2 items-center">
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							class="gap-1.5"
+							onclick={() => void refreshCerts()}
+							disabled={busy}
+						>
+							<RefreshCwIcon class="size-4 shrink-0 opacity-80" aria-hidden="true" />
+							Actualizar lista
+						</Button>
+						<Button
+							type="button"
+							disabled={busy || !certId.trim() || certs.length === 0}
+							onclick={() => step2Continue()}
+							aria-label={`Siguiente paso: ${SIGN_STEPS[2].title}`}
+						>
+							Continuar
+							<span class="text-primary-foreground/85 ml-1 hidden font-normal sm:inline">
+								→ {SIGN_STEPS[2].title}
+							</span>
+						</Button>
+					</div>
+
+					<details
+						class="group rounded-md border border-dashed border-transparent bg-muted/10 text-muted-foreground opacity-60 transition-opacity hover:opacity-90 open:border-border/50 open:bg-muted/20 open:opacity-100 dark:open:border-border/35"
 					>
-						Continuar
-						<span class="text-primary-foreground/85 ml-1 hidden font-normal sm:inline">
-							→ {SIGN_STEPS[2].title}
-						</span>
-					</Button>
+						<summary
+							class="cursor-pointer list-none px-2 py-1.5 text-[11px] leading-snug outline-none marker:content-none [&::-webkit-details-marker]:hidden"
+						>
+							<span class="opacity-75 group-open:opacity-90">
+								Solo si el lector falla o fallaste el PIN varias veces…
+							</span>
+						</summary>
+						<div class="space-y-2 border-t border-border/40 px-2 pb-2 pt-2 text-[11px] leading-relaxed">
+							<p>
+								Reinicia la conexión con la tarjeta solo cuando «Actualizar lista» no muestra nada y ya has
+								comprobado la tarjeta. No lo uses en circunstancias normales.
+							</p>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								class="h-8 text-xs"
+								disabled={busy}
+								onclick={() => confirmResetReader()}
+							>
+								Reconectar lector
+							</Button>
+						</div>
+					</details>
 				</div>
 			</Card.Content>
 		</Card.Root>
