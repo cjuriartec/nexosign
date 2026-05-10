@@ -53,6 +53,10 @@ pub fn process_batch<P: ProgressNotifier>(
     if let Some(ref p) = input.pin {
         let pt = p.trim();
         if !pt.is_empty() {
+            // Soltamos la sesión que pudo abrirse en otro hilo (p. ej. la validación de PIN del handler
+            // HTTP) para que el `C_OpenSession` + `C_Login` + `C_Sign` ocurran todos en este hilo.
+            // Algunos drivers PKCS#11 atan el estado "logged-in" al hilo OS que invocó `C_Login`.
+            let _ = token.release_session();
             if let Err(e) = token.login_for_certificate(pt.to_string(), &input.cert_id_hex) {
                 progress.notify(ProgressEvent {
                     job_id: input.job_id.clone(),

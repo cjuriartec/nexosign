@@ -320,8 +320,14 @@ async fn post_batch_sign(
             };
             let cert_hex = body.cert_id_hex.trim().to_string();
             let pin_owned = pin_trim.to_string();
-            let login_res =
-                tokio::task::spawn_blocking(move || mgr.login_for_certificate(pin_owned, &cert_hex)).await;
+            // Validación temprana del PIN: tras login OK liberamos la sesión para que el worker
+            // abra una nueva en su propio hilo (algunos drivers atan `C_Login` al hilo OS).
+            let login_res = tokio::task::spawn_blocking(move || {
+                let r = mgr.login_for_certificate(pin_owned, &cert_hex);
+                let _ = mgr.release_session();
+                r
+            })
+            .await;
             match login_res {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {

@@ -246,6 +246,22 @@ impl Pkcs11TokenManager {
         Ok(())
     }
 
+    /// Cierra solo la sesión PKCS#11 (no descarga el módulo); el siguiente login la reabre.
+    ///
+    /// Se usa entre hilos: algunos drivers asocian el estado de `C_Login` al hilo OS que lo invocó,
+    /// así que tras validar PIN en el hilo HTTP soltamos la sesión para que el worker abra una nueva
+    /// en su propio hilo y haga `C_Login` + `C_Sign` allí.
+    pub fn release_session(&self) -> Result<(), TokenError> {
+        let mut inner = self.lock_inner()?;
+        if let Some(sess) = inner.session.take() {
+            if inner.logged_in {
+                let _ = sess.logout();
+            }
+        }
+        inner.logged_in = false;
+        Ok(())
+    }
+
     fn lock_inner(&self) -> Result<std::sync::MutexGuard<'_, Inner>, TokenError> {
         self.inner.lock().map_err(|_| TokenError::MutexPoisoned)
     }
