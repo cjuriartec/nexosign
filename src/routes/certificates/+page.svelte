@@ -7,11 +7,19 @@
 	import * as pkcs11 from "$lib/tauri/pkcs11";
 	import type { SigningCertSummary } from "$lib/tauri/pkcs11";
 	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
+	import {
+		PKCS11_CERT_POLL_MS,
+		emptySigningCertsHelp,
+	} from "$lib/tauri/pkcs11-ux";
 	import { isTauriRuntime } from "$lib/tauri/env";
 	import SignatureAppearanceCard from "$lib/components/signature-appearance-card.svelte";
 	import { getHumanNameFromDn, extractDniFromDn, extractPurposeFromDn } from "$lib/signature-appearance";
 
+	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
+	import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert/index.js";
+
 	let certs = $state<SigningCertSummary[]>([]);
+	let slotsWithTokenCount = $state(0);
 	let busy = $state(false);
 
 	async function loadCerts() {
@@ -26,6 +34,7 @@
 			}
 			toast.error(String(e));
 		} finally {
+			slotsWithTokenCount = await pkcs11.pkcs11SlotCount().catch(() => 0);
 			busy = false;
 		}
 	}
@@ -33,6 +42,11 @@
 	onMount(() => {
 		if (!isTauriRuntime()) return;
 		void loadCerts();
+		const pollId = window.setInterval(() => {
+			if (document.visibilityState !== "visible") return;
+			void loadCerts();
+		}, PKCS11_CERT_POLL_MS);
+		return () => window.clearInterval(pollId);
 	});
 </script>
 
@@ -63,7 +77,7 @@
 				<div>
 					<Card.Title class="text-base">Certificados</Card.Title>
 					<Card.Description>
-						Listado actual desde tu tarjeta o token.
+						Listado actual desde tu tarjeta o token; se refresca solo cada pocos segundos y con Recargar.
 					</Card.Description>
 				</div>
 				<Button variant="outline" size="sm" class="shrink-0 self-start" disabled={busy} onclick={() => loadCerts()}>
@@ -72,7 +86,12 @@
 			</Card.Header>
 			<Card.Content>
 				{#if certs.length === 0}
-					<p class="text-muted-foreground text-sm">No hay certificados.</p>
+					{@const help = emptySigningCertsHelp(slotsWithTokenCount)}
+					<Alert variant={slotsWithTokenCount <= 0 ? "destructive" : "default"} class="text-left">
+						<TriangleAlertIcon class="size-4" />
+						<AlertTitle class="text-sm">{help.title}</AlertTitle>
+						<AlertDescription class="text-xs leading-snug">{help.description}</AlertDescription>
+					</Alert>
 				{:else}
 					<Table.Root>
 						<Table.Header>

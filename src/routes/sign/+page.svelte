@@ -22,6 +22,11 @@
 	import { enumeratePdfsUnderFolder } from "$lib/tauri/batch";
 	import { getBatchSignIntent } from "$lib/tauri/batch-sign-intent";
 	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
+	import {
+		PKCS11_CERT_POLL_MS,
+		emptySigningCertsHelp,
+		maybePersistPreferredModuleAfterSuccessfulBatch,
+	} from "$lib/tauri/pkcs11-ux";
 	import { getLocalApiBaseUrl } from "$lib/tauri/settings";
 	import { isTauriRuntime } from "$lib/tauri/env";
 	import { getHumanNameFromDn, extractDniFromDn } from "$lib/signature-appearance";
@@ -66,6 +71,8 @@
 	let outputDirForJob = $state<string | null>(null);
 
 	let certs = $state<SigningCertSummary[]>([]);
+	/** Slots con token presente (para mensajes si la lista de firma está vacía). */
+	let slotsWithTokenCount = $state(0);
 	let certId = $state("");
 	let pin = $state("");
 	let pinVisible = $state(false);
@@ -130,6 +137,34 @@
 	}
 
 	const jobLogHasErrors = $derived(logLines.some((l) => logLineTone(l) === "err"));
+
+	/** Evita llamar varias veces a persistir middleware preferido por el mismo lote terminado. */
+	let preferredLearnedForFinishedBatch = $state(false);
+
+	/** Polling ligero: refrescar certificados en pasos 1–4 si la pestaña está visible (lector recién conectado). */
+	$effect(() => {
+		if (!isTauriRuntime()) return;
+		const poll = wizardStep >= 1 && wizardStep <= 4;
+		if (!poll) return;
+		const id = window.setInterval(() => {
+			if (document.visibilityState !== "visible") return;
+			void refreshCerts();
+		}, PKCS11_CERT_POLL_MS);
+		return () => window.clearInterval(id);
+	});
+
+	/** Tras un lote completado sin errores en el log, persistir middleware preferido si el usuario no definió uno. */
+	$effect(() => {
+		if (!isTauriRuntime()) return;
+		if (!executionFinished) {
+			preferredLearnedForFinishedBatch = false;
+			return;
+		}
+		if (jobLogHasErrors) return;
+		if (preferredLearnedForFinishedBatch) return;
+		preferredLearnedForFinishedBatch = true;
+		void maybePersistPreferredModuleAfterSuccessfulBatch();
+	});
 
 	const resultStepSigning = $derived(
 		wizardStep === 5 && !executionFinished && (submitInFlight || busy || batchQueue.activeBatchJobId !== null),
@@ -210,6 +245,8 @@
 			}
 			toast.error(String(e));
 			return 0;
+		} finally {
+			slotsWithTokenCount = await pkcs11.pkcs11SlotCount().catch(() => 0);
 		}
 	}
 
@@ -808,11 +845,18 @@
 		<Card.Root size="sm">
 			<Card.Header class="pb-2">
 				<Card.Title class="text-sm font-medium">Certificado</Card.Title>
-				<Card.Description class="text-xs">¿No ves el DNIe? Espera unos segundos y actualiza.</Card.Description>
+				<Card.Description class="text-xs">
+					La lista se actualiza sola cada pocos segundos en este paso; también puede usar Actualizar.
+				</Card.Description>
 			</Card.Header>
 			<Card.Content class="space-y-3 pt-0">
 				{#if certs.length === 0}
-					<p class="text-muted-foreground text-xs">Sin certificados.</p>
+					{@const help = emptySigningCertsHelp(slotsWithTokenCount)}
+					<Alert variant={slotsWithTokenCount <= 0 ? "destructive" : "default"} class="text-left">
+						<TriangleAlertIcon class="size-4" />
+						<AlertTitle class="text-sm">{help.title}</AlertTitle>
+						<AlertDescription class="text-xs leading-snug">{help.description}</AlertDescription>
+					</Alert>
 				{:else}
 					<div class="grid gap-1.5">
 						<Label class="text-xs">Certificado</Label>

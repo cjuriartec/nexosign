@@ -31,6 +31,12 @@ La fuente de verdad arquitectónica es **`AGENTS.md`** (hexagonal: dominio, caso
 
 Si tu cambio cruza capas, enlaza en la descripción del PR cómo respeta esos límites.
 
+## PKCS#11: PIN en lote y CKA_ALWAYS_AUTHENTICATE
+
+La interfaz pide el PIN **una vez por lote** antes de enviar `POST /batch/sign`. En backend, el worker firma cada PDF **en serie** por la misma cola PKCS#11 (sin paralelizar operaciones en el chip).
+
+Muchos tokens DNIe marcan la clave privada con **CKA_ALWAYS_AUTHENTICATE**: el middleware puede exigir **re-autenticación contextual** (`C_Login` con `CKU_CONTEXT_SPECIFIC`) **antes de cada** `C_Sign`, aunque el usuario solo introduzca el PIN una vez en pantalla. Por tanto, “PIN único” en UX **no** implica necesariamente un solo par PKCS#11 login/session para todo el lote. Detalle de implementación: `rsa_sha256_pkcs1_sign` en [`src-tauri/src/adapters/pkcs11/token.rs`](src-tauri/src/adapters/pkcs11/token.rs).
+
 ## Estilo de código
 
 - **Rust:** `cargo fmt` / `cargo clippy`; errores tipados (`thiserror` donde aplique); sin loguear PIN ni datos sensibles del token.
