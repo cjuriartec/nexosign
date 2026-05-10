@@ -13,7 +13,9 @@ use adapters::persistence::{AllowedOriginsDb, Pkcs11PathsDb};
 use adapters::pkcs11::token::Pkcs11TokenManager;
 use domain::allowed_origins::AllowedOrigins;
 use infrastructure::origin_db::OriginDbPath;
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, WindowEvent};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tokio_util::sync::CancellationToken;
 
@@ -21,7 +23,61 @@ use crate::domain::pending_batch_intent::PendingBatchIntent;
 use crate::adapters::http::state::PendingBatchIntents;
 use crate::commands::{BatchCancelRegistry, BatchSignedOutputsStore};
 
+/// Etiqueta de la ventana principal ([`tauri.conf.json`](../../tauri.conf.json), [`capabilities/default.json`](../../capabilities/default.json)).
+const MAIN_WINDOW_LABEL: &str = "main";
+
 static INIT_TRACING: Once = Once::new();
+
+fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(w) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+#[cfg(desktop)]
+fn try_install_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let show = match MenuItem::with_id(app, "tray_show", "Abrir NexoSign", true, None::<&str>) {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::warn!(error = %e, "menú bandeja: ítem Abrir");
+            return;
+        }
+    };
+    let quit = match MenuItem::with_id(app, "tray_quit", "Salir", true, None::<&str>) {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::warn!(error = %e, "menú bandeja: ítem Salir");
+            return;
+        }
+    };
+    let menu = match Menu::with_items(app, &[&show, &quit]) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(error = %e, "menú bandeja");
+            return;
+        }
+    };
+
+    let mut builder = TrayIconBuilder::new()
+        .menu(&menu)
+        .tooltip("NexoSign")
+        .on_menu_event(|app, event| {
+            if event.id == "tray_quit" {
+                app.exit(0);
+            } else if event.id == "tray_show" {
+                show_main_window(app);
+            }
+        });
+
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+
+    if let Err(e) = builder.build(app) {
+        tracing::warn!(error = %e, "icono de bandeja del sistema");
+    }
+}
 
 fn init_tracing() {
     INIT_TRACING.call_once(|| {
@@ -89,6 +145,15 @@ pub fn run() {
             commands::batch_queue_history::save_batch_queue_history,
             commands::clear_local_api_temp_cache,
         ])
+        .on_window_event(|window, event| {
+            if window.label() != MAIN_WINDOW_LABEL {
+                return;
+            }
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
         .setup(move |app| {
             let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
             std::fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
@@ -134,6 +199,7 @@ pub fn run() {
 
             let emit_for_deep_link = app.handle().clone();
             app.handle().deep_link().on_open_url(move |event| {
+                show_main_window(&emit_for_deep_link);
                 let urls: Vec<String> =
                     event.urls().into_iter().map(|u| u.to_string()).collect();
                 let _ = emit_for_deep_link.emit(
@@ -141,6 +207,9 @@ pub fn run() {
                     serde_json::json!({ "urls": urls }),
                 );
             });
+
+            #[cfg(desktop)]
+            try_install_tray(app.handle());
 
             let handle = app.handle().clone();
             infrastructure::local_server::spawn_local_api(

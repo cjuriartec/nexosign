@@ -54,6 +54,8 @@
 
 📁 **Salida:** `{nombre}_firmado.pdf` junto al original o dentro de `…_firmados` si firmaste por carpeta.
 
+**Segundo plano:** al cerrar la ventana, la app **sigue en ejecución** (API local y deep links activos). Vuelve a mostrar la ventana con el icono en la **bandeja del sistema** (menú **Abrir NexoSign**) o al abrir un **`nexosign://…`**. Para terminar el proceso por completo, usa **Salir** en esa bandeja o **Salir** / **Quit** en el menú de la aplicación (p. ej. Cmd+Q en macOS).
+
 ---
 
 ## 🛰️ API local — referencia rápida
