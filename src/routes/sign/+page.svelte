@@ -97,8 +97,8 @@
 	} | null>(null);
 
 	let logViewportEl = $state<HTMLElement | null>(null);
-	/** Evita reenviar al paso 5 si el usuario vuelve atrás desde Resultado. */
-	let didAutoAdvanceToResult = $state(false);
+	/** Evita enviar dos veces POST /batch/sign antes de que termine la petición. */
+	let submitInFlight = $state(false);
 
 	const progressSubtitle = $derived.by(() => {
 		if (!progressSnapshot) {
@@ -130,8 +130,8 @@
 
 	const jobLogHasErrors = $derived(logLines.some((l) => logLineTone(l) === "err"));
 
-	const inlineSigningActive = $derived(
-		activeJobId !== null && wizardStep === 4 && !executionFinished,
+	const resultStepSigning = $derived(
+		wizardStep === 5 && !executionFinished && (submitInFlight || busy || activeJobId !== null),
 	);
 
 	const wizardBarPct = $derived(Math.round((wizardStep / TOTAL_STEPS) * 100));
@@ -154,7 +154,7 @@
 		logLines = [];
 		pin = "";
 		pinError = null;
-		didAutoAdvanceToResult = false;
+		submitInFlight = false;
 	}
 
 	function pushLog(line: string) {
@@ -359,6 +359,7 @@
 	}
 
 	async function submitBatch() {
+		if (submitInFlight) return;
 		if (!certId.trim()) {
 			toast.error("Selecciona un certificado.");
 			return;
@@ -373,11 +374,14 @@
 			return;
 		}
 
+		submitInFlight = true;
+
 		if (isTauriRuntime()) {
 			try {
 				await pkcs11.pkcs11VerifyPin(pin.trim(), certId.trim());
 				toast.success("PIN correcto");
 			} catch (e) {
+				submitInFlight = false;
 				const msg = String(e);
 				if (msg.includes("PIN incorrecto")) {
 					pinError = "PIN incorrecto.";
@@ -399,9 +403,10 @@
 		logLines = [];
 		progressPct = 0;
 		progressSnapshot = null;
-		didAutoAdvanceToResult = false;
 		activeJobId = null;
 		activeJobRef.current = null;
+		wizardStep = 5;
+
 		try {
 			const body: BatchSignBody = {
 				cert_id_hex: certId.trim(),
@@ -426,8 +431,8 @@
 			activeJobId = res.job_id;
 			activeJobRef.current = res.job_id;
 			intentRequestId = null;
-			toast.success("Firma en curso");
 		} catch (e) {
+			wizardStep = 4;
 			if (e instanceof LocalApiHttpError) {
 				const detail = extractJsonErrorMessage(e.body) ?? e.message;
 				if (e.status === 400 && detail.includes("demasiado grande")) {
@@ -450,6 +455,7 @@
 			}
 		} finally {
 			busy = false;
+			submitInFlight = false;
 		}
 	}
 
@@ -512,14 +518,6 @@
 
 	$effect(() => {
 		activeJobRef.current = activeJobId;
-	});
-
-	/** Al terminar el lote, pasar automáticamente al paso Resultado (una vez por trabajo). */
-	$effect(() => {
-		if (executionFinished && wizardStep === 4 && activeJobId && !didAutoAdvanceToResult) {
-			didAutoAdvanceToResult = true;
-			wizardStep = 5;
-		}
 	});
 </script>
 
@@ -593,7 +591,17 @@
 		{/if}
 		<div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
 			{#if wizardStep === 5}
-				<Button type="button" size="sm" onclick={() => startNewSigningRound()}>Nuevo lote</Button>
+				{#if activeJobId && !executionFinished}
+					<Button type="button" variant="outline" size="sm" onclick={() => cancelJob()}>Cancelar cola</Button>
+				{/if}
+				<Button
+					type="button"
+					size="sm"
+					disabled={!executionFinished}
+					onclick={() => startNewSigningRound()}
+				>
+					Nuevo lote
+				</Button>
 			{:else if wizardStep === 4}
 				<Button
 					type="button"
@@ -607,7 +615,7 @@
 				<Button
 					type="button"
 					size="sm"
-					disabled={busy || paths.length === 0 || !certId.trim() || !pin.trim()}
+					disabled={busy || submitInFlight || paths.length === 0 || !certId.trim() || !pin.trim()}
 					onclick={() => void submitBatch()}
 					class="gap-1"
 				>
@@ -941,64 +949,6 @@
 						</div>
 					</div>
 
-				{#if inlineSigningActive}
-					<div
-						class="border-primary/25 bg-primary/3 ring-primary/15 mt-4 w-full space-y-3 rounded-lg border p-3 ring-1"
-					>
-						<div class="flex flex-wrap items-center justify-between gap-2">
-							<div class="flex items-center gap-2">
-								<Loader2Icon class="text-primary size-4 animate-spin" aria-hidden="true" />
-								<span class="text-sm font-medium">Firmando el lote…</span>
-								<Badge variant="secondary" class="h-5 text-[10px]">En curso</Badge>
-							</div>
-							{#if activeJobId}
-								<span class="text-muted-foreground font-mono text-[10px]" title={activeJobId}
-									>{activeJobId.slice(0, 8)}…</span
-								>
-							{/if}
-						</div>
-						{#if progressSubtitle}
-							<p class="text-muted-foreground truncate text-xs">{progressSubtitle}</p>
-						{/if}
-						<div class="flex items-end justify-between gap-2">
-							<div class="flex items-baseline gap-1">
-								<span class="text-foreground tabular-nums text-xl font-semibold">{progressPct}</span>
-								<span class="text-muted-foreground text-xs">%</span>
-							</div>
-							{#if progressSnapshot}
-								<span class="text-muted-foreground text-xs tabular-nums"
-									>{progressSnapshot.actual}/{progressSnapshot.total}</span
-								>
-							{/if}
-						</div>
-						<Progress value={progressPct} max={100} class="h-2 rounded-full" />
-						<ScrollArea.Root
-							bind:viewportRef={logViewportEl}
-							class="bg-background/80 h-28 rounded-md border text-[11px] shadow-inner"
-						>
-							<div class="space-y-0 p-2 font-mono leading-relaxed">
-								{#if logLines.length === 0}
-									<p class="text-muted-foreground py-3 text-center text-[11px]">Esperando eventos…</p>
-								{:else}
-									{#each logLines as line, i}
-										{@const tone = logLineTone(line)}
-										<div
-											class={cn(
-												"rounded py-0.5 pl-2",
-												i === logLines.length - 1 ? "bg-primary/8 border-primary/35 border-l-2" : "border-l-2 border-transparent",
-												tone === "err" && "text-destructive",
-												tone === "ok" && "text-emerald-700 dark:text-emerald-400",
-												tone === "muted" && "text-foreground/85",
-											)}
-										>
-											{line}
-										</div>
-									{/each}
-								{/if}
-							</div>
-						</ScrollArea.Root>
-					</div>
-				{/if}
 				</div>
 			</Card.Content>
 		</Card.Root>
@@ -1007,7 +957,29 @@
 	{#if wizardStep === 5}
 		<Card.Root size="sm" class="overflow-hidden">
 			<Card.Header class="pb-3">
-				{#if jobLogHasErrors}
+				{#if resultStepSigning}
+					<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
+						<div
+							class="flex size-14 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary"
+						>
+							<Loader2Icon class="size-7 animate-spin" aria-hidden="true" />
+						</div>
+						<div class="min-w-0 flex-1 space-y-1">
+							<div class="flex flex-wrap items-center gap-2">
+								<Card.Title class="text-lg font-semibold tracking-tight">Firma en curso</Card.Title>
+								<Badge variant="secondary" class="h-5 text-[10px]">En progreso</Badge>
+							</div>
+							<Card.Description class="text-xs leading-relaxed">
+								Encolando y firmando los PDF; el registro se actualiza al avanzar cada archivo.
+							</Card.Description>
+							{#if activeJobId}
+								<p class="text-muted-foreground pt-1 font-mono text-[10px]">
+									ID trabajo: <span title={activeJobId}>{activeJobId}</span>
+								</p>
+							{/if}
+						</div>
+					</div>
+				{:else if executionFinished && jobLogHasErrors}
 					<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
 						<div
 							class="flex size-12 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400"
@@ -1021,7 +993,7 @@
 							</Card.Description>
 						</div>
 					</div>
-				{:else}
+				{:else if executionFinished}
 					<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
 						<div
 							class="flex size-14 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
@@ -1040,13 +1012,34 @@
 						</div>
 					</div>
 				{/if}
-				{#if activeJobId}
+				{#if activeJobId && executionFinished}
 					<p class="text-muted-foreground pt-2 font-mono text-[10px]">
 						ID trabajo: <span title={activeJobId}>{activeJobId}</span>
 					</p>
 				{/if}
 			</Card.Header>
-			<Card.Content class="space-y-2 pt-0">
+			<Card.Content class="space-y-3 pt-0">
+				{#if resultStepSigning}
+					<div class="border-border/50 bg-muted/20 space-y-2 rounded-lg border px-3 py-3">
+						{#if progressSubtitle}
+							<p class="text-muted-foreground truncate text-xs">{progressSubtitle}</p>
+						{:else}
+							<p class="text-muted-foreground text-xs">Preparando petición…</p>
+						{/if}
+						<div class="flex items-end justify-between gap-2">
+							<div class="flex items-baseline gap-1">
+								<span class="text-foreground tabular-nums text-2xl font-semibold">{progressPct}</span>
+								<span class="text-muted-foreground text-xs">%</span>
+							</div>
+							{#if progressSnapshot}
+								<span class="text-muted-foreground text-xs tabular-nums"
+									>{progressSnapshot.actual}/{progressSnapshot.total}</span
+								>
+							{/if}
+						</div>
+						<Progress value={progressPct} max={100} class="h-2 rounded-full" />
+					</div>
+				{/if}
 				<p class="text-muted-foreground text-[11px] font-medium uppercase tracking-wide">Registro del proceso</p>
 				<ScrollArea.Root
 					bind:viewportRef={logViewportEl}
@@ -1054,7 +1047,13 @@
 				>
 					<div class="space-y-0 p-3 font-mono text-[11px] leading-relaxed">
 						{#if logLines.length === 0}
-							<p class="text-muted-foreground py-8 text-center text-xs">No hay líneas de registro.</p>
+							<p class="text-muted-foreground py-8 text-center text-xs">
+								{#if resultStepSigning}
+									Esperando eventos del firmador…
+								{:else}
+									No hay líneas de registro.
+								{/if}
+							</p>
 						{:else}
 							{#each logLines as line, i}
 								{@const tone = logLineTone(line)}
