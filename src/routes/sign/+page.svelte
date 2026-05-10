@@ -40,9 +40,9 @@
 		{ step: 4, title: "Confirmar", hint: "PIN y firma (no se guarda el PIN)" },
 	] as const;
 
-	/** Rejilla 5×7 (vertical, tipo hoja): col 0 izquierda, fila 0 arriba (como se lee el PDF). */
-	const SIG_GRID_COLS = 5;
-	const SIG_GRID_ROWS = 7;
+	/** Rejilla 3×5: 3 columnas (ancho) × 5 filas (alto); col 0 izquierda, fila 0 cabecera del PDF. */
+	const SIG_GRID_COLS = 3;
+	const SIG_GRID_ROWS = 5;
 
 	let paths = $state<string[]>([]);
 	/** Origen del lote actual: archivos sueltos vs carpeta (salida agrupada). */
@@ -61,8 +61,8 @@
 	/** 1 archivos · 2 ubicación · 3 certificado · 4 confirmar + PIN */
 	let wizardStep = $state(1);
 
-	let sigGridCol = $state(2);
-	let sigGridRow = $state(6);
+	let sigGridCol = $state(1);
+	let sigGridRow = $state(4);
 
 	/** Si viene de `POST /api/v1/batch/sign/intent`, se envía al confirmar para cerrar la intención. */
 	let intentRequestId = $state<string | null>(null);
@@ -558,9 +558,9 @@
 					Hoja en vertical: 5 columnas × 7 filas. Fila superior = cabecera del PDF. Cada PDF del lote usa la misma casilla.
 				</p>
 				<div class="mx-auto w-fit overflow-hidden rounded-lg border border-border bg-muted/25 shadow-sm">
-					{#each [0, 1, 2, 3, 4, 5, 6] as row}
+					{#each [0, 1, 2, 3, 4] as row}
 						<div class="flex border-b border-border/70 last:border-b-0">
-							{#each [0, 1, 2, 3, 4] as col}
+							{#each [0, 1, 2] as col}
 								<button
 									type="button"
 									class={cn(
@@ -718,7 +718,7 @@
 					<p>
 						Primera página: columna <span class="text-foreground font-medium">{sigGridCol + 1}</span>,
 						fila <span class="text-foreground font-medium">{sigGridRow + 1}</span>
-						<span class="text-muted-foreground"> (rejilla 5×7)</span>
+						<span class="text-muted-foreground"> (rejilla 3×5)</span>
 					</p>
 					{#if outputDirForJob}
 						<p class="truncate font-mono" title={outputDirForJob}>{outputDirForJob}</p>

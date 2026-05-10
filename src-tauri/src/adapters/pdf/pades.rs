@@ -15,9 +15,9 @@ use cms::signed_data::{
 use const_oid::db::rfc5911::{ID_DATA, ID_SIGNED_DATA};
 use const_oid::db::rfc5912::ID_SHA_256;
 use der::{Any, AnyRef, Decode, Encode};
-use flate2::write::ZlibEncoder;
-use flate2::Compression;
+use image::codecs::jpeg::JpegEncoder;
 use image::GenericImageView;
+use image::ImageEncoder;
 use lopdf::{Dictionary, Document, IncrementalDocument, Object, Stream, StringFormat};
 use sha2::{Digest, Sha256};
 use spki::AlgorithmIdentifierOwned;
@@ -29,7 +29,8 @@ use crate::adapters::pdf::cms_signer::Pkcs11RsaCmsSigner;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::application::errors::SignBatchError;
 
-/// Casilla 5×7 en la primera página: `col` 0..4 (izq→der), `row` 0..6 (arriba→abajo, como al leer el PDF).
+/// Columnas (ancho del PDF, izquierda→derecha) × filas (alto, cabecera→pie).
+/// `col` 0..=2, `row` 0..=4 (fila 0 arriba al leer la página).
 #[derive(Clone, Copy, Debug)]
 pub struct SignatureGridPlacement {
     pub col: u8,
@@ -38,18 +39,22 @@ pub struct SignatureGridPlacement {
 
 impl Default for SignatureGridPlacement {
     fn default() -> Self {
-        Self { col: 2, row: 6 }
+        Self { col: 1, row: 4 }
     }
 }
 
 impl SignatureGridPlacement {
     fn normalized(self) -> Self {
         Self {
-            col: self.col.min(4),
-            row: self.row.min(6),
+            col: self.col.min(2),
+            row: self.row.min(4),
         }
     }
 }
+
+/// Rejilla visible en la primera página (ancho × alto).
+const SIG_GRID_COLS: f64 = 3.0;
+const SIG_GRID_ROWS: f64 = 5.0;
 
 fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
@@ -297,8 +302,8 @@ fn rect_from_grid(page_box: [f64; 4], g: SignatureGridPlacement) -> [i64; 4] {
     let margin = (w.min(h) * 0.028).clamp(16.0, 44.0);
     let inner_w = w - 2.0 * margin;
     let inner_h = h - 2.0 * margin;
-    let cell_w = inner_w / 5.0;
-    let cell_h = inner_h / 7.0;
+    let cell_w = inner_w / SIG_GRID_COLS;
+    let cell_h = inner_h / SIG_GRID_ROWS;
     let col = f64::from(g.col);
     let row = f64::from(g.row);
     let x0 = page_llx + margin + col * cell_w;
@@ -331,27 +336,6 @@ fn pdf_escape_pdf_literal(s: &str) -> String {
     s.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)")
 }
 
-fn zlib_compress_pdf(data: &[u8]) -> Result<Vec<u8>, SignBatchError> {
-    let mut enc = ZlibEncoder::new(Vec::new(), Compression::best());
-    enc.write_all(data)
-        .map_err(|e| SignBatchError::Pades(format!("compresión sello: {e}")))?;
-    enc.finish()
-        .map_err(|e| SignBatchError::Pades(format!("compresión sello: {e}")))
-}
-
-fn flip_rgb_rows_vertical(rgb: &mut [u8], width: u32, height: u32) {
-    let row_len = (width * 3) as usize;
-    let h = height as usize;
-    for y in 0..(h / 2) {
-        let y2 = h - 1 - y;
-        let a = y * row_len;
-        let b = y2 * row_len;
-        for i in 0..row_len {
-            rgb.swap(a + i, b + i);
-        }
-    }
-}
-
 /// `Rect` del widget según proporción del PNG del sello (caben imagen + texto como en Certificados).
 fn rect_from_grid_with_aspect(page_box: [f64; 4], g: SignatureGridPlacement, aspect: f64) -> [i64; 4] {
     let g = g.normalized();
@@ -364,8 +348,8 @@ fn rect_from_grid_with_aspect(page_box: [f64; 4], g: SignatureGridPlacement, asp
     let margin = (w.min(h) * 0.028).clamp(16.0, 44.0);
     let inner_w = w - 2.0 * margin;
     let inner_h = h - 2.0 * margin;
-    let cell_w = inner_w / 5.0;
-    let cell_h = inner_h / 7.0;
+    let cell_w = inner_w / SIG_GRID_COLS;
+    let cell_h = inner_h / SIG_GRID_ROWS;
     let col = f64::from(g.col);
     let row = f64::from(g.row);
     let x0 = page_llx + margin + col * cell_w;
@@ -409,11 +393,7 @@ fn seal_png_dimensions(bytes: &[u8]) -> Result<(u32, u32), SignBatchError> {
     Ok(img.dimensions())
 }
 
-fn create_appearance_from_seal_png(
-    doc: &mut IncrementalDocument,
-    rect: [i64; 4],
-    png_bytes: &[u8],
-) -> Result<Object, SignBatchError> {
+fn seal_png_to_jpeg_bytes(png_bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), SignBatchError> {
     let dyn_img = image::load_from_memory(png_bytes)
         .map_err(|e| SignBatchError::Pades(format!("imagen sello: {e}")))?;
     let rgba = dyn_img.to_rgba8();
@@ -430,8 +410,22 @@ fn create_appearance_from_seal_png(
         let b = ((p[2] as f32) * a + 255.0 * (1.0 - a)).round() as u8;
         rgb.extend_from_slice(&[r, g, b]);
     }
-    flip_rgb_rows_vertical(&mut rgb, iw, ih);
-    let compressed = zlib_compress_pdf(&rgb)?;
+
+    let mut jpeg_buf = Vec::new();
+    let encoder = JpegEncoder::new_with_quality(&mut jpeg_buf, 90);
+    encoder
+        .write_image(&rgb, iw, ih, image::ExtendedColorType::Rgb8)
+        .map_err(|e| SignBatchError::Pades(format!("JPEG sello: {e}")))?;
+
+    Ok((jpeg_buf, iw, ih))
+}
+
+fn create_appearance_from_seal_png(
+    doc: &mut IncrementalDocument,
+    rect: [i64; 4],
+    png_bytes: &[u8],
+) -> Result<Object, SignBatchError> {
+    let (jpeg_bytes, iw, ih) = seal_png_to_jpeg_bytes(png_bytes)?;
 
     let fw = (rect[2] - rect[0]).abs() as f64;
     let fh = (rect[3] - rect[1]).abs() as f64;
@@ -442,9 +436,8 @@ fn create_appearance_from_seal_png(
     img_dict.set("Width", Object::Integer(iw.into()));
     img_dict.set("Height", Object::Integer(ih.into()));
     img_dict.set("ColorSpace", Object::Name(b"DeviceRGB".to_vec()));
-    img_dict.set("BitsPerComponent", Object::Integer(8));
-    img_dict.set("Filter", Object::Name(b"FlateDecode".to_vec()));
-    let img_stream = Stream::new(img_dict, compressed);
+    img_dict.set("Filter", Object::Name(b"DCTDecode".to_vec()));
+    let img_stream = Stream::new(img_dict, jpeg_bytes);
     let img_ref = doc
         .new_document
         .add_object(Object::Stream(img_stream));
@@ -622,6 +615,18 @@ fn append_signature_objects(
         ]),
     );
     annot.set("F", Object::Integer(132));
+    // Borde suave para que el campo sea visible aunque el visor oculte la AP hasta firmar.
+    let mut mk = Dictionary::new();
+    mk.set(
+        "BC",
+        Object::Array(vec![
+            Object::Real(0.72),
+            Object::Real(0.76),
+            Object::Real(0.82),
+        ]),
+    );
+    mk.set("W", Object::Integer(1));
+    annot.set("MK", Object::Dictionary(mk));
     annot.set("AP", Object::Dictionary(ap_dict));
 
     let annot_id = doc.new_document.add_object(Object::Dictionary(annot));

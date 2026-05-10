@@ -19,7 +19,7 @@ pub struct SignBatchInput {
     pub cancel: CancellationToken,
     /// Si está definido, los PDF firmados van aquí como `{stem}_firmado.pdf` (p. ej. carpeta hermana `_firmados`).
     pub output_dir: Option<PathBuf>,
-    /// Casilla 5×7 en primera página (`None` → valor por defecto del motor PDF).
+    /// Casilla 3×5 en primera página (`None` → valor por defecto del motor PDF).
     pub signature_grid: Option<SignatureGridPlacement>,
     /// Mismo PIN que `POST /batch/sign`; el worker repite login en su hilo para PKCS#11.
     pub pin: Option<String>,

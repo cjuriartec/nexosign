@@ -53,7 +53,7 @@ export type BatchSignBody = {
 	pin?: string;
 	/** Directorio absoluto donde escribir `{stem}_firmado.pdf` (p. ej. carpeta `…_firmados`). */
 	output_dir?: string;
-	/** Primera página: casilla en rejilla 5×7 (`col` 0–4 izquierda→derecha, `row` 0–6 arriba→abajo). */
+	/** Primera página: rejilla 3 columnas (ancho) × 5 filas (alto): `col` 0–2, `row` 0–4. */
 	signature_grid?: { col: number; row: number };
 	/** Si la firma sigue a `POST /api/v1/batch/sign/intent`, elimina la intención pendiente al encolar. */
 	intent_request_id?: string;
