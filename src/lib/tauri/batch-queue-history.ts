@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { isTauriRuntime } from "$lib/tauri/env";
 
-/** Misma forma que `BatchQueueItem` del store (evita dependencia circular). */
+/** Misma forma que los ítems del store (evita dependencia circular). */
 export type BatchQueueSnapshot = {
 	items: Array<{
 		jobId: string;
@@ -12,15 +12,22 @@ export type BatchQueueSnapshot = {
 		finishedAt?: number;
 	}>;
 	activeBatchJobId: string | null;
+	intentItems: Array<{
+		requestId: string;
+		label: string;
+		fileCount: number;
+		createdAt: number;
+	}>;
+	activeIntentRequestId: string | null;
 };
 
-/** Carga el historial desde `app_data_dir/batch_queue_history.json`. */
+/** Carga desde `app_data_dir/batch_queue_history.json`. */
 export async function backendLoadBatchQueueHistory(): Promise<BatchQueueSnapshot | null> {
 	if (!isTauriRuntime()) return null;
 	return invoke<BatchQueueSnapshot | null>("load_batch_queue_history");
 }
 
-/** Guarda el snapshot actual (debounced desde el store). */
+/** Guarda snapshot (debounced desde el store). */
 export async function backendSaveBatchQueueHistory(snapshot: BatchQueueSnapshot): Promise<void> {
 	if (!isTauriRuntime()) return;
 	await invoke("save_batch_queue_history", {
@@ -34,6 +41,13 @@ export async function backendSaveBatchQueueHistory(snapshot: BatchQueueSnapshot)
 				finishedAt: it.finishedAt ?? null,
 			})),
 			activeBatchJobId: snapshot.activeBatchJobId,
+			intentItems: snapshot.intentItems.map((it) => ({
+				requestId: it.requestId,
+				label: it.label,
+				fileCount: it.fileCount,
+				createdAt: it.createdAt,
+			})),
+			activeIntentRequestId: snapshot.activeIntentRequestId,
 		},
 	});
 }

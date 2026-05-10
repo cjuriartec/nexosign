@@ -9,9 +9,26 @@ const FILE_NAME: &str = "batch_queue_history.json";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchQueueHistoryPayload {
+    #[serde(default)]
     pub items: Vec<BatchQueueItemPayload>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_batch_job_id: Option<String>,
+    /// Intents desde API (`POST …/intent`) pendientes de firmar en el asistente.
+    #[serde(default)]
+    pub intent_items: Vec<IntentQueueItemPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_intent_request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntentQueueItemPayload {
+    pub request_id: String,
+    pub label: String,
+    #[serde(default)]
+    pub file_count: u32,
+    #[serde(default)]
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

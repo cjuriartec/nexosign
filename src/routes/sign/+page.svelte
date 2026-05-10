@@ -44,6 +44,10 @@
 	import {
 		batchQueue,
 		clearActiveBatchJobOnly,
+		completeIntentQueueItem,
+		intentDetachWizard,
+		setIntentActiveRequestId,
+		upsertIntentQueueItem,
 		prependBatchQueueItem,
 		replaceQueueJobId,
 		setActiveBatchJobId,
@@ -93,8 +97,6 @@
 
 	/** Si viene de `POST /api/v1/batch/sign/intent`, se envía al confirmar para cerrar la intención. */
 	let intentRequestId = $state<string | null>(null);
-	/** Evita ejecutar dos veces la misma `?intent=` si `replaceState` no actualiza al instante el store de rutas. */
-	let handledIntentQuery = $state<string | null>(null);
 
 	const activeJobRef: { current: string | null } = { current: null };
 	/** Tras pulsar "Firmar", no se vuelve a pasos anteriores hasta "Nuevo lote". */
@@ -278,6 +280,7 @@
 		const unique = [...new Set(list)];
 		paths = await partitionPaths(unique);
 		intentRequestId = null;
+		intentDetachWizard();
 	}
 
 	async function pickFolder() {
@@ -295,6 +298,7 @@
 			folderPath = sel;
 			outputDirForJob = await computeFirmadosDir(sel);
 			intentRequestId = null;
+			intentDetachWizard();
 			if (pdfs.length === 0) {
 				toast.message("No hay PDFs en esa carpeta.");
 			} else if (paths.length === 0) {
@@ -318,9 +322,17 @@
 		folderPath = null;
 		outputDirForJob = payload.outputDir ?? null;
 		intentRequestId = intentParam;
+		const label =
+			paths.length > 0 ? `${paths.length} PDF · ${pathBasename(paths[0] ?? "")}` : "Pendientes";
+		upsertIntentQueueItem({
+			requestId: intentParam,
+			label,
+			fileCount: paths.length,
+		});
+		setIntentActiveRequestId(intentParam);
 		await refreshCerts();
 		wizardStep = 1;
-		toast.message("Lote recibido desde la integración: revisa los pasos y confirma aquí.");
+		toast.message("Cargado.");
 		if (typeof window !== "undefined") {
 			const u = new URL(window.location.href);
 			u.searchParams.delete("intent");
@@ -334,6 +346,7 @@
 		folderPath = null;
 		outputDirForJob = null;
 		intentRequestId = null;
+		intentDetachWizard();
 	}
 
 	function removeAt(i: number) {
@@ -454,7 +467,11 @@
 			if (intentRequestId) {
 				body.intent_request_id = intentRequestId;
 			}
+			const intentToFinish = intentRequestId;
 			const res = await postBatchSign(body, apiBase);
+			if (intentToFinish) {
+				completeIntentQueueItem(intentToFinish);
+			}
 			setActiveBatchJobId(res.job_id);
 			activeJobRef.current = res.job_id;
 			intentRequestId = null;
@@ -498,8 +515,6 @@
 	$effect(() => {
 		const q = page.url.searchParams.get("intent");
 		if (!isTauriRuntime() || !q) return;
-		if (handledIntentQuery === q) return;
-		handledIntentQuery = q;
 		void applyPendingIntent(q);
 	});
 

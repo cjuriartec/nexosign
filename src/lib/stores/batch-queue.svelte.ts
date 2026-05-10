@@ -20,27 +20,38 @@ export type BatchQueueItem = {
 	label: string;
 	progressPct: number;
 	createdAt: number;
-	/** Marca temporal cuando el ítem llega a un estado terminal (si aplica). */
 	finishedAt?: number;
+};
+
+/** Intents `POST …/batch/sign/intent` pendientes de completar el asistente. */
+export type IntentQueueItem = {
+	requestId: string;
+	label: string;
+	fileCount: number;
+	createdAt: number;
 };
 
 const ACTIVE_STATUSES: BatchQueueStatus[] = ["preparing", "queued", "running", "cancelling"];
 
-/** Estados que ya no cambian (historial cerrado). */
 export const TERMINAL_BATCH_STATUSES: BatchQueueStatus[] = ["finished", "error", "cancelled"];
 
-/** Tope de entradas en historial (las más recientes se conservan al frente). */
 export const MAX_BATCH_QUEUE_ITEMS = 400;
+export const MAX_INTENT_QUEUE_ITEMS = 60;
 
-/** Un solo `$state` exportable: se mutan propiedades, no se reasigna el binding exportado. */
 export const batchQueue = $state({
 	items: [] as BatchQueueItem[],
 	activeBatchJobId: null as string | null,
 });
 
+export const intentQueue = $state({
+	items: [] as IntentQueueItem[],
+	/** Intent cuyo asistente está en pantalla (si aplica). */
+	activeRequestId: null as string | null,
+});
+
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
-function snapshot(): BatchQueueSnapshot {
+function fullSnapshot(): BatchQueueSnapshot {
 	return {
 		items: batchQueue.items.map((it) => ({
 			jobId: it.jobId,
@@ -51,6 +62,13 @@ function snapshot(): BatchQueueSnapshot {
 			finishedAt: it.finishedAt,
 		})),
 		activeBatchJobId: batchQueue.activeBatchJobId,
+		intentItems: intentQueue.items.map((it) => ({
+			requestId: it.requestId,
+			label: it.label,
+			fileCount: it.fileCount,
+			createdAt: it.createdAt,
+		})),
+		activeIntentRequestId: intentQueue.activeRequestId,
 	};
 }
 
@@ -59,7 +77,7 @@ export function schedulePersistBatchQueue(): void {
 	if (persistTimer !== null) clearTimeout(persistTimer);
 	persistTimer = setTimeout(() => {
 		persistTimer = null;
-		void backendSaveBatchQueueHistory(snapshot());
+		void backendSaveBatchQueueHistory(fullSnapshot());
 	}, 450);
 }
 
@@ -73,7 +91,6 @@ function touchTerminalTimestamp(prev: BatchQueueItem, next: Partial<BatchQueueIt
 	return merged as BatchQueueItem;
 }
 
-/** Tras reiniciar la app, los trabajos «activos» ya no tienen seguimiento real. */
 function normalizeItemsAfterLoad(items: BatchQueueItem[]): BatchQueueItem[] {
 	const now = Date.now();
 	return items.map((it) => {
@@ -90,18 +107,24 @@ function normalizeItemsAfterLoad(items: BatchQueueItem[]): BatchQueueItem[] {
 	});
 }
 
-/** Carga historial desde disco (llamar una vez al arranque en Tauri). */
 export async function initBatchQueuePersistence(): Promise<void> {
 	if (!isTauriRuntime()) return;
 	try {
 		const data = await backendLoadBatchQueueHistory();
-		if (!data || data.items.length === 0) return;
-		const normalized = normalizeItemsAfterLoad(data.items as BatchQueueItem[]);
-		batchQueue.items = normalized.slice(0, MAX_BATCH_QUEUE_ITEMS);
+		if (!data) return;
+		if (data.items?.length) {
+			const normalized = normalizeItemsAfterLoad(data.items as BatchQueueItem[]);
+			batchQueue.items = normalized.slice(0, MAX_BATCH_QUEUE_ITEMS);
+		}
 		batchQueue.activeBatchJobId = null;
+		const intents = data.intentItems ?? [];
+		if (intents.length > 0) {
+			intentQueue.items = intents.slice(0, MAX_INTENT_QUEUE_ITEMS) as IntentQueueItem[];
+		}
+		intentQueue.activeRequestId = null;
 		schedulePersistBatchQueue();
 	} catch {
-		/* sin archivo o JSON antiguo: se mantiene vacío */
+		/* sin archivo o JSON antiguo */
 	}
 }
 
@@ -110,7 +133,6 @@ export function setActiveBatchJobId(id: string | null): void {
 	schedulePersistBatchQueue();
 }
 
-/** No usar `$derived` exportado desde el módulo (regla de Svelte). Para UI reactiva: `$derived(computeBatchQueueHasActiveWork())`. */
 export function computeBatchQueueHasActiveWork(): boolean {
 	return batchQueue.items.some((q) => ACTIVE_STATUSES.includes(q.status));
 }
@@ -124,10 +146,12 @@ export function upsertBatchQueueItem(jobId: string, patch: Partial<BatchQueueIte
 	schedulePersistBatchQueue();
 }
 
-/** Vacía todo el historial y el trabajo activo (p. ej. «Limpiar todo» con confirmación). */
+/** Vacía trabajos de firma e intents guardados. */
 export function clearBatchQueue(): void {
 	batchQueue.items = [];
 	batchQueue.activeBatchJobId = null;
+	intentQueue.items = [];
+	intentQueue.activeRequestId = null;
 	schedulePersistBatchQueue();
 }
 
@@ -158,7 +182,6 @@ export function removeBatchQueueItem(jobId: string): void {
 	schedulePersistBatchQueue();
 }
 
-/** Quita entradas terminadas (correcto, error o cancelado). */
 export function clearTerminalBatchQueueItems(): void {
 	batchQueue.items = batchQueue.items.filter((q) => !TERMINAL_BATCH_STATUSES.includes(q.status));
 	schedulePersistBatchQueue();
@@ -174,8 +197,68 @@ export function removeBatchQueueItems(jobIds: string[]): void {
 	schedulePersistBatchQueue();
 }
 
-/** Solo desvincula el asistente actual sin borrar el historial (p. ej. «Nuevo lote»). */
 export function clearActiveBatchJobOnly(): void {
 	batchQueue.activeBatchJobId = null;
+	schedulePersistBatchQueue();
+}
+
+// --- Intents (integración web / deep link) ---
+
+export function upsertIntentQueueItem(entry: {
+	requestId: string;
+	label: string;
+	fileCount: number;
+	createdAt?: number;
+}): void {
+	const idx = intentQueue.items.findIndex((i) => i.requestId === entry.requestId);
+	const createdAt = idx >= 0 ? intentQueue.items[idx].createdAt : (entry.createdAt ?? Date.now());
+	const row: IntentQueueItem = {
+		requestId: entry.requestId,
+		label: entry.label,
+		fileCount: entry.fileCount,
+		createdAt,
+	};
+	if (idx >= 0) {
+		const next = [...intentQueue.items];
+		next[idx] = row;
+		intentQueue.items = next;
+	} else {
+		intentQueue.items = [row, ...intentQueue.items].slice(0, MAX_INTENT_QUEUE_ITEMS);
+	}
+	schedulePersistBatchQueue();
+}
+
+export function setIntentActiveRequestId(id: string | null): void {
+	intentQueue.activeRequestId = id;
+	schedulePersistBatchQueue();
+}
+
+/** El asistente ya no muestra ese intent (p. ej. usuario eligió PDF a mano); el intent sigue en cola. */
+export function intentDetachWizard(): void {
+	intentQueue.activeRequestId = null;
+	schedulePersistBatchQueue();
+}
+
+/** Tras `POST /batch/sign` correcto con `intent_request_id`. */
+export function completeIntentQueueItem(requestId: string): void {
+	intentQueue.items = intentQueue.items.filter((i) => i.requestId !== requestId);
+	if (intentQueue.activeRequestId === requestId) {
+		intentQueue.activeRequestId = null;
+	}
+	schedulePersistBatchQueue();
+}
+
+export function removeIntentQueueItem(requestId: string): void {
+	intentQueue.items = intentQueue.items.filter((i) => i.requestId !== requestId);
+	if (intentQueue.activeRequestId === requestId) {
+		intentQueue.activeRequestId = null;
+	}
+	schedulePersistBatchQueue();
+}
+
+/** Solo intents terminados en API = ninguno aquí; opcional limpiar todos los intents. */
+export function clearAllIntentQueueItems(): void {
+	intentQueue.items = [];
+	intentQueue.activeRequestId = null;
 	schedulePersistBatchQueue();
 }
