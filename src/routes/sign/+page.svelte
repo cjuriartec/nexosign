@@ -12,6 +12,7 @@
 	import { Progress } from "$lib/components/ui/progress/index.js";
 	import * as ScrollArea from "$lib/components/ui/scroll-area/index.js";
 	import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert/index.js";
+	import { Badge } from "$lib/components/ui/badge/index.js";
 	import { page } from "$app/state";
 	import { postBatchSign, type BatchSignBody, LocalApiHttpError, extractJsonErrorMessage } from "$lib/api/local-api";
 	import { subscribeProgress, type ProgressPayload } from "$lib/events/progress";
@@ -27,6 +28,8 @@
 	import { renderSignatureSealPngBase64 } from "$lib/signature-appearance-render";
 	import EyeIcon from "@lucide/svelte/icons/eye";
 	import EyeOffIcon from "@lucide/svelte/icons/eye-off";
+	import Loader2Icon from "@lucide/svelte/icons/loader-2";
+	import CircleCheckIcon from "@lucide/svelte/icons/circle-check";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import FileStackIcon from "@lucide/svelte/icons/files";
 	import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
@@ -76,16 +79,66 @@
 	const activeJobRef: { current: string | null } = { current: null };
 	let progressPct = $state(0);
 	let logLines = $state<string[]>([]);
+	/** Último tick de progreso (para título y subtítulo del panel). */
+	let progressSnapshot = $state<{
+		actual: number;
+		total: number;
+		fileLabel: string;
+	} | null>(null);
+
+	let logViewportEl = $state<HTMLElement | null>(null);
 
 	const showProgressPanel = $derived(
 		activeJobId !== null || logLines.length > 0 || progressPct > 0,
 	);
+
+	const progressSubtitle = $derived.by(() => {
+		if (!progressSnapshot) {
+			return activeJobId ? "Preparando firma…" : "";
+		}
+		const { actual, total, fileLabel } = progressSnapshot;
+		const base = `Documento ${actual} de ${total}`;
+		return fileLabel ? `${base} · ${fileLabel}` : base;
+	});
+
+	const executionFinished = $derived(activeJobId !== null && progressPct >= 100);
 
 	const wizardBarPct = $derived(Math.round((wizardStep / 4) * 100));
 
 	function pushLog(line: string) {
 		logLines = [...logLines, line].slice(-120);
 	}
+
+	function logLineTone(line: string): "muted" | "ok" | "err" {
+		const lower = line.toLowerCase();
+		if (
+			/\berror\b/.test(lower) ||
+			/\bfallo\b/.test(lower) ||
+			/\bfalló\b/.test(lower) ||
+			/\bincorrecto\b/.test(lower) ||
+			line.includes(" · ") &&
+				line.split(" · ").length >= 3
+		) {
+			return "err";
+		}
+		if (/\bok\b|\bcompletad|\bfirmad/i.test(lower)) {
+			return "ok";
+		}
+		return "muted";
+	}
+
+	$effect(() => {
+		const n = logLines.length;
+		if (n === 0) return;
+		queueMicrotask(() => {
+			const el = logViewportEl;
+			if (!el) return;
+			el.scrollTo({
+				top: el.scrollHeight,
+				behavior: n <= 2 ? "auto" : "smooth",
+			});
+		});
+	});
 
 	async function partitionPaths(list: string[]): Promise<string[]> {
 		if (!isTauriRuntime()) return list;
@@ -309,6 +362,7 @@
 		pinError = null;
 		logLines = [];
 		progressPct = 0;
+		progressSnapshot = null;
 		activeJobId = null;
 		activeJobRef.current = null;
 		try {
@@ -402,6 +456,12 @@
 					const total = Math.max(1, p.total);
 					progressPct = Math.min(100, Math.round((100 * p.actual) / total));
 					const tail = p.nombre_archivo || p.path || "";
+					const baseLabel = tail.replace(/^.*[/\\]/, "") || tail;
+					progressSnapshot = {
+						actual: p.actual,
+						total: p.total,
+						fileLabel: baseLabel,
+					};
 					const err = p.error ? ` · ${p.error}` : "";
 					pushLog(`${p.actual}/${p.total} · ${tail}${err}`);
 				});
@@ -809,19 +869,90 @@
 		</Card.Root>
 	{/if}
 	{#if showProgressPanel}
-		<Card.Root>
-			<Card.Header class="pb-2">
-				<Card.Title class="text-base">Progreso</Card.Title>
+		<Card.Root
+			class={cn(
+				"border-primary/15 shadow-sm transition-shadow",
+				activeJobId && !executionFinished && "ring-primary/10 ring-2",
+			)}
+			size="sm"
+		>
+			<Card.Header class="border-border/60 gap-3 border-b pb-4">
+				<div class="flex flex-wrap items-start justify-between gap-3">
+					<div class="space-y-1">
+						<div class="flex flex-wrap items-center gap-2">
+							<Card.Title class="text-base tracking-tight">Ejecución del lote</Card.Title>
+							{#if activeJobId && !executionFinished}
+								<Badge variant="secondary" class="gap-1 font-normal">
+									<Loader2Icon class="size-3 animate-spin" aria-hidden="true" />
+									En curso
+								</Badge>
+							{:else if executionFinished}
+								<Badge variant="outline" class="gap-1 border-emerald-500/40 font-normal text-emerald-700 dark:text-emerald-400">
+									<CircleCheckIcon class="size-3" aria-hidden="true" />
+									Listo
+								</Badge>
+							{/if}
+						</div>
+						<Card.Description class="text-xs leading-snug">
+							{#if progressSubtitle}
+								{progressSubtitle}
+							{:else}
+								Esperando el primer evento del firmador…
+							{/if}
+						</Card.Description>
+					</div>
+					{#if activeJobId}
+						<span
+							class="bg-muted/80 text-muted-foreground max-w-[min(100%,14rem)] truncate rounded-md px-2 py-1 font-mono text-[10px] leading-none"
+							title={activeJobId}
+						>
+							Job {activeJobId.slice(0, 8)}…
+						</span>
+					{/if}
+				</div>
+				<div class="flex flex-wrap items-end justify-between gap-4 pt-1">
+					<div class="flex items-baseline gap-1.5">
+						<span class="text-foreground tabular-nums text-4xl font-semibold tracking-tight">{progressPct}</span>
+						<span class="text-muted-foreground pb-1 text-sm font-medium">%</span>
+					</div>
+					{#if progressSnapshot}
+						<p class="text-muted-foreground text-xs tabular-nums">
+							{progressSnapshot.actual} / {progressSnapshot.total} PDF
+						</p>
+					{/if}
+				</div>
+				<Progress value={progressPct} max={100} class="h-2.5 rounded-full" />
 			</Card.Header>
-			<Card.Content class="space-y-4">
-				<Progress value={progressPct} class="h-2" />
-				<ScrollArea.Root class="h-40 rounded-md border">
-					<div class="p-3 font-mono text-xs leading-relaxed">
+			<Card.Content class="space-y-3 pt-2">
+				<div class="flex items-center justify-between gap-2">
+					<p class="text-muted-foreground text-xs font-medium uppercase tracking-wider">Registro</p>
+					{#if logLines.length > 0}
+						<span class="text-muted-foreground font-mono text-[10px] tabular-nums">{logLines.length} línea(s)</span>
+					{/if}
+				</div>
+				<ScrollArea.Root
+					bind:viewportRef={logViewportEl}
+					class="bg-muted/25 dark:bg-muted/15 h-52 rounded-lg border shadow-inner"
+				>
+					<div class="space-y-0 p-2 font-mono text-[11px] leading-relaxed">
 						{#if logLines.length === 0}
-							<span class="text-muted-foreground">Esperando eventos…</span>
+							<p class="text-muted-foreground px-2 py-6 text-center text-xs">
+								Cuando la firma avance, aquí verás cada paso (archivo actual, avisos y errores).
+							</p>
 						{:else}
-							{#each logLines as line}
-								<div>{line}</div>
+							{#each logLines as line, i}
+								{@const tone = logLineTone(line)}
+								<div
+									class={cn(
+										"border-border/50 rounded-md border-l-2 py-1.5 pl-2 pr-1 transition-colors",
+										i === logLines.length - 1 ? "border-primary bg-primary/6" : "border-transparent",
+										tone === "err" && "text-destructive",
+										tone === "ok" && "text-emerald-700 dark:text-emerald-400",
+										tone === "muted" && "text-foreground/85",
+									)}
+								>
+									{line}
+								</div>
 							{/each}
 						{/if}
 					</div>
