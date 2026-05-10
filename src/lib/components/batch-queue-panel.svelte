@@ -23,7 +23,7 @@
 				{:else if batchQueueHasActiveWork}
 					Hay trabajo en curso. Puedes cancelar el lote activo desde aquí o en Firmar.
 				{:else}
-					Últimos lotes enviados en esta sesión.
+					Historial de lotes en esta app (se guarda en tu perfil de usuario).
 				{/if}
 			</Card.Description>
 		</Card.Header>

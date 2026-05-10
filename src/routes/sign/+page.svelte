@@ -43,7 +43,7 @@
 	import { cancelActiveBatchJob } from "$lib/batch/cancel-active-batch";
 	import {
 		batchQueue,
-		clearBatchQueue,
+		clearActiveBatchJobOnly,
 		prependBatchQueueItem,
 		replaceQueueJobId,
 		setActiveBatchJobId,
@@ -160,7 +160,7 @@
 
 	function startNewSigningRound() {
 		wizardStep = 1;
-		clearBatchQueue();
+		clearActiveBatchJobOnly();
 		activeJobRef.current = null;
 		progressPct = 0;
 		progressSnapshot = null;

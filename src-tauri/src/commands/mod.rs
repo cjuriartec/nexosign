@@ -17,6 +17,8 @@ use crate::domain::allowed_origins::AllowedOrigins;
 use crate::domain::signing_cert::SigningCertSummary;
 use crate::infrastructure::origin_db::OriginDbPath;
 
+pub mod batch_queue_history;
+
 /// Estado gestionado por Tauri (`.manage`) compartido con la API local.
 type OriginsStore = Arc<RwLock<AllowedOrigins>>;
 

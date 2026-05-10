@@ -11,6 +11,7 @@
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 	import AppSidebar from "$lib/components/app-sidebar.svelte";
 	import { extractIntentFromNexosignUrl } from "$lib/nexosign-deep-link";
+	import { initBatchQueuePersistence } from "$lib/stores/batch-queue.svelte";
 
 	let { children } = $props();
 
@@ -18,6 +19,7 @@
 		const unsubs: (() => void)[] = [];
 
 		void (async () => {
+			await initBatchQueuePersistence();
 			try {
 				unsubs.push(
 					await listen<{ origin: string }>(
