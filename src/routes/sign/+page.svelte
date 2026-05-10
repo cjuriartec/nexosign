@@ -22,7 +22,7 @@
 	import { enumeratePdfsUnderFolder } from "$lib/tauri/batch";
 	import { getBatchSignIntent } from "$lib/tauri/batch-sign-intent";
 	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
-	import { cancelBatchJob, getLocalApiBaseUrl } from "$lib/tauri/settings";
+	import { getLocalApiBaseUrl } from "$lib/tauri/settings";
 	import { isTauriRuntime } from "$lib/tauri/env";
 	import { getHumanNameFromDn, extractDniFromDn } from "$lib/signature-appearance";
 	import { renderSignatureSealPngBase64 } from "$lib/signature-appearance-render";
@@ -39,6 +39,17 @@
 	import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 	import CheckIcon from "@lucide/svelte/icons/check";
 	import { cn } from "$lib/utils.js";
+	import BatchQueuePanel from "$lib/components/batch-queue-panel.svelte";
+	import { cancelActiveBatchJob } from "$lib/batch/cancel-active-batch";
+	import {
+		batchQueue,
+		clearBatchQueue,
+		prependBatchQueueItem,
+		replaceQueueJobId,
+		setActiveBatchJobId,
+		upsertBatchQueueItem,
+		type BatchQueueItem,
+	} from "$lib/stores/batch-queue.svelte";
 
 	function pathBasename(path: string): string {
 		const parts = path.split(/[/\\]/).filter(Boolean);
@@ -85,24 +96,7 @@
 	/** Evita ejecutar dos veces la misma `?intent=` si `replaceState` no actualiza al instante el store de rutas. */
 	let handledIntentQuery = $state<string | null>(null);
 
-	let activeJobId = $state<string | null>(null);
 	const activeJobRef: { current: string | null } = { current: null };
-	type QueueStatus =
-		| "preparing"
-		| "queued"
-		| "running"
-		| "cancelling"
-		| "cancelled"
-		| "finished"
-		| "error";
-	type QueueItem = {
-		jobId: string;
-		status: QueueStatus;
-		label: string;
-		progressPct: number;
-		createdAt: number;
-	};
-	let queueItems = $state<QueueItem[]>([]);
 	/** Tras pulsar "Firmar", no se vuelve a pasos anteriores hasta "Nuevo lote". */
 	let stepHistoryLocked = $state(false);
 	let progressPct = $state(0);
@@ -120,14 +114,14 @@
 
 	const progressSubtitle = $derived.by(() => {
 		if (!progressSnapshot) {
-			return activeJobId ? "Preparando firma…" : "";
+			return batchQueue.activeBatchJobId ? "Preparando firma…" : "";
 		}
 		const { actual, total, fileLabel } = progressSnapshot;
 		const base = `Documento ${actual} de ${total}`;
 		return fileLabel ? `${base} · ${fileLabel}` : base;
 	});
 
-	const executionFinished = $derived(activeJobId !== null && progressPct >= 100);
+	const executionFinished = $derived(batchQueue.activeBatchJobId !== null && progressPct >= 100);
 
 	function logLineTone(line: string): "muted" | "ok" | "err" {
 		const lower = line.toLowerCase();
@@ -149,10 +143,7 @@
 	const jobLogHasErrors = $derived(logLines.some((l) => logLineTone(l) === "err"));
 
 	const resultStepSigning = $derived(
-		wizardStep === 5 && !executionFinished && (submitInFlight || busy || activeJobId !== null),
-	);
-	const queueHasActiveWork = $derived(
-		queueItems.some((q) => ["preparing", "queued", "running", "cancelling"].includes(q.status)),
+		wizardStep === 5 && !executionFinished && (submitInFlight || busy || batchQueue.activeBatchJobId !== null),
 	);
 
 	const wizardBarPct = $derived(Math.round((wizardStep / TOTAL_STEPS) * 100));
@@ -169,7 +160,7 @@
 
 	function startNewSigningRound() {
 		wizardStep = 1;
-		activeJobId = null;
+		clearBatchQueue();
 		activeJobRef.current = null;
 		progressPct = 0;
 		progressSnapshot = null;
@@ -177,16 +168,7 @@
 		pin = "";
 		pinError = null;
 		submitInFlight = false;
-		queueItems = [];
 		stepHistoryLocked = false;
-	}
-
-	function upsertQueueItem(jobId: string, patch: Partial<QueueItem>) {
-		const idx = queueItems.findIndex((q) => q.jobId === jobId);
-		if (idx < 0) return;
-		const next = [...queueItems];
-		next[idx] = { ...next[idx], ...patch };
-		queueItems = next;
 	}
 
 	function pushLog(line: string) {
@@ -411,14 +393,14 @@
 		submitInFlight = true;
 		stepHistoryLocked = true;
 		const pendingQueueId = `pending-${Date.now()}`;
-		const pendingQueueItem: QueueItem = {
+		const pendingQueueItem: BatchQueueItem = {
 			jobId: pendingQueueId,
 			status: "preparing",
 			label: `${paths.length} PDF(s)`,
 			progressPct: 0,
 			createdAt: Date.now(),
 		};
-		queueItems = [pendingQueueItem, ...queueItems].slice(0, 10);
+		prependBatchQueueItem(pendingQueueItem);
 
 		if (isTauriRuntime()) {
 			try {
@@ -426,7 +408,7 @@
 				toast.success("PIN correcto");
 			} catch (e) {
 				submitInFlight = false;
-				upsertQueueItem(pendingQueueId, { status: "error" });
+				upsertBatchQueueItem(pendingQueueId, { status: "error" });
 				const msg = String(e);
 				if (msg.includes("PIN incorrecto")) {
 					pinError = "PIN incorrecto.";
@@ -448,7 +430,7 @@
 		logLines = [];
 		progressPct = 0;
 		progressSnapshot = null;
-		activeJobId = null;
+		setActiveBatchJobId(null);
 		activeJobRef.current = null;
 		wizardStep = 5;
 
@@ -473,17 +455,16 @@
 				body.intent_request_id = intentRequestId;
 			}
 			const res = await postBatchSign(body, apiBase);
-			activeJobId = res.job_id;
+			setActiveBatchJobId(res.job_id);
 			activeJobRef.current = res.job_id;
 			intentRequestId = null;
-			queueItems = queueItems.map((q) =>
-				q.jobId === pendingQueueId
-					? { ...q, jobId: res.job_id, status: "running", label: pathBasename(paths[0] ?? "Lote") }
-					: q,
-			);
+			replaceQueueJobId(pendingQueueId, res.job_id, {
+				status: "running",
+				label: pathBasename(paths[0] ?? "Lote"),
+			});
 		} catch (e) {
 			wizardStep = 4;
-			upsertQueueItem(pendingQueueId, { status: "error" });
+			upsertBatchQueueItem(pendingQueueId, { status: "error" });
 			if (e instanceof LocalApiHttpError) {
 				const detail = extractJsonErrorMessage(e.body) ?? e.message;
 				if (e.status === 400 && detail.includes("demasiado grande")) {
@@ -511,21 +492,7 @@
 	}
 
 	async function cancelJob() {
-		const id = activeJobId;
-		if (!id) {
-			toast.message("No hay una firma reciente en cola.");
-			return;
-		}
-		if (!isTauriRuntime()) return;
-		try {
-			upsertQueueItem(id, { status: "cancelling" });
-			const ok = await cancelBatchJob(id);
-			upsertQueueItem(id, { status: ok ? "cancelled" : "running" });
-			toast.message(ok ? "Cancelación enviada" : "Trabajo no encontrado");
-		} catch (e) {
-			upsertQueueItem(id, { status: "running" });
-			toast.error(String(e));
-		}
+		await cancelActiveBatchJob();
 	}
 
 	$effect(() => {
@@ -552,7 +519,7 @@
 					if (!activeJobRef.current || p.job_id !== activeJobRef.current) return;
 					const total = Math.max(1, p.total);
 					progressPct = Math.min(100, Math.round((100 * p.actual) / total));
-					upsertQueueItem(p.job_id, {
+					upsertBatchQueueItem(p.job_id, {
 						status: p.error ? "error" : p.actual >= total ? "finished" : "running",
 						progressPct: Math.min(100, Math.round((100 * p.actual) / total)),
 					});
@@ -575,7 +542,7 @@
 	});
 
 	$effect(() => {
-		activeJobRef.current = activeJobId;
+		activeJobRef.current = batchQueue.activeBatchJobId;
 	});
 </script>
 
@@ -594,48 +561,7 @@
 		{/if}
 	</div>
 
-	{#if queueItems.length > 0}
-		<Card.Root size="sm">
-			<Card.Header class="pb-2">
-				<Card.Title class="text-sm font-medium">Panel de colas</Card.Title>
-				<Card.Description class="text-xs">
-					{#if queueHasActiveWork}
-						Hay trabajo en curso. No puedes volver a pasos anteriores; puedes cancelar el lote activo.
-					{:else}
-						Últimos lotes enviados en esta sesión.
-					{/if}
-				</Card.Description>
-			</Card.Header>
-			<Card.Content class="space-y-1.5 pt-0">
-				{#each queueItems as q}
-					<div class="bg-muted/30 border-border/60 flex items-center justify-between gap-2 rounded border px-2.5 py-2 text-xs">
-						<div class="min-w-0">
-							<p class="truncate font-mono text-[11px]" title={q.jobId}>{q.jobId}</p>
-							<p class="text-muted-foreground truncate">{q.label}</p>
-						</div>
-						<div class="flex items-center gap-2">
-							<Badge variant="secondary" class="h-5 text-[10px]">
-								{q.status === "preparing"
-									? "Preparando"
-									: q.status === "queued"
-										? "En cola"
-										: q.status === "running"
-											? "Firmando"
-											: q.status === "cancelling"
-												? "Cancelando"
-												: q.status === "cancelled"
-													? "Cancelado"
-													: q.status === "finished"
-														? "Terminado"
-														: "Error"}
-							</Badge>
-							<span class="text-muted-foreground tabular-nums text-[11px]">{q.progressPct}%</span>
-						</div>
-					</div>
-				{/each}
-			</Card.Content>
-		</Card.Root>
-	{/if}
+	<BatchQueuePanel showWizardLockHint />
 
 	<nav class="space-y-2" aria-label="Pasos del asistente de firma">
 		<div class="grid grid-cols-5 gap-0.5 sm:gap-1">
@@ -692,7 +618,7 @@
 		{/if}
 		<div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
 			{#if wizardStep === 5}
-				{#if activeJobId && !executionFinished}
+				{#if batchQueue.activeBatchJobId && !executionFinished}
 					<Button type="button" variant="outline" size="sm" onclick={() => cancelJob()}>Cancelar cola</Button>
 				{/if}
 				<Button
@@ -708,7 +634,7 @@
 					type="button"
 					variant="outline"
 					size="sm"
-					disabled={busy || !activeJobId}
+					disabled={busy || !batchQueue.activeBatchJobId}
 					onclick={() => cancelJob()}
 				>
 					Cancelar cola
@@ -1073,9 +999,9 @@
 							<Card.Description class="text-xs leading-relaxed">
 								Encolando y firmando los PDF; el registro se actualiza al avanzar cada archivo.
 							</Card.Description>
-							{#if activeJobId}
+							{#if batchQueue.activeBatchJobId}
 								<p class="text-muted-foreground pt-1 font-mono text-[10px]">
-									ID trabajo: <span title={activeJobId}>{activeJobId}</span>
+									ID trabajo: <span title={batchQueue.activeBatchJobId}>{batchQueue.activeBatchJobId}</span>
 								</p>
 							{/if}
 						</div>
@@ -1113,9 +1039,9 @@
 						</div>
 					</div>
 				{/if}
-				{#if activeJobId && executionFinished}
+				{#if batchQueue.activeBatchJobId && executionFinished}
 					<p class="text-muted-foreground pt-2 font-mono text-[10px]">
-						ID trabajo: <span title={activeJobId}>{activeJobId}</span>
+						ID trabajo: <span title={batchQueue.activeBatchJobId}>{batchQueue.activeBatchJobId}</span>
 					</p>
 				{/if}
 			</Card.Header>

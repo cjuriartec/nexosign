@@ -2,12 +2,14 @@
 	import { page } from "$app/state";
 	import NexoLogo from "@lucide/svelte/icons/shield-check";
 	import FilePenLineIcon from "@lucide/svelte/icons/file-pen-line";
+	import ListOrderedIcon from "@lucide/svelte/icons/list-ordered";
 	import IdCardIcon from "@lucide/svelte/icons/id-card";
 	import SettingsIcon from "@lucide/svelte/icons/settings";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 
 	const nav = [
 		{ href: "/sign", label: "Firmar", icon: FilePenLineIcon },
+		{ href: "/queue", label: "Colas", icon: ListOrderedIcon },
 		{ href: "/certificates", label: "Certificados", icon: IdCardIcon },
 		{ href: "/settings", label: "Ajustes", icon: SettingsIcon },
 	];
