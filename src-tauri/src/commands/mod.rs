@@ -29,6 +29,11 @@ type Pkcs11Store = Arc<Pkcs11TokenManager>;
 #[derive(Clone)]
 pub struct BatchCancelRegistry(pub Arc<Mutex<HashMap<String, CancellationToken>>>);
 
+/// Mismo `Arc` que [`crate::adapters::http::state::SharedState::batch_signed_outputs`] (descargas HTTP).
+#[derive(Clone)]
+pub struct BatchSignedOutputsStore(pub Arc<Mutex<HashMap<String, Vec<PathBuf>>>>);
+
+
 /// PKCS#11 bloquea el hilo (lector/tariffa); no debe ejecutarse en el runtime async de Tauri.
 async fn pkcs11_blocking<R: Send + 'static>(
     f: impl FnOnce() -> Result<R, String> + Send + 'static,
@@ -166,6 +171,47 @@ pub fn get_batch_sign_intent(
 #[tauri::command]
 pub fn get_local_api_base_url() -> String {
     format!("http://127.0.0.1:{LOCAL_API_PORT}")
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearLocalApiTempCacheResult {
+    /// Se borró `{TMP}/nexosign-intent-uploads`.
+    pub intent_uploads_removed: bool,
+    /// Se borró `{TMP}/nexosign-batch-signed`.
+    pub batch_signed_removed: bool,
+    /// Se vació el mapa en RAM de rutas para `GET …/files/{i}`.
+    pub signed_job_paths_cleared: bool,
+}
+
+/// Quita carpetas temporales usadas por la API local (subidas multipart y PDF firmados para descarga)
+/// y sincroniza el mapa en memoria de la API para que el manifiesto no apunte a ficheros ya borrados.
+#[tauri::command]
+pub fn clear_local_api_temp_cache(
+    store: tauri::State<'_, BatchSignedOutputsStore>,
+) -> Result<ClearLocalApiTempCacheResult, String> {
+    let mut out = ClearLocalApiTempCacheResult {
+        intent_uploads_removed: false,
+        batch_signed_removed: false,
+        signed_job_paths_cleared: false,
+    };
+    {
+        let mut g = store.0.lock().map_err(|e| e.to_string())?;
+        g.clear();
+        out.signed_job_paths_cleared = true;
+    }
+    let tmp = std::env::temp_dir();
+    let intent = tmp.join("nexosign-intent-uploads");
+    if intent.exists() {
+        std::fs::remove_dir_all(&intent).map_err(|e| format!("nexosign-intent-uploads: {e}"))?;
+        out.intent_uploads_removed = true;
+    }
+    let signed = tmp.join("nexosign-batch-signed");
+    if signed.exists() {
+        std::fs::remove_dir_all(&signed).map_err(|e| format!("nexosign-batch-signed: {e}"))?;
+        out.batch_signed_removed = true;
+    }
+    Ok(out)
 }
 
 #[tauri::command]

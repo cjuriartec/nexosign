@@ -147,6 +147,56 @@ fn cleanup_staging_paths(paths: Vec<PathBuf>) {
     }
 }
 
+/// Si las salidas firmadas quedaron dentro de un directorio de staging que se va a borrar,
+/// muévelas a `TMP/nexosign-batch-signed/<job_id>/` antes de [`cleanup_staging_paths`].
+/// Así `GET …/files/{i}` sigue encontrando el PDF tras eliminar el staging del intent multipart.
+fn relocate_signed_outputs_from_staging(job_id: &str, outputs: &mut Vec<PathBuf>, staging_roots: &[PathBuf]) {
+    if staging_roots.is_empty() || outputs.is_empty() {
+        return;
+    }
+
+    let dest_base = std::env::temp_dir().join("nexosign-batch-signed").join(job_id);
+    if let Err(e) = std::fs::create_dir_all(&dest_base) {
+        tracing::warn!(error = %e, job_id = %job_id, "crear directorio para salidas batch fuera de staging");
+        return;
+    }
+
+    for (i, p) in outputs.iter_mut().enumerate() {
+        if !staging_roots
+            .iter()
+            .any(|root| root.is_dir() && p.starts_with(root))
+        {
+            continue;
+        }
+
+        let fname = p.file_name().unwrap_or_default();
+        let mut dest = dest_base.join(fname);
+        if dest.exists() {
+            dest = dest_base.join(format!("{}_{}", i, fname.to_string_lossy()));
+        }
+
+        match std::fs::rename(p.as_path(), &dest) {
+            Ok(()) => {
+                *p = dest;
+            }
+            Err(e_rename) => match std::fs::copy(p.as_path(), &dest) {
+                Ok(_) => {
+                    let _ = std::fs::remove_file(p.as_path());
+                    *p = dest;
+                }
+                Err(e_copy) => {
+                    tracing::warn!(
+                        rename = %e_rename,
+                        copy = %e_copy,
+                        src = %p.display(),
+                        "no se pudo mover salida firmada fuera de staging"
+                    );
+                }
+            },
+        }
+    }
+}
+
 fn gc_terminal_batch_ram(
     now: i64,
     job_snapshots: &Arc<Mutex<HashMap<String, BatchJobSnapshot>>>,
@@ -300,7 +350,7 @@ pub fn spawn_batch_worker(
                     seal_png: job.seal_png,
                 };
                 let signer = Arc::new(Pkcs11PdfPadesSigner { token: token_c });
-                let outputs = process_batch(input, signer, notifier);
+                let mut outputs = process_batch(input, signer, notifier);
                 let cancelled = cancel_token.is_cancelled();
                 let qpath = qdb.as_ref().map(|a| a.as_path());
                 finalize_batch_job(
@@ -311,6 +361,7 @@ pub fn spawn_batch_worker(
                     outputs.len(),
                     inputs_len,
                 );
+                relocate_signed_outputs_from_staging(&jid, &mut outputs, &cleanup);
                 if let Ok(mut m) = signed_outputs_c.lock() {
                     m.insert(jid.clone(), outputs);
                 }
@@ -327,6 +378,38 @@ pub fn spawn_batch_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relocate_moves_signed_file_out_of_staging_before_cleanup() {
+        let staging = std::env::temp_dir().join(format!(
+            "nexosign-staging-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&staging).unwrap();
+        let signed = staging.join("doc_firmado.pdf");
+        std::fs::write(&signed, b"%PDF fake signed").unwrap();
+
+        let mut outputs = vec![signed.clone()];
+        let job_id = "job-test-relocate";
+        relocate_signed_outputs_from_staging(job_id, &mut outputs, &[staging.clone()]);
+
+        assert_ne!(outputs[0], signed);
+        assert!(outputs[0].exists(), "destino existe");
+        let expected_root = std::env::temp_dir()
+            .join("nexosign-batch-signed")
+            .join(job_id);
+        assert!(outputs[0].starts_with(&expected_root));
+
+        cleanup_staging_paths(vec![staging.clone()]);
+        assert!(!staging.exists(), "staging borrado");
+        assert!(
+            outputs[0].exists(),
+            "PDF firmado sigue tras cleanup del staging"
+        );
+
+        let _ = std::fs::remove_file(&outputs[0]);
+        let _ = std::fs::remove_dir_all(expected_root);
+    }
 
     #[test]
     fn cleanup_staging_paths_removes_existing_file_and_dir() {

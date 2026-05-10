@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::domain::pending_batch_intent::PendingBatchIntent;
 use crate::adapters::http::state::PendingBatchIntents;
-use crate::commands::BatchCancelRegistry;
+use crate::commands::{BatchCancelRegistry, BatchSignedOutputsStore};
 
 static INIT_TRACING: Once = Once::new();
 
@@ -87,6 +87,7 @@ pub fn run() {
             commands::partition_batch_pdf_paths,
             commands::batch_queue_history::load_batch_queue_history,
             commands::batch_queue_history::save_batch_queue_history,
+            commands::clear_local_api_temp_cache,
         ])
         .setup(move |app| {
             let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -125,6 +126,12 @@ pub fn run() {
 
             app.manage(OriginDbPath(Arc::new(db_path.clone())));
 
+            let batch_signed_outputs: Arc<
+                Mutex<HashMap<String, Vec<std::path::PathBuf>>>,
+            > = Arc::new(Mutex::new(HashMap::new()));
+
+            app.manage(BatchSignedOutputsStore(batch_signed_outputs.clone()));
+
             let emit_for_deep_link = app.handle().clone();
             app.handle().deep_link().on_open_url(move |event| {
                 let urls: Vec<String> =
@@ -143,6 +150,7 @@ pub fn run() {
                 batch_cancel.clone(),
                 pending_batch_intents.clone(),
                 db_path.clone(),
+                batch_signed_outputs.clone(),
             );
 
             Ok(())

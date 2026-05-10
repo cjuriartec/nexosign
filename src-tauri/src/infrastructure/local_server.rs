@@ -12,6 +12,7 @@ use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::domain::allowed_origins::AllowedOrigins;
 
 /// Arranca el servidor Axum en segundo plano (`127.0.0.1:14500`).
+/// `batch_signed_outputs` debe ser el mismo `Arc` que [`commands::BatchSignedOutputsStore`].
 pub fn spawn_local_api(
     handle: AppHandle,
     origins: Arc<RwLock<AllowedOrigins>>,
@@ -21,10 +22,10 @@ pub fn spawn_local_api(
     >,
     pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
     queue_sqlite_path: PathBuf,
+    batch_signed_outputs: Arc<Mutex<HashMap<String, Vec<PathBuf>>>>,
 ) {
     let intent_request_to_job = Arc::new(Mutex::new(HashMap::new()));
     let (tx, rx) = tokio::sync::mpsc::channel(crate::infrastructure::batch_runtime::BATCH_QUEUE_CAPACITY);
-    let batch_signed_outputs = Arc::new(Mutex::new(HashMap::new()));
     let batch_job_snapshots = Arc::new(Mutex::new(HashMap::new()));
     crate::adapters::worker::batch::spawn_batch_worker(
         rx,

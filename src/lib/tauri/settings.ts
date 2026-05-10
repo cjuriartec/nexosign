@@ -53,3 +53,14 @@ export async function setPkcs11PreferredModule(path: string | null): Promise<voi
 export async function listPkcs11EffectiveModulePaths(): Promise<string[]> {
 	return invoke<string[]>("list_pkcs11_effective_module_paths");
 }
+
+export type ClearLocalApiTempCacheResult = {
+	intentUploadsRemoved: boolean;
+	batchSignedRemoved: boolean;
+	signedJobPathsCleared: boolean;
+};
+
+/** Borra carpetas temporales de la API local y vacía rutas de descarga HTTP en RAM. */
+export async function clearLocalApiTempCache(): Promise<ClearLocalApiTempCacheResult> {
+	return invoke<ClearLocalApiTempCacheResult>("clear_local_api_temp_cache");
+}

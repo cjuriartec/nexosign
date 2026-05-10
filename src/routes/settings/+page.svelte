@@ -14,6 +14,7 @@
 		listAllowedOrigins,
 		removeAllowedOrigin,
 		getLocalApiBaseUrl,
+		clearLocalApiTempCache,
 		listPkcs11DriverPaths,
 		addPkcs11DriverPath,
 		removePkcs11DriverPath,
@@ -25,6 +26,7 @@
 	} from "$lib/tauri/settings";
 	import { cn } from "$lib/utils.js";
 	import { isTauriRuntime } from "$lib/tauri/env";
+	import { ask } from "@tauri-apps/plugin-dialog";
 	import { LOCAL_API_BASE } from "$lib/config/constants";
 	import { fetchHealth, fetchPing } from "$lib/api/local-api";
 	import * as ScrollArea from "$lib/components/ui/scroll-area/index.js";
@@ -65,6 +67,7 @@
 	let pathGhostX = $state(0);
 	let pathGhostY = $state(0);
 	let pathListEl = $state<HTMLElement | null>(null);
+	let cacheClearing = $state(false);
 	const PATH_DRAG_THRESHOLD = 4;
 
 	async function probeActiveModulePath() {
@@ -298,6 +301,33 @@
 		}
 	}
 
+	async function confirmClearApiCache() {
+		if (!isTauriRuntime()) return;
+		const ok = await ask(
+			"Se eliminarán las carpetas temporales nexosign-intent-uploads y nexosign-batch-signed (subidas del portal y PDF listos para descarga por HTTP). Las rutas en memoria del servicio local se vacían para que no queden enlaces rotos. ¿Continuar?",
+			{
+				title: "Limpiar caché del servicio local",
+				kind: "warning",
+			},
+		);
+		if (!ok) return;
+		cacheClearing = true;
+		try {
+			const r = await clearLocalApiTempCache();
+			const parts: string[] = [];
+			if (r.intentUploadsRemoved) parts.push("subidas intent");
+			if (r.batchSignedRemoved) parts.push("PDF firmados temporales");
+			if (r.signedJobPathsCleared) parts.push("mapa de descargas");
+			toast.success(
+				parts.length > 0 ? `Limpiado: ${parts.join(", ")}` : "No había carpetas que borrar",
+			);
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			cacheClearing = false;
+		}
+	}
+
 	async function refreshDiagnostics() {
 		diagLoading = true;
 		try {
@@ -360,7 +390,7 @@
 	<div>
 		<h1 class="text-3xl font-semibold tracking-tight">Ajustes</h1>
 		<p class="text-muted-foreground mt-1 text-sm">
-			Tema, PKCS#11, sitios permitidos y comprobación del servicio.
+			Tema, PKCS#11, sitios permitidos, caché del servicio local y comprobación del servicio.
 		</p>
 	</div>
 
@@ -604,6 +634,25 @@
 			<p class="text-muted-foreground text-xs">
 				Enlaces <code class="bg-muted rounded px-1">nexosign://</code> pueden abrir esta app desde el navegador.
 			</p>
+			{#if isTauriRuntime()}
+				<div class="border-muted space-y-2 border-t pt-3">
+					<p class="text-sm font-medium">Caché temporal (API local)</p>
+					<p class="text-muted-foreground text-xs leading-relaxed">
+						Subidas por multipart del portal y PDF firmados guardados para descarga HTTP pueden acumularse
+						bajo el directorio temporal del sistema. Limpiar libera espacio; los trabajos ya expuestos por URL
+						dejarán de poder descargarse hasta una nueva firma.
+					</p>
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						disabled={cacheClearing}
+						onclick={() => void confirmClearApiCache()}
+					>
+						{cacheClearing ? "Limpiando…" : "Limpiar caché del servicio local"}
+					</Button>
+				</div>
+			{/if}
 		</Card.Content>
 	</Card.Root>
 
