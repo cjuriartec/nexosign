@@ -3,7 +3,8 @@ pub mod state;
 
 mod pending_batch_intent;
 
-pub use pending_batch_intent::{PendingBatchIntent, PENDING_INTENT_TTL_SECS};
+pub use pending_batch_intent::PendingBatchIntent;
+pub use crate::ports::QUEUE_MAX_WALL_CLOCK_SECS;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -815,6 +816,9 @@ async fn post_batch_sign(
                         error: None,
                     },
                 );
+                if let (Some(ref db_arc), Some(ts)) = (&state.queue_sqlite_path, queued_at_unix) {
+                    let _ = queue_store::upsert_batch_job_enqueue(db_arc.as_ref(), &job_id, ts);
+                }
             }
             Json(BatchSignResponse {
                 job_id,

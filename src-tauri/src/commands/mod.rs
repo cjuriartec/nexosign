@@ -503,7 +503,7 @@ mod tests {
             inputs: vec![std::path::PathBuf::from("/tmp/a.pdf")],
             output_dir: None,
             staging_dir: Some(staging.clone()),
-            created_unix: now.saturating_sub(crate::adapters::http::PENDING_INTENT_TTL_SECS + 5),
+            created_unix: now.saturating_sub(crate::ports::QUEUE_MAX_WALL_CLOCK_SECS + 5),
         };
         let store = Arc::new(Mutex::new(HashMap::from([(rid.clone(), ent)])));
 

@@ -3,8 +3,7 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Tiempo máximo para abrir la app y confirmar (segundos).
-pub const PENDING_INTENT_TTL_SECS: u64 = 30 * 60;
+use crate::ports::QUEUE_MAX_WALL_CLOCK_SECS;
 
 #[derive(Clone)]
 pub struct PendingBatchIntent {
@@ -52,6 +51,6 @@ impl PendingBatchIntent {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        now.saturating_sub(self.created_unix) > PENDING_INTENT_TTL_SECS
+        now.saturating_sub(self.created_unix) > QUEUE_MAX_WALL_CLOCK_SECS
     }
 }

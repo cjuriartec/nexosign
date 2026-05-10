@@ -314,7 +314,7 @@
 	async function applyPendingIntent(intentParam: string) {
 		const payload = await getBatchSignIntent(intentParam);
 		if (!payload) {
-			toast.error("La solicitud no existe o caducó (30 min). Abre el enlace desde la integración de nuevo.");
+			toast.error("La solicitud no existe o caducó (~5 min). Abre el enlace desde la integración de nuevo.");
 			return;
 		}
 		paths = await partitionPaths([...payload.inputs]);

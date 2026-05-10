@@ -2,8 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Tiempo máximo desde el encolado hasta que el trabajo debe terminar; si no, se cancela (watchdog).
-pub const BATCH_JOB_MAX_WALL_CLOCK_SECS: i64 = 5 * 60;
+/// Ventana máxima (segundos) para intents pendientes (`created_unix` en BD) y trabajos batch encolados.
+pub const QUEUE_MAX_WALL_CLOCK_SECS: u64 = 5 * 60;
+
+/// Misma política en `i64` para timestamps Unix y SQLite (`batch_job_enqueue`).
+pub const BATCH_JOB_MAX_WALL_CLOCK_SECS: i64 = QUEUE_MAX_WALL_CLOCK_SECS as i64;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

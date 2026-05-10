@@ -72,7 +72,7 @@ La API está en **`http://127.0.0.1:14500`** **solo con la aplicación en ejecuc
 | **`GET /api/v1/batch/jobs/{job_id}/signed-files`** | Cuando el lote **ha terminado**: JSON con `files[]` (`index`, `filename`, `href`) para descargar cada PDF firmado **desde el navegador** (cabecera **Origin** igual que en los POST). |
 | **`GET /api/v1/batch/jobs/{job_id}/files/{i}`** | Respuesta **`application/pdf`** del firmado *i*-ésimo (mismo orden que `inputs` / solo los firmados con éxito). |
 | **`GET /api/v1/batch/sign/intent/{request_id}/status`** | **Sondeo** tras el intent: `phase` = `awaiting_confirmation` \| `processing` \| `completed`, `job_id`, `manifest_href`, `signed_file_count`. Sin servidor propio: tu página hace polling a `127.0.0.1:14500` con el mismo **Origin**. |
-| **`POST /api/v1/batch/sign/intent`** | **No firma aún.** **`application/json`** (`inputs`: rutas absolutas) **o** **`multipart/form-data`** con el campo repetible **`files`** (un PDF por parte). Los PDF subidos van a staging temporal; responde **`request_id`** + **`deep_link`**. TTL ~30 min. |
+| **`POST /api/v1/batch/sign/intent`** | **No firma aún.** **`application/json`** (`inputs`: rutas absolutas) **o** **`multipart/form-data`** con el campo repetible **`files`** (un PDF por parte). Los PDF subidos van a staging temporal; responde **`request_id`** + **`deep_link`**. Si no se confirma a tiempo, caduca (misma ventana de ~5 min que el trabajo de firma encolado). |
 | **`GET /health`** | Estado del servicio (sin `Origin`). |
 | **`POST /api/v1/ping`** | Eco para pruebas. |
 | **`NEXOSIGN_BATCH_OUTPUT_DIR`** | Variable de entorno: fuerza carpeta de salida global `{stem}_firmado.pdf`. |

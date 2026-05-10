@@ -32,10 +32,12 @@ pub fn spawn_local_api(
         batch_cancel.clone(),
         batch_signed_outputs.clone(),
         batch_job_snapshots.clone(),
+        Some(Arc::new(queue_sqlite_path.clone())),
     );
     crate::adapters::worker::batch::spawn_batch_job_timeout_watchdog(
         batch_cancel.clone(),
         batch_job_snapshots.clone(),
+        Arc::new(queue_sqlite_path.clone()),
         Some(handle.clone()),
     );
 

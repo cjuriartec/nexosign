@@ -21,7 +21,7 @@ export type BatchQueueSnapshot = {
 	activeIntentRequestId: string | null;
 };
 
-/** Carga desde `app_data_dir/batch_queue_history.json`. */
+/** Carga snapshot de colas desde SQLite (`allowed_origins.sqlite`, tablas `queue_*`). */
 export async function backendLoadBatchQueueHistory(): Promise<BatchQueueSnapshot | null> {
 	if (!isTauriRuntime()) return null;
 	return invoke<BatchQueueSnapshot | null>("load_batch_queue_history");

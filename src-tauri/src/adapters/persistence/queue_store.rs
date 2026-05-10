@@ -78,6 +78,10 @@ pub fn ensure_queue_schema(conn: &Connection) -> rusqlite::Result<()> {
             staging_dir TEXT,
             created_unix INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS batch_job_enqueue (
+            job_id TEXT PRIMARY KEY NOT NULL,
+            queued_at_unix INTEGER NOT NULL
+        );
         "#,
     )?;
     Ok(())
@@ -126,6 +130,66 @@ pub fn delete_intent_payload(db_path: &Path, request_id: &str) -> Result<(), Str
     conn.execute(
         "DELETE FROM intent_pending_payload WHERE request_id = ?1",
         params![request_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn upsert_batch_job_enqueue(
+    db_path: &Path,
+    job_id: &str,
+    queued_at_unix: i64,
+) -> Result<(), String> {
+    let conn = open_app_db(db_path).map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO batch_job_enqueue (job_id, queued_at_unix) VALUES (?1, ?2)",
+        params![job_id, queued_at_unix],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn delete_batch_job_enqueue(db_path: &Path, job_id: &str) -> Result<(), String> {
+    let conn = open_app_db(db_path).map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM batch_job_enqueue WHERE job_id = ?1",
+        params![job_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// `job_id` cuyo encolado en SQLite es anterior a `cutoff_unix` (reloj de pared del vigía).
+pub fn list_batch_job_ids_enqueued_before(
+    db_path: &Path,
+    cutoff_unix: i64,
+) -> Result<Vec<String>, String> {
+    if !db_path.exists() {
+        return Ok(vec![]);
+    }
+    let conn = open_app_db(db_path).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT job_id FROM batch_job_enqueue WHERE queued_at_unix < ?1")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![cutoff_unix], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+/// Limpia filas de encolados anteriores a un corte (p. ej. arranque tras cierre inesperado).
+pub fn purge_batch_job_enqueue_before(db_path: &Path, cutoff_unix: i64) -> Result<(), String> {
+    if !db_path.exists() {
+        return Ok(());
+    }
+    let conn = open_app_db(db_path).map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM batch_job_enqueue WHERE queued_at_unix < ?1",
+        params![cutoff_unix],
     )
     .map_err(|e| e.to_string())?;
     Ok(())

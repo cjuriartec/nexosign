@@ -109,6 +109,16 @@ pub fn run() {
                 tracing::warn!(error = %e, "hidratar intents pendientes desde SQLite");
             }
 
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let stale_cutoff =
+                now_secs.saturating_sub(crate::ports::BATCH_JOB_MAX_WALL_CLOCK_SECS);
+            if let Err(e) = queue_store::purge_batch_job_enqueue_before(&db_path, stale_cutoff) {
+                tracing::warn!(error = %e, "purgar batch_job_enqueue obsoleto");
+            }
+
             app.manage(OriginDbPath(Arc::new(db_path.clone())));
 
             let emit_for_deep_link = app.handle().clone();

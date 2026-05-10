@@ -1,7 +1,7 @@
 //! Cola `mpsc` y worker único para firma batch (PKCS#11 no paralelizable).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -79,30 +79,42 @@ impl ProgressNotifier for SharedBatchProgress {
 
 fn finalize_batch_job(
     snapshots: &Arc<Mutex<HashMap<String, BatchJobSnapshot>>>,
+    queue_db: Option<&Path>,
     job_id: &str,
     cancelled: bool,
     outputs_len: usize,
     inputs_len: usize,
 ) {
+    fn clear_enqueue(db: Option<&Path>, job_id: &str) {
+        if let Some(p) = db {
+            let _ = crate::adapters::persistence::queue_store::delete_batch_job_enqueue(p, job_id);
+        }
+    }
+
     let Ok(mut g) = snapshots.lock() else {
+        clear_enqueue(queue_db, job_id);
         return;
     };
     let Some(s) = g.get_mut(job_id) else {
+        clear_enqueue(queue_db, job_id);
         return;
     };
     if cancelled {
         s.phase = BatchJobPhase::Cancelled;
+        clear_enqueue(queue_db, job_id);
         return;
     }
-    // El watchdog pudo marcar `cancelled` por tiempo; no sobrescribir con completed/failed.
     if s.phase == BatchJobPhase::Cancelled {
+        clear_enqueue(queue_db, job_id);
         return;
     }
     if outputs_len == 0 && inputs_len > 0 && s.actual == 0 && s.error.is_some() {
         s.phase = BatchJobPhase::Failed;
+        clear_enqueue(queue_db, job_id);
         return;
     }
     s.phase = BatchJobPhase::Completed;
+    clear_enqueue(queue_db, job_id);
 }
 
 fn cleanup_staging_paths(paths: Vec<PathBuf>) {
@@ -119,11 +131,12 @@ fn cleanup_staging_paths(paths: Vec<PathBuf>) {
     }
 }
 
-/// Vigía trabajos `queued`/`running`: si pasan [`BATCH_JOB_MAX_WALL_CLOCK_SECS`] desde el encolado,
+/// Vigía trabajos en SQLite `batch_job_enqueue`: si el encolado supera [`BATCH_JOB_MAX_WALL_CLOCK_SECS`],
 /// cancela el token y marca la instantánea como `cancelled`.
 pub fn spawn_batch_job_timeout_watchdog(
     batch_cancel: Arc<Mutex<HashMap<String, CancellationToken>>>,
     job_snapshots: Arc<Mutex<HashMap<String, BatchJobSnapshot>>>,
+    queue_sqlite_path: Arc<PathBuf>,
     app: Option<AppHandle>,
 ) {
     use tokio::time::{interval, Duration, MissedTickBehavior};
@@ -139,27 +152,18 @@ pub fn spawn_batch_job_timeout_watchdog(
                 .unwrap_or(0);
             let cutoff = now.saturating_sub(BATCH_JOB_MAX_WALL_CLOCK_SECS);
 
-            let ids: Vec<String> = {
-                let Ok(guard) = job_snapshots.lock() else {
+            let stale_ids = match crate::adapters::persistence::queue_store::list_batch_job_ids_enqueued_before(
+                queue_sqlite_path.as_ref(),
+                cutoff,
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, "watchdog listar batch_job_enqueue");
                     continue;
-                };
-                guard
-                    .iter()
-                    .filter_map(|(id, snap)| {
-                        if !matches!(snap.phase, BatchJobPhase::Queued | BatchJobPhase::Running) {
-                            return None;
-                        }
-                        let q = snap.queued_at_unix?;
-                        if q < cutoff {
-                            Some(id.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
+                }
             };
 
-            for id in ids {
+            for id in stale_ids {
                 if let Ok(reg) = batch_cancel.lock() {
                     if let Some(t) = reg.get(&id) {
                         t.cancel();
@@ -173,6 +177,10 @@ pub fn spawn_batch_job_timeout_watchdog(
                         }
                     }
                 }
+                let _ = crate::adapters::persistence::queue_store::delete_batch_job_enqueue(
+                    queue_sqlite_path.as_ref(),
+                    &id,
+                );
                 if let Some(ref h) = app {
                     let _ = h.emit(
                         "progreso",
@@ -200,6 +208,7 @@ pub fn spawn_batch_worker(
     cancel_registry: Arc<Mutex<HashMap<String, CancellationToken>>>,
     signed_outputs: Arc<Mutex<HashMap<String, Vec<PathBuf>>>>,
     job_snapshots: Arc<Mutex<HashMap<String, BatchJobSnapshot>>>,
+    queue_sqlite_path: Option<Arc<PathBuf>>,
 ) {
     // Debe usar el runtime de Tauri (`setup` no tiene Tokio activo en el hilo actual).
     tauri::async_runtime::spawn(async move {
@@ -211,6 +220,7 @@ pub fn spawn_batch_worker(
             let cleanup = job.cleanup_paths.clone();
             let signed_outputs_c = signed_outputs.clone();
             let snapshots_c = job_snapshots.clone();
+            let qdb = queue_sqlite_path.clone();
             let run = tokio::task::spawn_blocking(move || {
                 let inputs_len = job.inputs.len();
                 let cancel_token = job.cancel.clone();
@@ -230,7 +240,15 @@ pub fn spawn_batch_worker(
                 };
                 let outputs = process_batch(input, token_c, notifier);
                 let cancelled = cancel_token.is_cancelled();
-                finalize_batch_job(&snapshots_c, &jid, cancelled, outputs.len(), inputs_len);
+                let qpath = qdb.as_ref().map(|a| a.as_path());
+                finalize_batch_job(
+                    &snapshots_c,
+                    qpath,
+                    &jid,
+                    cancelled,
+                    outputs.len(),
+                    inputs_len,
+                );
                 if let Ok(mut m) = signed_outputs_c.lock() {
                     m.insert(jid.clone(), outputs);
                 }
