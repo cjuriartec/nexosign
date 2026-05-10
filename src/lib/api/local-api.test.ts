@@ -4,6 +4,7 @@ import {
 	fetchPing,
 	postBatchSign,
 	postBatchSignIntent,
+	postBatchSignIntentFormData,
 } from "./local-api";
 
 describe("local-api", () => {
@@ -128,6 +129,28 @@ describe("local-api", () => {
 				body: JSON.stringify({ inputs: ["/abs/doc.pdf"] }),
 			}),
 		);
+	});
+
+	it("postBatchSignIntentFormData no envía Content-Type (FormData) y parsea", async () => {
+		const fd = new FormData();
+		const blob = new Blob(["%PDF-1.4\n"], { type: "application/pdf" });
+		fd.append("files", blob, "a.pdf");
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				request_id: "r1",
+				deep_link: "nexosign://sign?intent=r1",
+			}),
+		});
+		const r = await postBatchSignIntentFormData(fd, "http://mock.test");
+		expect(r.request_id).toBe("r1");
+		const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock
+			.calls[0] as [string, RequestInit];
+		const init = call[1];
+		expect(init.method).toBe("POST");
+		expect(init.body).toBe(fd);
+		const h = init.headers as Record<string, string>;
+		expect(h["Content-Type"]).toBeUndefined();
 	});
 
 	it("postBatchSignIntent lanza si no ok", async () => {

@@ -121,7 +121,7 @@ export async function postBatchSign(
 	return res.json() as Promise<BatchSignResponse>;
 }
 
-/** POST /api/v1/batch/sign/intent — registra PDFs para firmar tras el asistente en la app (no encola aún). */
+/** POST /api/v1/batch/sign/intent — registra PDFs para firmar tras el asistente en la app (no encola aún). Body JSON con rutas locales. */
 export async function postBatchSignIntent(
 	body: BatchSignIntentBody,
 	baseUrl: string = LOCAL_API_BASE,
@@ -140,6 +140,30 @@ export async function postBatchSignIntent(
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({}));
 		throw new LocalApiHttpError("Registro de intención de firma", res.status, err);
+	}
+	return res.json() as Promise<BatchSignIntentResponse>;
+}
+
+/**
+ * POST /api/v1/batch/sign/intent con multipart (`file` / `files` + `output_dir` opcional).
+ * No establecer `Content-Type` manualmente: el navegador añade boundary en FormData.
+ */
+export async function postBatchSignIntentFormData(
+	formData: FormData,
+	baseUrl: string = LOCAL_API_BASE,
+): Promise<BatchSignIntentResponse> {
+	const headers: Record<string, string> = {};
+	if (typeof window === "undefined") {
+		headers["Origin"] = "http://localhost:1420";
+	}
+	const res = await fetch(`${baseUrl}/api/v1/batch/sign/intent`, {
+		method: "POST",
+		headers,
+		body: formData,
+	});
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({}));
+		throw new LocalApiHttpError("Registro de intención de firma (multipart)", res.status, err);
 	}
 	return res.json() as Promise<BatchSignIntentResponse>;
 }

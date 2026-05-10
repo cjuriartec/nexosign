@@ -137,6 +137,45 @@ test.describe("API local opcional", () => {
 		);
 	});
 
+	test("POST /api/v1/batch/sign/intent multipart (archivo en memoria)", async ({
+		request,
+	}) => {
+		test.skip(
+			!process.env.NEXOSIGN_E2E_API,
+			"Sin NEXOSIGN_E2E_API: este test no se ejecuta.",
+		);
+
+		let res: Awaited<ReturnType<typeof request.post>>;
+		try {
+			res = await request.post(`${BASE}/api/v1/batch/sign/intent`, {
+				multipart: {
+					files: {
+						name: "e2e-multipart.pdf",
+						mimeType: "application/pdf",
+						buffer: Buffer.from("%PDF-1.4\n"),
+					},
+				},
+				headers: {
+					Origin: "http://localhost:1420",
+				},
+				timeout: 10_000,
+			});
+		} catch {
+			test.skip(
+				true,
+				"No hay servidor en 127.0.0.1:14500. Ejecuta primero: npm run tauri dev",
+			);
+			return;
+		}
+
+		expect(res.ok(), `HTTP ${res.status()}`).toBeTruthy();
+		const body = await res.json();
+		expect(body.request_id).toBeTruthy();
+		expect(body.deep_link).toBe(
+			`nexosign://sign?intent=${body.request_id}`,
+		);
+	});
+
 	test("POST intent y luego batch con intent_request_id encola el trabajo", async ({
 		request,
 	}) => {

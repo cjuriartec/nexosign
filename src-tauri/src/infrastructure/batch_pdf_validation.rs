@@ -1,9 +1,50 @@
 //! Validación compartida de rutas PDF para lotes (API HTTP local y comandos Tauri).
 
+use std::fs::File;
+use std::io::Read;
 use std::path::PathBuf;
 
 /// Tamaño máximo por PDF en un lote (50 MiB).
 pub const MAX_BATCH_PDF_BYTES: u64 = 50 * 1024 * 1024;
+
+/// Número máximo de PDF por intención multipart (y techo de suma de tamaños).
+pub const MAX_PDFS_PER_BATCH_INTENT: usize = 20;
+
+/// Suma máxima de tamaños de PDF en un intent multipart (20 × 50 MiB).
+pub const MAX_TOTAL_BATCH_INTENT_BYTES: u64 = MAX_BATCH_PDF_BYTES * MAX_PDFS_PER_BATCH_INTENT as u64;
+
+/// Cabecera mágica de un PDF en offset 0 (PDF 1.7).
+const PDF_MAGIC: &[u8] = b"%PDF";
+
+/// Comprueba prefijo `%PDF` y tamaño por archivo.
+pub fn validate_pdf_magic_and_size(len: u64, prefix: &[u8]) -> Result<(), String> {
+    if len > MAX_BATCH_PDF_BYTES {
+        return Err("demasiado grande (máx. 50 MiB por archivo)".into());
+    }
+    validate_pdf_magic_prefix(prefix)
+}
+
+/// Primeros bytes deben ser `%PDF` (sin permitir basura previa en subidas).
+pub fn validate_pdf_magic_prefix(prefix: &[u8]) -> Result<(), String> {
+    if prefix.len() < PDF_MAGIC.len() {
+        return Err("cabecera PDF incompleta (se espera %PDF)".into());
+    }
+    if &prefix[..PDF_MAGIC.len()] != PDF_MAGIC {
+        return Err("no es un PDF válido (cabecera %PDF esperada)".into());
+    }
+    Ok(())
+}
+
+/// Lee los primeros bytes de un fichero para validar magia PDF tras comprobar tamaño en disco.
+fn read_pdf_prefix(path: &PathBuf, max_read: usize) -> Result<Vec<u8>, String> {
+    let mut f = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut buf = vec![0u8; max_read];
+    let n = f
+        .read(&mut buf)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    buf.truncate(n);
+    Ok(buf)
+}
 
 /// Una ruta del lote que no pasó la validación (la UI puede cargar el resto).
 #[derive(Debug, Clone, serde::Serialize)]
@@ -34,7 +75,8 @@ pub fn validate_single_pdf_input(path: &PathBuf) -> Result<(), String> {
     if !ext.eq_ignore_ascii_case("pdf") {
         return Err(format!("solo se admiten .pdf: {}", path.display()));
     }
-    Ok(())
+    let prefix = read_pdf_prefix(path, 16)?;
+    validate_pdf_magic_prefix(&prefix).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Separa rutas válidas de rechazadas (p. ej. tamaño) sin abortar todo el lote.

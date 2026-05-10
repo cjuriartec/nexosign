@@ -1,6 +1,7 @@
 //! Cola `mpsc` y worker único para firma batch (PKCS#11 no paralelizable).
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use tauri::AppHandle;
@@ -23,6 +24,8 @@ pub struct BatchJob {
     pub pin: Option<String>,
     /// PNG del sello visible (mismo diseño que Certificados); `None` usa apariencia vectorial.
     pub seal_png: Option<Vec<u8>>,
+    /// Directorios o ficheros temporales a borrar tras `process_batch` (p. ej. staging multipart).
+    pub cleanup_paths: Vec<PathBuf>,
 }
 
 struct TauriProgress(AppHandle);
@@ -55,6 +58,7 @@ pub fn spawn_batch_worker(
             let token_c = token.clone();
             let app_c = app.clone();
             let reg_c = cancel_registry.clone();
+            let cleanup = job.cleanup_paths.clone();
             let run = tokio::task::spawn_blocking(move || {
                 let notifier: Box<dyn ProgressNotifier> = match app_c {
                     Some(h) => Box::new(TauriProgress(h)),
@@ -71,6 +75,17 @@ pub fn spawn_batch_worker(
                     seal_png: job.seal_png,
                 };
                 let _ = process_batch(input, token_c, notifier);
+                for p in cleanup {
+                    if p.is_dir() {
+                        if let Err(e) = std::fs::remove_dir_all(&p) {
+                            tracing::warn!(path = %p.display(), "staging cleanup: {e}");
+                        }
+                    } else if p.is_file() {
+                        if let Err(e) = std::fs::remove_file(&p) {
+                            tracing::warn!(path = %p.display(), "staging cleanup: {e}");
+                        }
+                    }
+                }
                 if let Ok(mut g) = reg_c.lock() {
                     g.remove(&jid);
                 }

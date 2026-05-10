@@ -5,7 +5,8 @@ mod pending_batch_intent;
 pub use pending_batch_intent::{PendingBatchIntent, PENDING_INTENT_TTL_SECS};
 
 use axum::{
-    extract::State,
+    body::Body,
+    extract::{DefaultBodyLimit, State},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -13,6 +14,8 @@ use axum::{
 };
 use http::request::Parts;
 use base64::Engine;
+use bytes::Bytes;
+use futures_util::stream;
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 use tokio_util::sync::CancellationToken;
@@ -21,9 +24,18 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use crate::adapters::http::state::{HealthResponse, PingResponse, SharedState};
 use crate::adapters::pdf::pades::SignatureGridPlacement;
 use crate::adapters::worker::batch::BatchJob;
-use crate::infrastructure::batch_pdf_validation::validate_batch_pdf_inputs;
+use crate::infrastructure::batch_pdf_validation::{
+    validate_batch_pdf_inputs,
+    validate_pdf_magic_and_size,
+    MAX_PDFS_PER_BATCH_INTENT,
+    MAX_TOTAL_BATCH_INTENT_BYTES,
+};
 
 pub const LOCAL_API_PORT: u16 = 14500;
+
+/// Límite del cuerpo HTTP para `POST /batch/sign/intent` (multipart puede acercarse a la suma de PDF).
+const MAX_BATCH_INTENT_BODY: usize =
+    (MAX_TOTAL_BATCH_INTENT_BYTES as usize).saturating_add(512 * 1024);
 
 fn validate_optional_output_dir(path: Option<std::path::PathBuf>) -> Result<Option<std::path::PathBuf>, String> {
     let Some(p) = path else {
@@ -159,7 +171,10 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/health", get(get_health))
         .route("/api/v1/ping", post(post_ping))
         .route("/api/v1/demo-progress", post(post_demo_progress))
-        .route("/api/v1/batch/sign/intent", post(post_batch_sign_intent))
+        .route(
+            "/api/v1/batch/sign/intent",
+            post(post_batch_sign_intent).layer(DefaultBodyLimit::max(MAX_BATCH_INTENT_BODY)),
+        )
         .route("/api/v1/batch/sign", post(post_batch_sign))
         .layer(cors)
         .with_state(state)
@@ -213,16 +228,65 @@ async fn post_demo_progress(
     Json(serde_json::json!({ "emitted": true })).into_response()
 }
 
-/// Registra rutas de PDF para firmar **sin encolar** hasta que el usuario complete el asistente en la app.
+/// Registra PDF para firmar **sin encolar** hasta que el usuario complete el asistente en la app.
+/// Acepta `application/json` (rutas locales) o `multipart/form-data` (campos `file`/`files` + `output_dir` opcional).
 async fn post_batch_sign_intent(
     State(state): State<SharedState>,
     headers: HeaderMap,
-    Json(body): Json<BatchSignIntentBody>,
+    body: Body,
 ) -> impl IntoResponse {
     if let Err(resp) = gate_batch_origin(&state, &headers) {
         return resp;
     }
 
+    let ctype = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if ctype.starts_with("multipart/form-data") {
+        return post_batch_sign_intent_multipart(state, headers, body).await;
+    }
+
+    if !ctype.starts_with("application/json") && !ctype.is_empty() {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Json(serde_json::json!({
+                "error": "Content-Type debe ser application/json o multipart/form-data"
+            })),
+        )
+            .into_response();
+    }
+
+    let bytes = match axum::body::to_bytes(body, MAX_BATCH_INTENT_BODY).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("lectura del cuerpo: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let json_body: BatchSignIntentBody = match serde_json::from_slice(&bytes) {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("JSON inválido: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    post_batch_sign_intent_json(state, json_body).await
+}
+
+async fn post_batch_sign_intent_json(
+    state: SharedState,
+    body: BatchSignIntentBody,
+) -> Response {
     if let Err(msg) = validate_batch_pdf_inputs(&body.inputs) {
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response();
     }
@@ -235,12 +299,271 @@ async fn post_batch_sign_intent(
     };
 
     let request_id = uuid::Uuid::new_v4().to_string();
-    let intent = PendingBatchIntent::new(body.inputs, output_dir);
+    let intent = PendingBatchIntent::new(body.inputs, output_dir, None);
 
     {
         let mut g = match state.pending_batch_intents.lock() {
             Ok(g) => g,
             Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "estado intents bloqueado" })),
+                )
+                    .into_response();
+            }
+        };
+        g.insert(request_id.clone(), intent);
+    }
+
+    let deep_link = format!("nexosign://sign?intent={}", request_id);
+
+    Json(BatchSignIntentResponse {
+        request_id,
+        deep_link,
+    })
+    .into_response()
+}
+
+fn staging_root_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join("nexosign-intent-uploads")
+}
+
+fn sanitize_staged_filename(original: &str, index: usize) -> String {
+    let base = std::path::Path::new(original)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("document");
+    let safe: String = base
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-' | ' '))
+        .collect();
+    let stem = safe.trim();
+    let stem = if stem.is_empty() {
+        format!("document_{index}")
+    } else {
+        stem.to_string()
+    };
+    if stem.to_lowercase().ends_with(".pdf") {
+        stem
+    } else {
+        format!("{stem}.pdf")
+    }
+}
+
+fn unique_path_in_dir(dir: &std::path::Path, filename: &str) -> std::path::PathBuf {
+    let mut p = dir.join(filename);
+    if !p.exists() {
+        return p;
+    }
+    let stem = std::path::Path::new(filename)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "document".into());
+    for i in 2_u16..1000 {
+        p.set_file_name(format!("{stem}_{i}.pdf"));
+        if !p.exists() {
+            return p;
+        }
+    }
+    dir.join(format!(
+        "{}_{}.pdf",
+        stem,
+        uuid::Uuid::new_v4().simple()
+    ))
+}
+
+async fn post_batch_sign_intent_multipart(
+    state: SharedState,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    let ctype = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let boundary = match multer::parse_boundary(ctype) {
+        Ok(b) => b,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "multipart sin boundary válido en Content-Type"
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let bytes = match axum::body::to_bytes(body, MAX_BATCH_INTENT_BODY).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("lectura del cuerpo: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let staging_root = staging_root_dir();
+    if let Err(e) = std::fs::create_dir_all(&staging_root) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("staging: {e}") })),
+        )
+            .into_response();
+    }
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let staging_dir = staging_root.join(&request_id);
+    if let Err(e) = std::fs::create_dir(&staging_dir) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("staging: {e}") })),
+        )
+            .into_response();
+    }
+
+    let stream = stream::once(async move { Ok::<Bytes, std::convert::Infallible>(bytes) });
+    let mut multipart = multer::Multipart::new(stream, boundary);
+
+    let mut output_dir_text: Option<String> = None;
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    let mut total_bytes: u64 = 0;
+    let mut file_index: usize = 0;
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(f) => f,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": format!("multipart: {e}") })),
+                )
+                    .into_response();
+            }
+        };
+        let Some(field) = field else {
+            break;
+        };
+
+        let name = field.name().unwrap_or("");
+
+        if name == "output_dir" {
+            match field.text().await {
+                Ok(t) => output_dir_text = Some(t),
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&staging_dir);
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "error": format!("output_dir: {e}") })),
+                    )
+                        .into_response();
+                }
+            }
+            continue;
+        }
+
+        if name != "files" && name != "file" {
+            continue;
+        }
+
+        let filename_hint = field
+            .file_name()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let data = match field.bytes().await {
+            Ok(d) => d,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": format!("lectura de fichero: {e}") })),
+                )
+                    .into_response();
+            }
+        };
+
+        let len = data.len() as u64;
+        if paths.len() >= MAX_PDFS_PER_BATCH_INTENT {
+            let _ = std::fs::remove_dir_all(&staging_dir);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("demasiados PDF (máx. {MAX_PDFS_PER_BATCH_INTENT})")
+                })),
+            )
+                .into_response();
+        }
+
+        let next_total = total_bytes.saturating_add(len);
+        if next_total > MAX_TOTAL_BATCH_INTENT_BYTES {
+            let _ = std::fs::remove_dir_all(&staging_dir);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "suma de tamaños de PDF supera el límite del lote"
+                })),
+            )
+                .into_response();
+        }
+
+        let prefix_len = std::cmp::min(data.len(), 16);
+        let prefix = &data[..prefix_len];
+        if let Err(msg) = validate_pdf_magic_and_size(len, prefix) {
+            let _ = std::fs::remove_dir_all(&staging_dir);
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response();
+        }
+
+        let staged_name = sanitize_staged_filename(&filename_hint, file_index);
+        let dest = unique_path_in_dir(&staging_dir, &staged_name);
+        file_index += 1;
+
+        if let Err(e) = std::fs::write(&dest, &data) {
+            let _ = std::fs::remove_dir_all(&staging_dir);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("escritura temporal: {e}") })),
+            )
+                .into_response();
+        }
+
+        total_bytes = next_total;
+        paths.push(dest);
+    }
+
+    if paths.is_empty() {
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "no se recibió ningún PDF (campos file o files)"
+            })),
+        )
+            .into_response();
+    }
+
+    let output_dir = match output_dir_text {
+        None => None,
+        Some(ref s) if s.trim().is_empty() => None,
+        Some(s) => match validate_optional_output_dir(Some(std::path::PathBuf::from(s.trim()))) {
+            Ok(d) => d,
+            Err(msg) => {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response();
+            }
+        },
+    };
+
+    let intent = PendingBatchIntent::new(paths, output_dir, Some(staging_dir.clone()));
+
+    {
+        let mut g = match state.pending_batch_intents.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                let _ = std::fs::remove_dir_all(&staging_dir);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({ "error": "estado intents bloqueado" })),
@@ -381,6 +704,17 @@ async fn post_batch_sign(
         g.insert(job_id.clone(), cancel.clone());
     }
 
+    let mut cleanup_paths: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(ref rid) = body.intent_request_id {
+        if let Ok(g) = state.pending_batch_intents.lock() {
+            if let Some(ent) = g.get(rid) {
+                if let Some(ref d) = ent.staging_dir {
+                    cleanup_paths.push(d.clone());
+                }
+            }
+        }
+    }
+
     let job = BatchJob {
         job_id: job_id.clone(),
         cert_id_hex: body.cert_id_hex,
@@ -390,6 +724,7 @@ async fn post_batch_sign(
         signature_grid,
         pin: pin_for_worker,
         seal_png,
+        cleanup_paths,
     };
 
     match tx.try_send(job) {
@@ -608,6 +943,90 @@ mod tests {
         assert!(guard.contains_key(request_id));
         drop(guard);
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn batch_sign_intent_multipart_stores_staging_dir() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
+        let state = SharedState::test_with_batch_intents(tx, pending.clone());
+        let app = build_router(state);
+
+        let boundary = "nexosign_mp_test";
+        let ct = format!("multipart/form-data; boundary={boundary}");
+        let mp_body = format!(
+            "--{boundary}\r\n\
+             Content-Disposition: form-data; name=\"files\"; filename=\"doc.pdf\"\r\n\
+             Content-Type: application/pdf\r\n\r\n\
+             %PDF-1.4\n%\r\n\
+             --{boundary}--\r\n"
+        );
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign/intent")
+                    .header("Origin", "http://localhost:1420")
+                    .header("Content-Type", &ct)
+                    .body(Body::from(mp_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let request_id = v["request_id"].as_str().unwrap();
+
+        let guard = pending.lock().unwrap();
+        assert_eq!(guard.len(), 1);
+        let ent = guard.get(request_id).expect("intent");
+        assert!(ent.staging_dir.is_some());
+        let staging = ent.staging_dir.clone().unwrap();
+        assert!(staging.join("doc.pdf").is_file() || staging.read_dir().unwrap().count() >= 1);
+        drop(guard);
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+
+    #[tokio::test]
+    async fn batch_sign_intent_multipart_rejects_invalid_pdf_magic() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
+        let app = build_router(SharedState::test_with_batch_intents(tx, pending.clone()));
+
+        let boundary = "nexosign_mp_bad";
+        let ct = format!("multipart/form-data; boundary={boundary}");
+        let mp_body = format!(
+            "--{boundary}\r\n\
+             Content-Disposition: form-data; name=\"file\"; filename=\"x.pdf\"\r\n\
+             Content-Type: application/pdf\r\n\r\n\
+             NOT_A_PDF\r\n\
+             --{boundary}--\r\n"
+        );
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign/intent")
+                    .header("Origin", "http://localhost:1420")
+                    .header("Content-Type", &ct)
+                    .body(Body::from(mp_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(pending.lock().unwrap().len(), 0);
     }
 
     #[tokio::test]

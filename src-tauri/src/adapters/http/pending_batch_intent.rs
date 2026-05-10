@@ -10,11 +10,17 @@ pub const PENDING_INTENT_TTL_SECS: u64 = 30 * 60;
 pub struct PendingBatchIntent {
     pub inputs: Vec<PathBuf>,
     pub output_dir: Option<PathBuf>,
+    /// Directorio temporal con PDF subidos por multipart; se borra al expirar o al terminar el lote.
+    pub staging_dir: Option<PathBuf>,
     pub created_unix: u64,
 }
 
 impl PendingBatchIntent {
-    pub fn new(inputs: Vec<PathBuf>, output_dir: Option<PathBuf>) -> Self {
+    pub fn new(
+        inputs: Vec<PathBuf>,
+        output_dir: Option<PathBuf>,
+        staging_dir: Option<PathBuf>,
+    ) -> Self {
         let created_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -22,6 +28,7 @@ impl PendingBatchIntent {
         Self {
             inputs,
             output_dir,
+            staging_dir,
             created_unix,
         }
     }

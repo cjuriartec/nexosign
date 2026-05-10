@@ -52,6 +52,9 @@ pub fn get_batch_sign_intent(
         return Ok(None);
     };
     if ent.is_expired() {
+        if let Some(ref dir) = ent.staging_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
         g.remove(&request_id);
         return Ok(None);
     }

@@ -64,12 +64,12 @@ La API está en **`http://127.0.0.1:14500`** **solo con la aplicación en ejecuc
 |-----------|---------|
 | 🌍 **Origen** | Los `POST` de batch en navegador necesitan cabecera **`Origin`** permitida por CORS (p. ej. `http://localhost:1420`). |
 | 💻 **`curl`** | Añade `-H "Origin: http://localhost:1420"` como en los ejemplos. |
-| 📂 **Rutas** | `inputs` y `output_dir` deben ser **absolutas** y existir en el **mismo equipo** donde corre NexoSign. |
+| 📂 **Rutas vs subida** | Con JSON, `inputs` y `output_dir` son **rutas absolutas** en el PC con NexoSign. Con **multipart**, envías el **contenido** del PDF; `output_dir` en texto sigue siendo ruta absoluta en ese equipo (suele omitirse en integración web). |
 
 | Endpoint | Rol |
 |----------|-----|
 | **`POST /api/v1/batch/sign`** | Encola **de inmediato**. Body: `cert_id_hex`, `inputs`, opcional `job_id`, **`pin`**, **`output_dir`**, **`signature_grid`** (rejilla **5×7** en la primera página), **`intent_request_id`** si viene de una intención. → `{ job_id, queued: true }`. |
-| **`POST /api/v1/batch/sign/intent`** | **No firma aún.** Registra rutas para el asistente; responde **`request_id`** + **`deep_link`** (`nexosign://sign?intent=…`). TTL ~30 min en memoria. |
+| **`POST /api/v1/batch/sign/intent`** | **No firma aún.** Acepta **`application/json`** (rutas absolutas locales) **o** **`multipart/form-data`** (campos **`file`** / **`files`** repetibles + **`output_dir`** opcional como texto). Los PDF subidos se guardan en staging temporal; responde **`request_id`** + **`deep_link`**. TTL ~30 min. |
 | **`GET /health`** | Estado del servicio (sin `Origin`). |
 | **`POST /api/v1/ping`** | Eco para pruebas. |
 | **`NEXOSIGN_BATCH_OUTPUT_DIR`** | Variable de entorno: fuerza carpeta de salida global `{stem}_firmado.pdf`. |
@@ -99,16 +99,28 @@ flowchart LR
 
 **Pasos**
 
-1. Los PDF están **en disco** en ese PC (rutas absolutas).
-2. Tu cliente llama **`POST /api/v1/batch/sign/intent`** con esas rutas.
-3. Recibes **`request_id`** y **`deep_link`** — úsalos en un botón del tipo **«Abrir en NexoSign»**.
-4. El sistema operativo abre la app registrada para **`nexosign://`** (en desarrollo a veces conviene lanzar la app manualmente).
-5. El usuario completa el asistente; al confirmar, la app llama **`POST /api/v1/batch/sign`** con **`intent_request_id`** igual al **`request_id`** recibido.
+1. **JSON:** los PDF ya están **en disco** (rutas absolutas) en ese PC.
+2. **Multipart:** el navegador o el cliente envía los **ficheros** en `file` / `files` (hasta 20 PDF, 50 MiB c/u, techo de suma 20×50 MiB); la API materializa temporales y el asistente los trata como entradas del lote.
+3. Tu cliente llama **`POST /api/v1/batch/sign/intent`** (JSON o multipart).
+4. Recibes **`request_id`** y **`deep_link`** — úsalos en un botón del tipo **«Abrir en NexoSign»**.
+5. El sistema operativo abre la app registrada para **`nexosign://`** (en desarrollo a veces conviene lanzar la app manualmente).
+6. El usuario completa el asistente; al confirmar, la app llama **`POST /api/v1/batch/sign`** con **`intent_request_id`** igual al **`request_id`** recibido; al terminar el lote se **borra** el directorio de staging.
 
 > **Producto:** el resultado de la firma **no** regresa por el mismo HTTP que disparó el deep link; el proceso es **asíncrono** entre portal y app. Podéis combinar mensajes en UI, polling propio o callbacks cuando exista backend intermedio.
 
 <details>
-<summary><strong>📋 Ejemplo — registrar intención</strong></summary>
+<summary><strong>📋 Ejemplo — intención subiendo PDF (multipart)</strong></summary>
+
+```bash
+curl -sS -X POST "http://127.0.0.1:14500/api/v1/batch/sign/intent" \
+  -H "Origin: http://localhost:1420" \
+  -F "files=@/Users/tu/usuario/documentos/doc.pdf;type=application/pdf"
+```
+
+</details>
+
+<details>
+<summary><strong>📋 Ejemplo — intención con rutas locales (JSON)</strong></summary>
 
 ```bash
 curl -sS -X POST "http://127.0.0.1:14500/api/v1/batch/sign/intent" \
@@ -117,6 +129,8 @@ curl -sS -X POST "http://127.0.0.1:14500/api/v1/batch/sign/intent" \
   -d "{\"inputs\": [\"/Users/tu/usuario/documentos/doc.pdf\"]}"
 ```
 
+</details>
+
 ```json
 {
   "request_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
@@ -124,7 +138,6 @@ curl -sS -X POST "http://127.0.0.1:14500/api/v1/batch/sign/intent" \
 }
 ```
 
-</details>
 
 <details>
 <summary><strong>📋 Ejemplo — encolar tras confirmar en la UI</strong> (referencia; la app rellena PIN en producción)</summary>
