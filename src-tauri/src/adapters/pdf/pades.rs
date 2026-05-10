@@ -15,9 +15,7 @@ use cms::signed_data::{
 use const_oid::db::rfc5911::{ID_DATA, ID_SIGNED_DATA};
 use const_oid::db::rfc5912::ID_SHA_256;
 use der::{Any, AnyRef, Decode, Encode};
-use image::codecs::jpeg::JpegEncoder;
 use image::GenericImageView;
-use image::ImageEncoder;
 use lopdf::{Dictionary, Document, IncrementalDocument, Object, Stream, StringFormat};
 use sha2::{Digest, Sha256};
 use spki::AlgorithmIdentifierOwned;
@@ -132,14 +130,22 @@ fn patch_pdf_contents_der(buf: &mut Vec<u8>, cms_der: &[u8]) -> Result<(), SignB
     let inner_end = inner_start + rel_gt;
     let expected_hex_len = inner_end - inner_start;
     let hex_str = hex::encode_upper(cms_der);
-    if hex_str.len() != expected_hex_len {
+    if hex_str.len() > expected_hex_len {
         return Err(SignBatchError::Pades(format!(
-            "tamaño CMS ({}) no coincide con hueco hex ({})",
+            "tamaño CMS ({}) excede el hueco hex ({})",
             hex_str.len(),
             expected_hex_len
         )));
     }
-    buf[inner_start..inner_end].copy_from_slice(hex_str.as_bytes());
+    
+    let hex_bytes = hex_str.as_bytes();
+    buf[inner_start..inner_start + hex_bytes.len()].copy_from_slice(hex_bytes);
+    
+    let pad_len = expected_hex_len - hex_str.len();
+    if pad_len > 0 {
+        buf[inner_start + hex_bytes.len()..inner_end].fill(b'0');
+    }
+    
     Ok(())
 }
 
@@ -483,7 +489,7 @@ fn create_appearance_from_seal_png(
     rect: [i64; 4],
     png_bytes: &[u8],
 ) -> Result<Object, SignBatchError> {
-    let (img_ref, iw, ih) = create_image_and_smask(doc, png_bytes)?;
+    let (img_ref, _iw, _ih) = create_image_and_smask(doc, png_bytes)?;
 
     let fw = (rect[2] - rect[0]).abs() as f64;
     let fh = (rect[3] - rect[1]).abs() as f64;
@@ -802,7 +808,7 @@ pub fn sign_pdf_pades_bes(
             .map_err(|e| SignBatchError::Token(e))?;
         let cms_der = build_cms_signed_data(&cms_signer, &cert_der, &digest)?;
 
-        if cms_der.len() == der_cap {
+        if cms_der.len() <= der_cap {
             patch_pdf_contents_der(&mut buf, &cms_der)?;
             if let Some(parent) = output_path.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| SignBatchError::Io {

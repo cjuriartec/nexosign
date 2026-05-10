@@ -61,7 +61,7 @@ pub fn process_batch<P: ProgressNotifier>(
                 Err(e) => {
                     progress.notify(ProgressEvent {
                         job_id: input.job_id.clone(),
-                        current: 1,
+                        current: 0,
                         total: total.max(1),
                         file_name: String::new(),
                         path: String::new(),

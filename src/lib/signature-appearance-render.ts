@@ -75,8 +75,8 @@ export async function renderSignatureSealPngBase64(
 
 	const innerW = 280;
 	const imgMaxH = 72;
-	const textSize = 11;
-	const lineLeading = 14;
+	const textSize = 9;
+	const lineLeading = 10.5;
 
 	let imgEl: HTMLImageElement;
 	try {
@@ -99,12 +99,9 @@ export async function renderSignatureSealPngBase64(
 	}
 
 	const imgRatio = imgEl.naturalWidth / Math.max(1, imgEl.naturalHeight);
-	let drawW = innerW;
-	let drawH = drawW / imgRatio;
-	if (drawH > imgMaxH) {
-		drawH = imgMaxH;
-		drawW = drawH * imgRatio;
-	}
+	const layoutW = 120;
+	const drawW = layoutW;
+	const drawH = drawW / imgRatio;
 
 	const canvas = document.createElement("canvas");
 	const ctx = canvas.getContext("2d");
@@ -112,16 +109,18 @@ export async function renderSignatureSealPngBase64(
 
 	ctx.font = `${textSize}px ui-sans-serif, system-ui, sans-serif`;
 
-	const layoutW = Math.max(drawW, 140);
 	const textMaxW = layoutW;
-	const wrapped: string[] = [];
+	const wrapped: { text: string; justify: boolean }[] = [];
 	for (const line of rawLines) {
-		wrapped.push(...wrapLine(ctx, line, textMaxW));
+		const lines = wrapLine(ctx, line, textMaxW);
+		for (let i = 0; i < lines.length; i++) {
+			wrapped.push({ text: lines[i], justify: i < lines.length - 1 });
+		}
 	}
-	const displayLines = wrapped.length ? wrapped : ["—"];
+	const displayLines = wrapped.length ? wrapped : [{ text: "—", justify: false }];
 
 	const textBlockH = displayLines.length * lineLeading;
-	const layoutH = drawH + 10 + textBlockH;
+	const layoutH = drawH + 4 + textBlockH;
 
 	canvas.width = Math.ceil(layoutW * dpr);
 	canvas.height = Math.ceil(layoutH * dpr);
@@ -135,11 +134,24 @@ export async function renderSignatureSealPngBase64(
 
 	ctx.fillStyle = "#0f172a";
 	ctx.font = `${textSize}px ui-sans-serif, system-ui, sans-serif`;
-	ctx.textAlign = "center";
 	ctx.textBaseline = "top";
-	let ty = imgY + drawH + 12;
+	let ty = imgY + drawH + 4;
 	for (const ln of displayLines) {
-		ctx.fillText(ln, layoutW / 2, ty);
+		if (ln.justify && ln.text.includes(" ")) {
+			ctx.textAlign = "left";
+			const words = ln.text.split(" ");
+			const textWidth = ctx.measureText(ln.text.replace(/\s/g, "")).width;
+			const totalSpace = layoutW - textWidth;
+			const spacePerWord = totalSpace / (words.length - 1);
+			let cx = 0;
+			for (let i = 0; i < words.length; i++) {
+				ctx.fillText(words[i], cx, ty);
+				cx += ctx.measureText(words[i]).width + spacePerWord;
+			}
+		} else {
+			ctx.textAlign = "center";
+			ctx.fillText(ln.text, layoutW / 2, ty);
+		}
 		ty += lineLeading;
 	}
 
