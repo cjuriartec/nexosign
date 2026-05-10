@@ -39,8 +39,9 @@
 		{ step: 5, title: "Confirmar", hint: "Revisa y pulsa Firmar" },
 	] as const;
 
-	/** Rejilla 7×5 en primera página: col 0 izquierda, fila 0 arriba (como se lee el PDF). */
-	const SIG_GRID_COLS = 7;
+	/** Rejilla 5×7 (vertical, tipo hoja): col 0 izquierda, fila 0 arriba (como se lee el PDF). */
+	const SIG_GRID_COLS = 5;
+	const SIG_GRID_ROWS = 7;
 
 	let paths = $state<string[]>([]);
 	/** Origen del lote actual: archivos sueltos vs carpeta (salida agrupada). */
@@ -59,8 +60,8 @@
 	/** 1 archivos · 2 cert · 3 PIN · 4 ubicación · 5 confirmar */
 	let wizardStep = $state(1);
 
-	let sigGridCol = $state(3);
-	let sigGridRow = $state(4);
+	let sigGridCol = $state(2);
+	let sigGridRow = $state(6);
 
 	/** Si viene de `POST /api/v1/batch/sign/intent`, se envía al confirmar para cerrar la intención. */
 	let intentRequestId = $state<string | null>(null);
@@ -672,12 +673,13 @@
 			</Card.Header>
 			<Card.Content class="space-y-4">
 				<p class="text-muted-foreground text-xs leading-snug">
-					Fila superior = cabecera del PDF · columnas de izquierda a derecha. Cada PDF del lote usa la misma casilla.
+					Como una hoja en vertical: 5 columnas × 7 filas. Fila superior = cabecera del PDF · columnas de
+					izquierda a derecha. Cada PDF del lote usa la misma casilla.
 				</p>
-				<div class="mx-auto w-full max-w-md space-y-1">
-					{#each [0, 1, 2, 3, 4] as row}
-						<div class="grid grid-cols-7 gap-1">
-							{#each [0, 1, 2, 3, 4, 5, 6] as col}
+				<div class="mx-auto w-full max-w-xs space-y-1 sm:max-w-sm">
+					{#each [0, 1, 2, 3, 4, 5, 6] as row}
+						<div class="grid grid-cols-5 gap-1">
+							{#each [0, 1, 2, 3, 4] as col}
 								<button
 									type="button"
 									class={cn(
@@ -734,7 +736,7 @@
 					<p>
 						Primera página: columna <span class="text-foreground font-medium">{sigGridCol + 1}</span>,
 						fila <span class="text-foreground font-medium">{sigGridRow + 1}</span>
-						<span class="text-muted-foreground"> (rejilla 7×5 · recuadro visible pequeño)</span>
+						<span class="text-muted-foreground"> (rejilla 5×7 · tipo hoja vertical)</span>
 					</p>
 					{#if outputDirForJob}
 						<p class="truncate font-mono" title={outputDirForJob}>{outputDirForJob}</p>

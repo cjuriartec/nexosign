@@ -145,7 +145,7 @@ pub struct BatchSignBody {
     /// Directorio absoluto donde escribir `{stem}_firmado.pdf` para cada entrada (p. ej. carpeta `…_firmados`).
     #[serde(default)]
     pub output_dir: Option<std::path::PathBuf>,
-    /// Primera página: casilla 7×5 (col 0–6, row 0–4; fila 0 = cabecera del PDF).
+    /// Primera página: casilla 5×7 (col 0–4, row 0–6; fila 0 = cabecera del PDF).
     #[serde(default)]
     pub signature_grid: Option<SignatureGridDto>,
     /// Consumido si la firma viene de `POST /api/v1/batch/sign/intent`.
@@ -325,11 +325,11 @@ async fn post_batch_sign(
 
     let signature_grid = match body.signature_grid {
         Some(g) => {
-            if g.col > 6 || g.row > 4 {
+            if g.col > 4 || g.row > 6 {
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(
-                        serde_json::json!({ "error": "signature_grid: col debe ser 0–6 y row 0–4 (rejilla 7×5)" }),
+                        serde_json::json!({ "error": "signature_grid: col debe ser 0–4 y row 0–6 (rejilla 5×7)" }),
                     ),
                 )
                     .into_response();

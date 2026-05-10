@@ -22,7 +22,7 @@ use crate::adapters::pdf::cms_signer::Pkcs11RsaCmsSigner;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::application::errors::SignBatchError;
 
-/// Casilla 7×5 en la primera página: `col` 0..6 (izq→der), `row` 0..4 (arriba→abajo, como al leer el PDF).
+/// Casilla 5×7 en la primera página: `col` 0..4 (izq→der), `row` 0..6 (arriba→abajo, como al leer el PDF).
 #[derive(Clone, Copy, Debug)]
 pub struct SignatureGridPlacement {
     pub col: u8,
@@ -31,15 +31,15 @@ pub struct SignatureGridPlacement {
 
 impl Default for SignatureGridPlacement {
     fn default() -> Self {
-        Self { col: 3, row: 4 }
+        Self { col: 2, row: 6 }
     }
 }
 
 impl SignatureGridPlacement {
     fn normalized(self) -> Self {
         Self {
-            col: self.col.min(6),
-            row: self.row.min(4),
+            col: self.col.min(4),
+            row: self.row.min(6),
         }
     }
 }
@@ -210,8 +210,8 @@ fn rect_from_grid(page_box: [f64; 4], g: SignatureGridPlacement) -> [i64; 4] {
     let margin = (w.min(h) * 0.028).clamp(16.0, 44.0);
     let inner_w = w - 2.0 * margin;
     let inner_h = h - 2.0 * margin;
-    let cell_w = inner_w / 7.0;
-    let cell_h = inner_h / 5.0;
+    let cell_w = inner_w / 5.0;
+    let cell_h = inner_h / 7.0;
     let col = f64::from(g.col);
     let row = f64::from(g.row);
     let x0 = page_llx + margin + col * cell_w;

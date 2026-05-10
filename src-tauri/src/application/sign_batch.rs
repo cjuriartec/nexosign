@@ -19,7 +19,7 @@ pub struct SignBatchInput {
     pub cancel: CancellationToken,
     /// Si está definido, los PDF firmados van aquí como `{stem}_firmado.pdf` (p. ej. carpeta hermana `_firmados`).
     pub output_dir: Option<PathBuf>,
-    /// Casilla 7×5 en primera página (`None` → centro-abajo).
+    /// Casilla 5×7 en primera página (`None` → valor por defecto del motor PDF).
     pub signature_grid: Option<SignatureGridPlacement>,
 }
 

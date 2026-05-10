@@ -68,7 +68,7 @@ La API está en **`http://127.0.0.1:14500`** **solo con la aplicación en ejecuc
 
 | Endpoint | Rol |
 |----------|-----|
-| **`POST /api/v1/batch/sign`** | Encola **de inmediato**. Body: `cert_id_hex`, `inputs`, opcional `job_id`, **`pin`**, **`output_dir`**, **`signature_grid`** (rejilla 7×5 en la primera página), **`intent_request_id`** si viene de una intención. → `{ job_id, queued: true }`. |
+| **`POST /api/v1/batch/sign`** | Encola **de inmediato**. Body: `cert_id_hex`, `inputs`, opcional `job_id`, **`pin`**, **`output_dir`**, **`signature_grid`** (rejilla **5×7** en la primera página), **`intent_request_id`** si viene de una intención. → `{ job_id, queued: true }`. |
 | **`POST /api/v1/batch/sign/intent`** | **No firma aún.** Registra rutas para el asistente; responde **`request_id`** + **`deep_link`** (`nexosign://sign?intent=…`). TTL ~30 min en memoria. |
 | **`GET /health`** | Estado del servicio (sin `Origin`). |
 | **`POST /api/v1/ping`** | Eco para pruebas. |
@@ -139,7 +139,7 @@ curl -sS -X POST "http://127.0.0.1:14500/api/v1/batch/sign" \
     \"job_id\": \"mi-trabajo-1\",
     \"pin\": \"****\",
     \"intent_request_id\": \"f47ac10b-58cc-4372-a567-0e02b2c3d479\",
-    \"signature_grid\": { \"col\": 3, \"row\": 4 }
+    \"signature_grid\": { \"col\": 2, \"row\": 6 }
   }"
 ```
 
