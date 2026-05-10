@@ -31,6 +31,8 @@ pub struct SharedState {
     pub pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
     /// Estado del trabajo (`GET /api/v1/batch/jobs/{job_id}/status`), actualizado por el worker.
     pub batch_job_snapshots: Arc<Mutex<HashMap<String, BatchJobSnapshot>>>,
+    /// Misma BD que orígenes (`allowed_origins.sqlite`): persistir payloads de intent API.
+    pub queue_sqlite_path: Option<Arc<PathBuf>>,
 }
 
 /// Referencia compartida para comandos Tauri (misma que [`SharedState::pending_batch_intents`]).
@@ -47,6 +49,7 @@ impl SharedState {
         pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
         batch_signed_outputs: Arc<Mutex<HashMap<String, Vec<PathBuf>>>>,
         batch_job_snapshots: Arc<Mutex<HashMap<String, BatchJobSnapshot>>>,
+        queue_sqlite_path: Option<Arc<PathBuf>>,
     ) -> Self {
         Self {
             origins,
@@ -58,6 +61,7 @@ impl SharedState {
             intent_request_to_job: Arc::new(Mutex::new(HashMap::new())),
             pending_batch_intents,
             batch_job_snapshots,
+            queue_sqlite_path,
         }
     }
 
@@ -73,6 +77,7 @@ impl SharedState {
             intent_request_to_job: Arc::new(Mutex::new(HashMap::new())),
             pending_batch_intents: Arc::new(Mutex::new(HashMap::new())),
             batch_job_snapshots: Arc::new(Mutex::new(HashMap::new())),
+            queue_sqlite_path: None,
         }
     }
 
@@ -88,6 +93,7 @@ impl SharedState {
             intent_request_to_job: Arc::new(Mutex::new(HashMap::new())),
             pending_batch_intents: Arc::new(Mutex::new(HashMap::new())),
             batch_job_snapshots: Arc::new(Mutex::new(HashMap::new())),
+            queue_sqlite_path: None,
         }
     }
 
@@ -106,6 +112,7 @@ impl SharedState {
             intent_request_to_job: Arc::new(Mutex::new(HashMap::new())),
             pending_batch_intents,
             batch_job_snapshots: Arc::new(Mutex::new(HashMap::new())),
+            queue_sqlite_path: None,
         }
     }
 }

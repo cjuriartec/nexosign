@@ -16,6 +16,20 @@ pub struct PendingBatchIntent {
 }
 
 impl PendingBatchIntent {
+    pub fn restore_from_storage(
+        inputs: Vec<PathBuf>,
+        output_dir: Option<PathBuf>,
+        staging_dir: Option<PathBuf>,
+        created_unix: u64,
+    ) -> Self {
+        Self {
+            inputs,
+            output_dir,
+            staging_dir,
+            created_unix,
+        }
+    }
+
     pub fn new(
         inputs: Vec<PathBuf>,
         output_dir: Option<PathBuf>,

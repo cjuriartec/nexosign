@@ -9,6 +9,7 @@ import {
 } from "$lib/tauri/batch-queue-history";
 import { isTauriRuntime } from "$lib/tauri/env";
 import { getLocalApiBaseUrl } from "$lib/tauri/settings";
+import { listPendingBatchIntents } from "$lib/tauri/batch-sign-intent";
 
 export type BatchQueueStatus =
 	| "preparing"
@@ -193,6 +194,31 @@ export async function syncBatchQueueFromLocalApi(): Promise<void> {
 	} catch {
 		/* API local no disponible */
 	}
+}
+
+export async function syncIntentQueueFromBackend(): Promise<void> {
+	if (!isTauriRuntime()) return;
+	try {
+		const rows = await listPendingBatchIntents();
+		const prevActive = intentQueue.activeRequestId;
+		intentQueue.items = rows.map((r) => ({
+			requestId: r.requestId,
+			label: r.label,
+			fileCount: r.fileCount,
+			createdAt: r.createdAt * 1000,
+		}));
+		if (prevActive && !intentQueue.items.some((i) => i.requestId === prevActive)) {
+			intentQueue.activeRequestId = null;
+		}
+		schedulePersistBatchQueue();
+	} catch {
+		/* proceso NexoSign no disponible */
+	}
+}
+
+/** Sondeo cola de firmas + intents pendientes registrados por API. */
+export async function syncQueuesFromLocalBackend(): Promise<void> {
+	await Promise.all([syncBatchQueueFromLocalApi(), syncIntentQueueFromBackend()]);
 }
 
 export function upsertBatchQueueItem(jobId: string, patch: Partial<BatchQueueItem>): void {

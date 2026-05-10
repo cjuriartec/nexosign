@@ -2,6 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Tiempo máximo desde el encolado hasta que el trabajo debe terminar; si no, se cancela (watchdog).
+pub const BATCH_JOB_MAX_WALL_CLOCK_SECS: i64 = 5 * 60;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BatchJobPhase {
@@ -18,6 +21,9 @@ pub struct BatchJobSnapshot {
     pub phase: BatchJobPhase,
     pub actual: u32,
     pub total: u32,
+    /// Segundos Unix en que se encoló el trabajo (para expiración por tiempo).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queued_at_unix: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_file_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

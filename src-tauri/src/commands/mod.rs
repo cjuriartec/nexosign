@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 use crate::adapters::http::LOCAL_API_PORT;
 use crate::adapters::http::PendingBatchIntent;
 use crate::adapters::http::state::PendingBatchIntents;
+use crate::adapters::persistence::queue_store;
 use crate::adapters::persistence::{AllowedOriginsDb, Pkcs11PathsDb};
 use crate::adapters::pkcs11::driver::find_all_pkcs11_modules;
 use crate::adapters::pkcs11::token::{Pkcs11Diagnostics, Pkcs11TokenManager, SessionStatusDto};
@@ -48,6 +49,7 @@ pub struct BatchSignIntentPayload {
 fn get_batch_sign_intent_from_store(
     request_id: &str,
     store: &Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
+    db_path: Option<&std::path::Path>,
 ) -> Result<Option<BatchSignIntentPayload>, String> {
     let mut g = store.lock().map_err(|e| e.to_string())?;
     let Some(ent) = g.get(request_id) else {
@@ -58,6 +60,9 @@ fn get_batch_sign_intent_from_store(
             let _ = std::fs::remove_dir_all(dir);
         }
         g.remove(request_id);
+        if let Some(p) = db_path {
+            let _ = queue_store::delete_intent_payload(p, request_id);
+        }
         return Ok(None);
     }
     Ok(Some(BatchSignIntentPayload {
@@ -73,13 +78,89 @@ fn get_batch_sign_intent_from_store(
     }))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingIntentRowDto {
+    pub request_id: String,
+    pub file_count: usize,
+    pub label: String,
+    /// Unix epoch seconds (misma semántica que `PendingBatchIntent::created_unix`).
+    pub created_at: u64,
+}
+
+fn label_for_pending_intent(ent: &PendingBatchIntent) -> String {
+    let n = ent.inputs.len();
+    let first = ent
+        .inputs
+        .first()
+        .and_then(|p| p.file_name())
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match n {
+        0 => "Sin archivos".to_string(),
+        1 => format!("1 PDF · {first}"),
+        _ => format!("{n} PDF · {first}"),
+    }
+}
+
+/// Lista intenciones `POST …/batch/sign/intent` aún no consumidas (purga caducadas).
+#[tauri::command]
+pub fn list_pending_batch_intents(
+    pending: tauri::State<'_, PendingBatchIntents>,
+    db_path: tauri::State<'_, OriginDbPath>,
+) -> Result<Vec<PendingIntentRowDto>, String> {
+    let sqlite = db_path.0.as_ref();
+    let mut g = pending.0.lock().map_err(|e| e.to_string())?;
+    let keys: Vec<String> = g.keys().cloned().collect();
+    let mut rows = Vec::new();
+    for k in keys {
+        let Some(ent) = g.get(&k) else {
+            continue;
+        };
+        if ent.is_expired() {
+            if let Some(ref dir) = ent.staging_dir {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+            g.remove(&k);
+            let _ = queue_store::delete_intent_payload(sqlite, &k);
+            continue;
+        }
+        rows.push(PendingIntentRowDto {
+            request_id: k.clone(),
+            file_count: ent.inputs.len(),
+            label: label_for_pending_intent(ent),
+            created_at: ent.created_unix,
+        });
+    }
+    rows.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(rows)
+}
+
+/// Quita una intención pendiente (p. ej. usuario descarta en Colas); borra staging si aplica.
+#[tauri::command]
+pub fn remove_pending_batch_intent(
+    request_id: String,
+    pending: tauri::State<'_, PendingBatchIntents>,
+    db_path: tauri::State<'_, OriginDbPath>,
+) -> Result<(), String> {
+    let mut g = pending.0.lock().map_err(|e| e.to_string())?;
+    if let Some(ent) = g.remove(&request_id) {
+        if let Some(ref dir) = ent.staging_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+    let _ = queue_store::delete_intent_payload(db_path.0.as_ref(), &request_id);
+    Ok(())
+}
+
 /// Lee una solicitud guardada por `POST /api/v1/batch/sign/intent` (solo proceso NexoSign).
 #[tauri::command]
 pub fn get_batch_sign_intent(
     request_id: String,
     pending: tauri::State<'_, PendingBatchIntents>,
+    db_path: tauri::State<'_, OriginDbPath>,
 ) -> Result<Option<BatchSignIntentPayload>, String> {
-    get_batch_sign_intent_from_store(&request_id, &pending.0)
+    get_batch_sign_intent_from_store(&request_id, &pending.0, Some(db_path.0.as_ref()))
 }
 
 #[tauri::command]
@@ -426,7 +507,7 @@ mod tests {
         };
         let store = Arc::new(Mutex::new(HashMap::from([(rid.clone(), ent)])));
 
-        let out = get_batch_sign_intent_from_store(&rid, &store).unwrap();
+        let out = get_batch_sign_intent_from_store(&rid, &store, None).unwrap();
         assert!(out.is_none());
         assert!(!staging.exists(), "staging debe borrarse al expirar");
         assert!(store.lock().unwrap().is_empty());

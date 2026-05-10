@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
 use tauri::AppHandle;
@@ -19,6 +20,7 @@ pub fn spawn_local_api(
         std::sync::Mutex<std::collections::HashMap<String, tokio_util::sync::CancellationToken>>,
     >,
     pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
+    queue_sqlite_path: PathBuf,
 ) {
     let (tx, rx) = tokio::sync::mpsc::channel(16);
     let batch_signed_outputs = Arc::new(Mutex::new(HashMap::new()));
@@ -31,6 +33,11 @@ pub fn spawn_local_api(
         batch_signed_outputs.clone(),
         batch_job_snapshots.clone(),
     );
+    crate::adapters::worker::batch::spawn_batch_job_timeout_watchdog(
+        batch_cancel.clone(),
+        batch_job_snapshots.clone(),
+        Some(handle.clone()),
+    );
 
     let state = SharedState::new(
         origins,
@@ -41,6 +48,7 @@ pub fn spawn_local_api(
         pending_batch_intents,
         batch_signed_outputs,
         batch_job_snapshots,
+        Some(Arc::new(queue_sqlite_path)),
     );
     let router = build_router(state);
     let addr = SocketAddr::from(([127, 0, 0, 1], LOCAL_API_PORT));

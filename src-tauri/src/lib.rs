@@ -8,6 +8,7 @@ pub mod ports;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Once, RwLock};
 
+use adapters::persistence::queue_store;
 use adapters::persistence::{AllowedOriginsDb, Pkcs11PathsDb};
 use adapters::pkcs11::token::Pkcs11TokenManager;
 use domain::allowed_origins::AllowedOrigins;
@@ -79,6 +80,8 @@ pub fn run() {
             commands::pkcs11_session_status,
             commands::pkcs11_reset_connection,
             commands::get_batch_sign_intent,
+            commands::list_pending_batch_intents,
+            commands::remove_pending_batch_intent,
             commands::enumerate_pdfs_under_folder,
             commands::validate_batch_pdf_paths,
             commands::partition_batch_pdf_paths,
@@ -99,7 +102,14 @@ pub fn run() {
             if let Ok(mut slot) = app_db_slot.lock() {
                 *slot = Some(db_path.clone());
             }
-            app.manage(OriginDbPath(Arc::new(db_path)));
+
+            if let Err(e) =
+                queue_store::hydrate_pending_intents_from_db(&db_path, &pending_batch_intents)
+            {
+                tracing::warn!(error = %e, "hidratar intents pendientes desde SQLite");
+            }
+
+            app.manage(OriginDbPath(Arc::new(db_path.clone())));
 
             let emit_for_deep_link = app.handle().clone();
             app.handle().deep_link().on_open_url(move |event| {
@@ -118,6 +128,7 @@ pub fn run() {
                 pkcs11.clone(),
                 batch_cancel.clone(),
                 pending_batch_intents.clone(),
+                db_path.clone(),
             );
 
             Ok(())

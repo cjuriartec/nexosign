@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::AppHandle;
 use tauri::Emitter;
@@ -12,8 +13,11 @@ use tokio_util::sync::CancellationToken;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::application::sign_batch::{process_batch, SignBatchInput};
 use crate::ports::{
-    BatchJobPhase, BatchJobSnapshot, ProgressEvent, ProgressNotifier,
+    BatchJobPhase, BatchJobSnapshot, ProgressEvent, ProgressNotifier, BATCH_JOB_MAX_WALL_CLOCK_SECS,
 };
+
+const BATCH_JOB_TIMEOUT_EMIT_ERROR: &str =
+    "Tiempo máximo del trabajo (5 min) superado.";
 
 pub struct BatchJob {
     pub job_id: String,
@@ -44,6 +48,7 @@ impl ProgressNotifier for SharedBatchProgress {
                 phase: BatchJobPhase::Running,
                 actual: 0,
                 total: ev.total.max(1),
+                queued_at_unix: None,
                 current_file_name: None,
                 error: None,
             });
@@ -89,6 +94,10 @@ fn finalize_batch_job(
         s.phase = BatchJobPhase::Cancelled;
         return;
     }
+    // El watchdog pudo marcar `cancelled` por tiempo; no sobrescribir con completed/failed.
+    if s.phase == BatchJobPhase::Cancelled {
+        return;
+    }
     if outputs_len == 0 && inputs_len > 0 && s.actual == 0 && s.error.is_some() {
         s.phase = BatchJobPhase::Failed;
         return;
@@ -108,6 +117,79 @@ fn cleanup_staging_paths(paths: Vec<PathBuf>) {
             }
         }
     }
+}
+
+/// Vigía trabajos `queued`/`running`: si pasan [`BATCH_JOB_MAX_WALL_CLOCK_SECS`] desde el encolado,
+/// cancela el token y marca la instantánea como `cancelled`.
+pub fn spawn_batch_job_timeout_watchdog(
+    batch_cancel: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    job_snapshots: Arc<Mutex<HashMap<String, BatchJobSnapshot>>>,
+    app: Option<AppHandle>,
+) {
+    use tokio::time::{interval, Duration, MissedTickBehavior};
+
+    tauri::async_runtime::spawn(async move {
+        let mut ticker = interval(Duration::from_secs(30));
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let cutoff = now.saturating_sub(BATCH_JOB_MAX_WALL_CLOCK_SECS);
+
+            let ids: Vec<String> = {
+                let Ok(guard) = job_snapshots.lock() else {
+                    continue;
+                };
+                guard
+                    .iter()
+                    .filter_map(|(id, snap)| {
+                        if !matches!(snap.phase, BatchJobPhase::Queued | BatchJobPhase::Running) {
+                            return None;
+                        }
+                        let q = snap.queued_at_unix?;
+                        if q < cutoff {
+                            Some(id.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            };
+
+            for id in ids {
+                if let Ok(reg) = batch_cancel.lock() {
+                    if let Some(t) = reg.get(&id) {
+                        t.cancel();
+                    }
+                }
+                if let Ok(mut guard) = job_snapshots.lock() {
+                    if let Some(s) = guard.get_mut(&id) {
+                        if matches!(s.phase, BatchJobPhase::Queued | BatchJobPhase::Running) {
+                            s.phase = BatchJobPhase::Cancelled;
+                            s.error = Some(BATCH_JOB_TIMEOUT_EMIT_ERROR.into());
+                        }
+                    }
+                }
+                if let Some(ref h) = app {
+                    let _ = h.emit(
+                        "progreso",
+                        serde_json::json!({
+                            "actual": 0,
+                            "total": 1,
+                            "job_id": id,
+                            "nombre_archivo": "",
+                            "path": "",
+                            "output_path": serde_json::Value::Null,
+                            "error": BATCH_JOB_TIMEOUT_EMIT_ERROR,
+                        }),
+                    );
+                }
+            }
+        }
+    });
 }
 
 /// Arranca el consumidor único; debe llamarse una vez al iniciar la API local.

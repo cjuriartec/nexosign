@@ -27,6 +27,7 @@ async fn integration_batch_job_status_requires_origin_and_returns_snapshot() {
                 phase: BatchJobPhase::Running,
                 actual: 2,
                 total: 5,
+                queued_at_unix: None,
                 current_file_name: Some("doc.pdf".into()),
                 error: None,
             },

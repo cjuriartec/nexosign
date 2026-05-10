@@ -14,3 +14,20 @@ export async function getBatchSignIntent(
 		requestId,
 	});
 }
+
+/** Fila para Colas — mismo origen que `POST …/batch/sign/intent`. */
+export type PendingIntentRow = {
+	requestId: string;
+	fileCount: number;
+	label: string;
+	/** Segundos desde epoch (servidor). */
+	createdAt: number;
+};
+
+export async function listPendingBatchIntents(): Promise<PendingIntentRow[]> {
+	return invoke<PendingIntentRow[]>("list_pending_batch_intents");
+}
+
+export async function removePendingBatchIntent(requestId: string): Promise<void> {
+	await invoke("remove_pending_batch_intent", { requestId });
+}

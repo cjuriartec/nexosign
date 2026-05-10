@@ -13,7 +13,8 @@
 	import { extractIntentFromNexosignUrl } from "$lib/nexosign-deep-link";
 	import {
 		initBatchQueuePersistence,
-		syncBatchQueueFromLocalApi,
+		syncQueuesFromLocalBackend,
+		syncIntentQueueFromBackend,
 	} from "$lib/stores/batch-queue.svelte";
 	import { isTauriRuntime } from "$lib/tauri/env";
 
@@ -58,11 +59,16 @@
 					}),
 				);
 				if (isTauriRuntime()) {
-					void syncBatchQueueFromLocalApi();
+					void syncQueuesFromLocalBackend();
 					const poll = window.setInterval(() => {
-						void syncBatchQueueFromLocalApi();
+						void syncQueuesFromLocalBackend();
 					}, 900);
 					unsubs.push(() => clearInterval(poll));
+					unsubs.push(
+						await listen("pending_batch_intents_changed", () => {
+							void syncIntentQueueFromBackend();
+						}),
+					);
 				}
 			} catch {
 				/* Sin entorno Tauri */

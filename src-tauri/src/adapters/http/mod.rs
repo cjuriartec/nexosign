@@ -5,6 +5,8 @@ mod pending_batch_intent;
 
 pub use pending_batch_intent::{PendingBatchIntent, PENDING_INTENT_TTL_SECS};
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use axum::{
     body::Body,
     extract::{DefaultBodyLimit, Path, State},
@@ -23,6 +25,7 @@ use tokio_util::sync::CancellationToken;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::adapters::http::state::{HealthResponse, PingResponse, SharedState};
+use crate::adapters::persistence::queue_store;
 use crate::adapters::pdf::pades::SignatureGridPlacement;
 use crate::adapters::worker::batch::BatchJob;
 use crate::infrastructure::batch_pdf_validation::{
@@ -99,6 +102,12 @@ fn gate_batch_origin(state: &SharedState, headers: &HeaderMap) -> Result<(), Res
         )
             .into_response(),
     )
+}
+
+fn emit_pending_batch_intents_changed(state: &SharedState) {
+    if let Some(ref h) = state.app_handle {
+        let _ = h.emit("pending_batch_intents_changed", serde_json::json!({}));
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -325,6 +334,16 @@ async fn post_batch_sign_intent_json(
     let request_id = uuid::Uuid::new_v4().to_string();
     let intent = PendingBatchIntent::new(body.inputs, output_dir, None);
 
+    if let Some(ref db_arc) = state.queue_sqlite_path {
+        if let Err(e) = queue_store::upsert_intent_payload(db_arc.as_ref(), &request_id, &intent) {
+            tracing::warn!(
+                error = %e,
+                request_id = %request_id,
+                "persistir intent JSON en SQLite"
+            );
+        }
+    }
+
     {
         let mut g = match state.pending_batch_intents.lock() {
             Ok(g) => g,
@@ -338,6 +357,8 @@ async fn post_batch_sign_intent_json(
         };
         g.insert(request_id.clone(), intent);
     }
+
+    emit_pending_batch_intents_changed(&state);
 
     let deep_link = format!("nexosign://sign?intent={}", request_id);
 
@@ -583,6 +604,16 @@ async fn post_batch_sign_intent_multipart(
 
     let intent = PendingBatchIntent::new(paths, output_dir, Some(staging_dir.clone()));
 
+    if let Some(ref db_arc) = state.queue_sqlite_path {
+        if let Err(e) = queue_store::upsert_intent_payload(db_arc.as_ref(), &request_id, &intent) {
+            tracing::warn!(
+                error = %e,
+                request_id = %request_id,
+                "persistir intent multipart en SQLite"
+            );
+        }
+    }
+
     {
         let mut g = match state.pending_batch_intents.lock() {
             Ok(g) => g,
@@ -597,6 +628,8 @@ async fn post_batch_sign_intent_multipart(
         };
         g.insert(request_id.clone(), intent);
     }
+
+    emit_pending_batch_intents_changed(&state);
 
     let deep_link = format!("nexosign://sign?intent={}", request_id);
 
@@ -758,11 +791,18 @@ async fn post_batch_sign(
                 if let Ok(mut p) = state.pending_batch_intents.lock() {
                     p.remove(&rid);
                 }
+                if let Some(ref db_arc) = state.queue_sqlite_path {
+                    let _ = queue_store::delete_intent_payload(db_arc.as_ref(), &rid);
+                }
                 if let Ok(mut m) = state.intent_request_to_job.lock() {
                     m.insert(rid, job_id.clone());
                 }
             }
             if let Ok(mut m) = state.batch_job_snapshots.lock() {
+                let queued_at_unix = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .ok();
                 m.insert(
                     job_id.clone(),
                     BatchJobSnapshot {
@@ -770,6 +810,7 @@ async fn post_batch_sign(
                         phase: BatchJobPhase::Queued,
                         actual: 0,
                         total: u32::try_from(input_count).unwrap_or(1).max(1),
+                        queued_at_unix,
                         current_file_name: None,
                         error: None,
                     },

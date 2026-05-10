@@ -11,6 +11,7 @@
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import * as Progress from "$lib/components/ui/progress/index.js";
 	import { cn } from "$lib/utils.js";
+	import { removePendingBatchIntent } from "$lib/tauri/batch-sign-intent";
 	import {
 		ACTIVE_BATCH_STATUSES,
 		batchQueue,
@@ -169,7 +170,12 @@
 		removeBatchQueueItem(jobId);
 	}
 
-	function removeIntent(requestId: string): void {
+	async function removeIntent(requestId: string): Promise<void> {
+		try {
+			await removePendingBatchIntent(requestId);
+		} catch {
+			/* proceso sin IPC */
+		}
 		removeIntentQueueItem(requestId);
 	}
 
