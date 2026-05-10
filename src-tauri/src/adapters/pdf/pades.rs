@@ -340,8 +340,8 @@ fn rect_from_grid_with_aspect(page_box: [f64; 4], g: SignatureGridPlacement, asp
     let y_cell_bottom = page_ury - margin - (row + 1.0) * cell_h;
 
     let ar = aspect.clamp(0.25, 4.0);
-    let max_w = cell_w * 0.55;
-    let max_h = cell_h * 0.55;
+    let max_w = cell_w * 0.40;
+    let max_h = cell_h * 0.40;
     let mut widget_w = max_w;
     let mut widget_h = widget_w / ar;
     if widget_h > max_h {
