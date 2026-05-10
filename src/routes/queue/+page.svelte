@@ -57,15 +57,15 @@
 			case "preparing":
 				return "Preparando";
 			case "queued":
-				return "En cola";
+				return "Cola";
 			case "running":
-				return "Firmando";
+				return "Firma";
 			case "cancelling":
 				return "Cancelando";
 			case "cancelled":
 				return "Cancelado";
 			case "finished":
-				return "Completado";
+				return "OK";
 			case "error":
 				return "Error";
 			default:
@@ -86,40 +86,33 @@
 	}
 
 	async function confirmClearAll(): Promise<void> {
-		const ok = await ask(
-			"Se borrarán todas las entradas del historial de colas en esta aplicación. ¿Continuar?",
-			{ title: "Limpiar historial", kind: "warning" },
-		);
+		const ok = await ask("¿Vaciar todo el historial?", { title: "Colas", kind: "warning" });
 		if (!ok) return;
 		clearBatchQueue();
-		toast.success("Historial vaciado.");
+		toast.success("Listo.");
 	}
 
 	async function confirmClearFinished(): Promise<void> {
 		const n = terminalCount;
-		if (n === 0) {
-			toast.message("No hay lotes finalizados para quitar.");
-			return;
-		}
-		const ok = await ask(
-			`Se eliminarán ${n} entrada(s) ya terminadas (completadas, canceladas o con error). ¿Continuar?`,
-			{ title: "Quitar finalizados", kind: "info" },
-		);
+		if (n === 0) return;
+		const ok = await ask(`¿Quitar ${n} entrada(s) ya terminadas?`, {
+			title: "Colas",
+			kind: "info",
+		});
 		if (!ok) return;
 		clearTerminalBatchQueueItems();
-		toast.success("Entradas finalizadas eliminadas.");
+		toast.success("Listo.");
 	}
 
 	function removeOne(jobId: string): void {
 		removeBatchQueueItem(jobId);
-		toast.message("Entrada eliminada.");
 	}
 
 	const filterButtons: { id: QueueFilter; label: string }[] = [
 		{ id: "all", label: "Todos" },
 		{ id: "active", label: "En curso" },
 		{ id: "finished", label: "Completados" },
-		{ id: "cancelled", label: "Cancelados" },
+		{ id: "cancelled", label: "Cancelado" },
 		{ id: "error", label: "Error" },
 	];
 </script>
@@ -128,16 +121,16 @@
 	<title>Colas — NexoSign</title>
 </svelte:head>
 
-<div class="space-y-4 pb-6">
+<div class="space-y-3 pb-6">
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<h1 class="text-2xl font-semibold tracking-tight">Colas</h1>
 		<div class="flex flex-wrap items-center gap-2">
 			{#if canCancelActiveJob}
 				<Button type="button" variant="outline" size="sm" onclick={() => void cancelActiveBatchJob()}>
-					Cancelar cola activa
+					Cancelar
 				</Button>
 			{/if}
-			<Button variant="outline" size="sm" href="/sign">Ir a Firmar</Button>
+			<Button variant="outline" size="sm" href="/sign">Firmar</Button>
 		</div>
 	</div>
 
@@ -165,27 +158,18 @@
 			disabled={terminalCount === 0}
 			onclick={() => void confirmClearFinished()}
 		>
-			Quitar finalizados ({terminalCount})
+			Quitar terminados ({terminalCount})
 		</Button>
 		<Button type="button" variant="destructive" size="sm" onclick={() => void confirmClearAll()}>
-			Vaciar historial
+			Vaciar todo
 		</Button>
 	</div>
 
 	<Card.Root>
-		<Card.Header class="pb-2">
-			<Card.Title class="text-base">Historial de lotes</Card.Title>
-			<Card.Description>
-				Misma lista que en Firmar: incluye preparación, firma en curso y resultados. Se guarda en el perfil de
-				datos de NexoSign para poder revisarlo tras cerrar la ventana.
-			</Card.Description>
-		</Card.Header>
-		<Card.Content class="pt-0">
+		<Card.Content class="pt-6">
 			{#if filteredItems.length === 0}
 				<p class="text-muted-foreground py-8 text-center text-sm">
-					{filter === "all"
-						? "Aún no hay lotes. Cuando firmes desde Firmar, aparecerán aquí."
-						: "Nada que mostrar con este filtro."}
+					{filter === "all" ? "Sin entradas." : "Sin resultados."}
 				</p>
 			{:else}
 				<ScrollArea.Root class="h-[min(60vh,520px)] pr-3">
@@ -212,7 +196,7 @@
 										variant="ghost"
 										size="icon"
 										class="size-8 shrink-0"
-										title="Eliminar esta entrada"
+										title="Quitar"
 										onclick={() => removeOne(q.jobId)}
 									>
 										<Trash2Icon class="size-4" />
@@ -225,10 +209,4 @@
 			{/if}
 		</Card.Content>
 	</Card.Root>
-
-	<p class="text-muted-foreground max-w-2xl text-xs leading-relaxed">
-		Los trabajos «en curso» de una sesión anterior se marcan como error al volver a abrir la app (no había forma de
-		seguirlos). Puedes borrar fila a fila o usar <strong class="text-foreground">Quitar finalizados</strong> para
-		dejar solo activos e incompletos raros.
-	</p>
 </div>

@@ -16,16 +16,16 @@
 {#if batchQueue.items.length > 0}
 	<Card.Root size="sm">
 		<Card.Header class="pb-2">
-			<Card.Title class="text-sm font-medium">Panel de colas</Card.Title>
-			<Card.Description class="text-xs">
-				{#if showWizardLockHint && batchQueueHasActiveWork}
-					Hay trabajo en curso. No puedes volver a pasos anteriores; puedes cancelar el lote activo.
-				{:else if batchQueueHasActiveWork}
-					Hay trabajo en curso. Puedes cancelar el lote activo desde aquí o en Firmar.
-				{:else}
-					Historial de lotes en esta app (se guarda en tu perfil de usuario).
-				{/if}
-			</Card.Description>
+			<Card.Title class="text-sm font-medium">Colas</Card.Title>
+			{#if batchQueueHasActiveWork}
+				<Card.Description class="text-xs">
+					{#if showWizardLockHint}
+						Lote activo — atrás bloqueado hasta terminar o cancelar.
+					{:else}
+						Firma en curso.
+					{/if}
+				</Card.Description>
+			{/if}
 		</Card.Header>
 		<Card.Content class="space-y-1.5 pt-0">
 			{#each batchQueue.items as q}
@@ -43,13 +43,13 @@
 								: q.status === "queued"
 									? "En cola"
 									: q.status === "running"
-										? "Firmando"
+										? "En curso"
 										: q.status === "cancelling"
 											? "Cancelando"
 											: q.status === "cancelled"
 												? "Cancelado"
 												: q.status === "finished"
-													? "Terminado"
+													? "Completados"
 													: "Error"}
 						</Badge>
 						<span class="text-muted-foreground tabular-nums text-[11px]">{q.progressPct}%</span>
