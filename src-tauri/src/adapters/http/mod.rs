@@ -342,6 +342,12 @@ async fn post_batch_sign(
         }
     }
 
+    let pin_for_worker = body
+        .pin
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
     let job_id = body
         .job_id
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -368,6 +374,7 @@ async fn post_batch_sign(
         cancel,
         output_dir,
         signature_grid,
+        pin: pin_for_worker,
     };
 
     match tx.try_send(job) {

@@ -19,6 +19,8 @@ pub struct BatchJob {
     pub cancel: CancellationToken,
     pub output_dir: Option<std::path::PathBuf>,
     pub signature_grid: Option<crate::adapters::pdf::pades::SignatureGridPlacement>,
+    /// PIN para repetir `C_Login` en el mismo hilo que `C_Sign` (PKCS#11 suele ser por hilo).
+    pub pin: Option<String>,
 }
 
 struct TauriProgress(AppHandle);
@@ -63,6 +65,7 @@ pub fn spawn_batch_worker(
                     cancel: job.cancel,
                     output_dir: job.output_dir,
                     signature_grid: job.signature_grid,
+                    pin: job.pin,
                 };
                 let _ = process_batch(input, token_c, notifier);
                 if let Ok(mut g) = reg_c.lock() {

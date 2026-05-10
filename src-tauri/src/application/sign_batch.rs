@@ -21,6 +21,8 @@ pub struct SignBatchInput {
     pub output_dir: Option<PathBuf>,
     /// Casilla 5×7 en primera página (`None` → valor por defecto del motor PDF).
     pub signature_grid: Option<SignatureGridPlacement>,
+    /// Mismo PIN que `POST /batch/sign`; el worker repite login en su hilo para PKCS#11.
+    pub pin: Option<String>,
 }
 
 fn output_path_for(input: &Path, output_dir: Option<&Path>) -> PathBuf {
@@ -47,6 +49,27 @@ pub fn process_batch<P: ProgressNotifier>(
     progress: P,
 ) -> Result<(), SignBatchError> {
     let total = input.inputs.len().try_into().unwrap_or(u32::MAX);
+
+    if let Some(ref p) = input.pin {
+        let pt = p.trim();
+        if !pt.is_empty() {
+            if let Err(e) = token.login_for_certificate(pt.to_string(), &input.cert_id_hex) {
+                progress.notify(ProgressEvent {
+                    job_id: input.job_id.clone(),
+                    current: 1,
+                    total: total.max(1),
+                    file_name: String::new(),
+                    path: String::new(),
+                    error: Some(format!(
+                        "Sesión PKCS#11 en el proceso de firma: {e}"
+                    )),
+                });
+                let _ = token.logout();
+                return Ok(());
+            }
+        }
+    }
+
     for (idx, path) in input.inputs.iter().enumerate() {
         if input.cancel.is_cancelled() {
             progress.notify(ProgressEvent {
