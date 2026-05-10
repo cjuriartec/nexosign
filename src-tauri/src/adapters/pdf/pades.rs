@@ -48,17 +48,54 @@ fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
+/// `lopdf` puede escribir `/SubFilter/adbe.pkcs7.detached` (sin espacio) o con espacio; ambos son PDF válidos.
+fn find_subfilter_adobe_pkcs7_detached(buf: &[u8]) -> Option<usize> {
+    const KEY: &[u8] = b"/SubFilter";
+    let mut search_from = 0usize;
+    while search_from < buf.len() {
+        let rel = find_sub(&buf[search_from..], KEY)?;
+        let i = search_from + rel;
+        let mut j = i + KEY.len();
+        while j < buf.len() && buf[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        if buf[j..].starts_with(b"/adbe.pkcs7.detached") {
+            return Some(i);
+        }
+        search_from = i.saturating_add(1);
+    }
+    None
+}
+
+/// Posición del `<` que abre el hex string de `/Contents` del diccionario de firma (busca desde `from`).
+fn find_contents_hex_angle_open(buf: &[u8], from: usize) -> Option<usize> {
+    const KEY: &[u8] = b"/Contents";
+    let mut search_from = from;
+    while search_from < buf.len() {
+        let rel = find_sub(&buf[search_from..], KEY)?;
+        let key_start = search_from + rel;
+        let mut j = key_start + KEY.len();
+        while j < buf.len() && buf[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        if buf.get(j) == Some(&b'<') {
+            return Some(j);
+        }
+        search_from = key_start.saturating_add(1);
+    }
+    None
+}
+
 /// Calcula digest SHA-256 del PDF excluyendo el contenido hexadecimal de `/Contents < ... >`.
 fn digest_pdf_pkcs7_detached(buf: &[u8]) -> Result<[u8; 32], SignBatchError> {
-    let marker = b"/SubFilter /adbe.pkcs7.detached";
-    let base = find_sub(buf, marker).ok_or_else(|| {
-        SignBatchError::Pades("no se encontró /SubFilter /adbe.pkcs7.detached tras guardar".into())
+    let base = find_subfilter_adobe_pkcs7_detached(buf).ok_or_else(|| {
+        SignBatchError::Pades(
+            "no se encontró el diccionario de firma (/SubFilter + adbe.pkcs7.detached) tras guardar".into(),
+        )
     })?;
-    let slice = &buf[base..];
-    let rel = find_sub(slice, b"/Contents <").ok_or_else(|| {
-        SignBatchError::Pades("no se encontró /Contents < para la firma".into())
+    let lt = find_contents_hex_angle_open(buf, base).ok_or_else(|| {
+        SignBatchError::Pades("no se encontró /Contents <hex> para la firma".into())
     })?;
-    let lt = base + rel + b"/Contents ".len(); // apunta a `<`
     debug_assert_eq!(buf.get(lt), Some(&b'<'));
     let tail = &buf[lt + 1..];
     let rel_gt = find_sub(tail, b">").ok_or_else(|| SignBatchError::Pades("sin '>' de cierre de Contents".into()))?;
@@ -70,11 +107,10 @@ fn digest_pdf_pkcs7_detached(buf: &[u8]) -> Result<[u8; 32], SignBatchError> {
 }
 
 fn patch_pdf_contents_der(buf: &mut Vec<u8>, cms_der: &[u8]) -> Result<(), SignBatchError> {
-    let marker = b"/SubFilter /adbe.pkcs7.detached";
-    let base = find_sub(buf.as_slice(), marker).ok_or_else(|| SignBatchError::Pades("marker cms".into()))?;
-    let slice = &buf[base..];
-    let rel = find_sub(slice, b"/Contents <").ok_or_else(|| SignBatchError::Pades("/Contents".into()))?;
-    let lt = base + rel + b"/Contents ".len();
+    let base = find_subfilter_adobe_pkcs7_detached(buf.as_slice())
+        .ok_or_else(|| SignBatchError::Pades("marker cms".into()))?;
+    let lt = find_contents_hex_angle_open(buf.as_slice(), base)
+        .ok_or_else(|| SignBatchError::Pades("/Contents".into()))?;
     if buf.get(lt) != Some(&b'<') {
         return Err(SignBatchError::Pades("formato /Contents inesperado".into()));
     }
@@ -341,16 +377,13 @@ fn append_signature_objects(
 }
 
 fn patch_byte_range(buf: &mut [u8]) -> Result<(), SignBatchError> {
-    let marker = b"/SubFilter /adbe.pkcs7.detached";
-    let base = find_sub(buf, marker).ok_or_else(|| {
+    let base = find_subfilter_adobe_pkcs7_detached(buf).ok_or_else(|| {
         SignBatchError::Pades(
-            "no se encontró la firma provisional (/SubFilter /adbe.pkcs7.detached) en el PDF incremental"
+            "no se encontró la firma provisional (/SubFilter + adbe.pkcs7.detached) en el PDF incremental"
                 .into(),
         )
     })?;
-    let slice = &buf[base..];
-    let rel = find_sub(slice, b"/Contents <").ok_or_else(|| SignBatchError::Pades("contents".into()))?;
-    let lt = base + rel + b"/Contents ".len();
+    let lt = find_contents_hex_angle_open(buf, base).ok_or_else(|| SignBatchError::Pades("contents".into()))?;
     let tail = &buf[lt + 1..];
     let rel_gt = find_sub(tail, b">").ok_or_else(|| SignBatchError::Pades(">".into()))?;
     let gt = lt + 1 + rel_gt;
@@ -359,7 +392,8 @@ fn patch_byte_range(buf: &mut [u8]) -> Result<(), SignBatchError> {
     let len2 = buf.len().saturating_sub(start2);
     let br = format!("{} {} {} {}", 0, lt, start2, len2);
     let needle = b"/ByteRange";
-    let br_pos = find_sub(buf, needle).ok_or_else(|| SignBatchError::Pades("/ByteRange".into()))?;
+    let br_rel = find_sub(&buf[base..], needle).ok_or_else(|| SignBatchError::Pades("/ByteRange".into()))?;
+    let br_pos = base + br_rel;
     let open = br_pos + find_sub(&buf[br_pos..], b"[").ok_or_else(|| SignBatchError::Pades("[ br".into()))?;
     let close_rel = find_sub(&buf[open..], b"]").ok_or_else(|| SignBatchError::Pades("] br".into()))?;
     let close = open + close_rel;
@@ -441,4 +475,25 @@ pub fn sign_pdf_pades_bes(
     Err(SignBatchError::Pades(
         "no convergió el tamaño reservado para CMS".into(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{find_contents_hex_angle_open, find_subfilter_adobe_pkcs7_detached};
+
+    #[test]
+    fn subfilter_adobe_with_or_without_space() {
+        let with_space = b"<</Type/Sig/SubFilter /adbe.pkcs7.detached/Contents<";
+        let no_space = b"<</Type/Sig/SubFilter/adbe.pkcs7.detached/Contents<";
+        assert!(find_subfilter_adobe_pkcs7_detached(with_space).is_some());
+        assert!(find_subfilter_adobe_pkcs7_detached(no_space).is_some());
+    }
+
+    #[test]
+    fn contents_hex_angle_after_optional_whitespace() {
+        let buf = b"<</Type/Sig/SubFilter/adbe.pkcs7.detached/Contents   <001122>";
+        let base = find_subfilter_adobe_pkcs7_detached(buf).unwrap();
+        let lt = find_contents_hex_angle_open(buf, base).unwrap();
+        assert_eq!(buf[lt], b'<');
+    }
 }
