@@ -165,7 +165,7 @@ fn build_cms_signed_data(
     sd.add_certificate(CertificateChoices::Certificate(cert.clone()))
         .map_err(|e| SignBatchError::Pades(format!("cert: {e}")))?;
     sd.add_signer_info::<Pkcs11RsaCmsSigner, rsa::pkcs1v15::Signature>(signer_info_builder)
-        .map_err(|e| SignBatchError::Pades(format!("signer info: {e}")))?;
+        .map_err(|e| SignBatchError::Pades(format!("CMS SignerInfo: {e}")))?;
 
     let ci = sd.build().map_err(|e| SignBatchError::Pades(format!("SignedData: {e}")))?;
     ci.to_der()
