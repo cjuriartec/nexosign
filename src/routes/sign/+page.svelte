@@ -25,6 +25,8 @@
 	import { isTauriRuntime } from "$lib/tauri/env";
 	import { getHumanNameFromDn, extractDniFromDn } from "$lib/signature-appearance";
 	import { renderSignatureSealPngBase64 } from "$lib/signature-appearance-render";
+	import EyeIcon from "@lucide/svelte/icons/eye";
+	import EyeOffIcon from "@lucide/svelte/icons/eye-off";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import FileStackIcon from "@lucide/svelte/icons/files";
 	import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
@@ -54,6 +56,7 @@
 	let certs = $state<SigningCertSummary[]>([]);
 	let certId = $state("");
 	let pin = $state("");
+	let pinVisible = $state(false);
 	let pinError = $state<string | null>(null);
 	let apiBase = $state("");
 	let busy = $state(false);
@@ -279,6 +282,27 @@
 			toast.error("Indica el PIN del token para firmar.");
 			pinError = "Introduce el PIN del token.";
 			return;
+		}
+
+		if (isTauriRuntime()) {
+			try {
+				await pkcs11.pkcs11VerifyPin(pin.trim(), certId.trim());
+				toast.success("PIN correcto");
+			} catch (e) {
+				const msg = String(e);
+				if (msg.includes("PIN incorrecto")) {
+					pinError = "PIN incorrecto.";
+					toast.error("PIN incorrecto.");
+				} else if (msg.includes("PIN bloqueado")) {
+					pinError =
+						"El PIN está bloqueado por demasiados intentos fallidos. Desbloquea el token según las instrucciones del fabricante.";
+					toast.error(pinError);
+				} else {
+					pinError = msg;
+					toast.error(msg);
+				}
+				return;
+			}
 		}
 
 		busy = true;
@@ -728,23 +752,45 @@
 				</div>
 				<div class="grid max-w-md gap-2">
 					<Label for="pin-confirm">PIN del token</Label>
-					<Input
-						id="pin-confirm"
-						type="password"
-						autocomplete="off"
-						bind:value={pin}
-						placeholder="PIN"
-						class={pinError ? "border-destructive focus-visible:ring-destructive" : ""}
-						oninput={() => {
-							pinError = null;
-						}}
-						onkeydown={(e) => {
-							if (e.key === "Enter") {
-								e.preventDefault();
-								void submitBatch();
-							}
-						}}
-					/>
+					<div class="relative">
+						<Input
+							id="pin-confirm"
+							type={pinVisible ? "text" : "password"}
+							autocomplete="off"
+							bind:value={pin}
+							placeholder="PIN"
+							class={cn(
+								"pr-10",
+								pinError ? "border-destructive focus-visible:ring-destructive" : "",
+							)}
+							oninput={() => {
+								pinError = null;
+							}}
+							onkeydown={(e) => {
+								if (e.key === "Enter") {
+									e.preventDefault();
+									void submitBatch();
+								}
+							}}
+						/>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							class="text-muted-foreground absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2"
+							aria-label={pinVisible ? "Ocultar PIN" : "Mostrar PIN"}
+							title={pinVisible ? "Ocultar PIN" : "Mostrar PIN"}
+							onclick={() => {
+								pinVisible = !pinVisible;
+							}}
+						>
+							{#if pinVisible}
+								<EyeOffIcon class="h-4 w-4" />
+							{:else}
+								<EyeIcon class="h-4 w-4" />
+							{/if}
+						</Button>
+					</div>
 					{#if pinError}
 						<p class="text-sm font-medium text-destructive">{pinError}</p>
 					{/if}

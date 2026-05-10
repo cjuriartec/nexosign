@@ -525,7 +525,11 @@ impl Pkcs11TokenManager {
             }
             Err(e) => {
                 reset_pkcs11_inner_state(&mut inner);
-                Err(e.into())
+                match &e {
+                    CryptokiError::Pkcs11(RvError::PinIncorrect, _) => Err(TokenError::PinIncorrect),
+                    CryptokiError::Pkcs11(RvError::PinLocked, _) => Err(TokenError::PinLocked),
+                    _ => Err(e.into()),
+                }
             }
         }
     }

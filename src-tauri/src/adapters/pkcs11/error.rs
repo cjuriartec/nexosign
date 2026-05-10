@@ -19,6 +19,10 @@ pub enum TokenError {
     NotLoggedIn,
     #[error("PIN vacío")]
     EmptyPin,
+    #[error("PIN incorrecto")]
+    PinIncorrect,
+    #[error("PIN bloqueado (demasiados intentos fallidos)")]
+    PinLocked,
     #[error("identificador de certificado inválido")]
     BadCertId,
     #[error("no se encontró clave privada para el certificado indicado")]
