@@ -17,6 +17,8 @@ impl AllowedOrigins {
                 "http://127.0.0.1:1420".to_string(),
                 "http://localhost:5173".to_string(),
                 "http://127.0.0.1:5173".to_string(),
+                "http://127.0.0.1:14500".to_string(),
+                "http://localhost:14500".to_string(),
             ],
         }
     }
@@ -79,6 +81,8 @@ mod tests {
         let a = AllowedOrigins::development_defaults();
         assert!(a.is_allowed_origin("http://localhost:1420"));
         assert!(a.is_allowed_origin("http://127.0.0.1:1420"));
+        assert!(a.is_allowed_origin("http://127.0.0.1:14500"));
+        assert!(a.is_allowed_origin("http://localhost:14500"));
     }
 
     #[test]

@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "NexoSign API local",
-    "description": "API HTTP en loopback (`127.0.0.1:14500`) cuando NexoSign está en ejecución.\n\n**CORS / origen:** los `POST` y los **`GET`** de batch (descargas, estado del intent) exigen cabecera **`Origin`** autorizada. Desde curl: `-H \"Origin: http://localhost:1420\"`.\n\n**Portal sin backend:** tras `POST …/batch/sign/intent`, sondea `GET /api/v1/batch/sign/intent/{request_id}/status` hasta `completed`; luego `GET …/jobs/{job_id}/signed-files` y cada `GET …/files/{i}`.\n\n**No incluido aquí:** la encolación directa de firma (`POST …/batch/sign`), el sondeo fino de progreso por `job_id` que usa la app de escritorio, y otras rutas internas; **no** forman parte de este contrato público para integradores.\n\n**Scalar / otros:** importa `http://127.0.0.1:14500/openapi.json` con la app abierta.",
+    "description": "API HTTP en loopback (`127.0.0.1:14500`) cuando NexoSign está en ejecución.\n\n**CORS / origen:** las rutas batch comprueban confianza del origen. Desde **otro dominio** el navegador envía `Origin` (debe estar en sitios permitidos). Desde **esta misma URL** (p. ej. Swagger en `/docs`) suele bastar sin rellenar `Origin` manualmente.\n\n**Portal sin backend:** tras `POST …/batch/sign/intent`, sondea `GET /api/v1/batch/sign/intent/{request_id}/status` hasta `completed`; luego `GET …/jobs/{job_id}/signed-files` y cada `GET …/files/{i}`.\n\n**No incluido aquí:** la encolación directa de firma (`POST …/batch/sign`), el sondeo fino de progreso por `job_id` que usa la app de escritorio, y otras rutas internas; **no** forman parte de este contrato público para integradores.\n\n**Scalar / otros:** importa `http://127.0.0.1:14500/openapi.json` con la app abierta.",
     "version": "0.1.0"
   },
   "servers": [
@@ -14,7 +14,7 @@
   "tags": [
     { "name": "health", "description": "Estado del servicio" },
     { "name": "utils", "description": "Utilidades y pruebas" },
-    { "name": "batch", "description": "Firma por lotes — contrato integradores (intent, estado, descargas); requiere Origin permitido" }
+    { "name": "batch", "description": "Firma por lotes (intent, estado, descargas); política de origen en el servidor" }
   ],
   "paths": {
     "/health": {
@@ -69,17 +69,8 @@
       "post": {
         "tags": ["batch"],
         "summary": "Registrar intención de firma (sin encolar)",
-        "description": "Registra PDFs para el asistente en la app **sin encolar la firma**. Integración web: **`multipart/form-data`** con el campo repetible **`files`** (un PDF por parte). También **`application/json`** con rutas absolutas locales (`inputs`). Requiere **Origin** permitido.",
+        "description": "Registra PDFs para el asistente en la app **sin encolar la firma**. Integración web: **`multipart/form-data`** con el campo repetible **`files`** (un PDF por parte). También **`application/json`** con rutas absolutas locales (`inputs`). La política de origen la aplica el servidor (CORS / sitios permitidos); desde otro dominio el navegador envía `Origin` sin configurarlo aquí.",
         "operationId": "postBatchSignIntent",
-        "parameters": [
-          {
-            "name": "Origin",
-            "in": "header",
-            "required": true,
-            "schema": { "type": "string" },
-            "example": "http://localhost:1420"
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -140,7 +131,7 @@
       "get": {
         "tags": ["batch"],
         "summary": "Estado del intent (portal sin backend)",
-        "description": "Sondeo desde el navegador con el **`request_id`** devuelto por `POST …/intent`. Fases: **`awaiting_confirmation`** (intención aún abierta), **`processing`** (ya hay `job_id`, el worker no ha registrado salidas), **`completed`** (firma terminada; usar `manifest_href` y `GET …/jobs/{job_id}/files/{i}`). Requiere **Origin** permitido.",
+        "description": "Sondeo desde el navegador con el **`request_id`** devuelto por `POST …/intent`. Fases: **`awaiting_confirmation`** (intención aún abierta), **`processing`** (ya hay `job_id`, el worker no ha registrado salidas), **`completed`** (firma terminada; usar `manifest_href` y `GET …/jobs/{job_id}/files/{i}`). Política de origen en servidor.",
         "operationId": "getBatchSignIntentStatus",
         "parameters": [
           {
@@ -148,13 +139,6 @@
             "in": "path",
             "required": true,
             "schema": { "type": "string" }
-          },
-          {
-            "name": "Origin",
-            "in": "header",
-            "required": true,
-            "schema": { "type": "string" },
-            "example": "http://localhost:1420"
           }
         ],
         "responses": {
@@ -202,7 +186,7 @@
       "get": {
         "tags": ["batch"],
         "summary": "Listar PDF firmados listos para descargar",
-        "description": "Tras terminar el trabajo `job_id`, devuelve índices y rutas relativas `href` para `GET …/files/{file_index}`. Requiere **Origin** permitido.",
+        "description": "Tras terminar el trabajo `job_id`, devuelve índices y rutas relativas `href` para `GET …/files/{file_index}`. Política de origen en servidor.",
         "operationId": "getBatchSignedManifest",
         "parameters": [
           {
@@ -210,13 +194,6 @@
             "in": "path",
             "required": true,
             "schema": { "type": "string" }
-          },
-          {
-            "name": "Origin",
-            "in": "header",
-            "required": true,
-            "schema": { "type": "string" },
-            "example": "http://localhost:1420"
           }
         ],
         "responses": {
@@ -254,7 +231,7 @@
       "get": {
         "tags": ["batch"],
         "summary": "Descargar un PDF firmado",
-        "description": "Devuelve el PDF en **`application/pdf`** (cabecera `Content-Disposition: attachment`). El índice coincide con `signed-files`. Requiere **Origin** permitido.",
+        "description": "Devuelve el PDF en **`application/pdf`** (cabecera `Content-Disposition: attachment`). El índice coincide con `signed-files`. Política de origen en servidor.",
         "operationId": "downloadBatchSignedFile",
         "parameters": [
           {
@@ -268,13 +245,6 @@
             "in": "path",
             "required": true,
             "schema": { "type": "integer", "minimum": 0 }
-          },
-          {
-            "name": "Origin",
-            "in": "header",
-            "required": true,
-            "schema": { "type": "string" },
-            "example": "http://localhost:1420"
           }
         ],
         "responses": {

@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::{
     body::Body,
     extract::{DefaultBodyLimit, Path, State},
-    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
     Router,
@@ -71,49 +71,98 @@ fn api_err(status: StatusCode, code: &'static str, detail: impl Into<String>) ->
         .into_response()
 }
 
-/// Exige `Origin` conocido (lista CORS / SQLite) antes de rutas batch: intent, estado de intent,
-/// encolado de firma, manifiesto y descargas de PDF firmados.
-fn gate_batch_origin(state: &SharedState, headers: &HeaderMap) -> Result<(), Response> {
-    let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
+/// Petición HTTP al propio servidor API en loopback (cabecera `Host`).
+fn host_is_loopback_local_api(host: &str) -> bool {
+    let host = host.trim().to_ascii_lowercase();
+    host == format!("127.0.0.1:{}", LOCAL_API_PORT)
+        || host == format!("localhost:{}", LOCAL_API_PORT)
+}
+
+/// Pestaña abierta sobre esta API (p. ej. Swagger en `/docs`): el GET puede ir sin `Origin`.
+fn referer_is_loopback_local_api(referer: &str) -> bool {
+    let r = referer.trim().to_ascii_lowercase();
+    let p = LOCAL_API_PORT;
+    r.starts_with(&format!("http://127.0.0.1:{p}/"))
+        || r.starts_with(&format!("http://localhost:{p}/"))
+}
+
+/// HTTP/2 usa `:authority`; a veces no hay `Host` en el mapa pero sí autoridad en el [`Uri`].
+fn uri_authority_is_loopback_local_api(uri: &Uri) -> bool {
+    let Some(auth) = uri.authority() else {
+        return false;
+    };
+    let host = auth.host().to_ascii_lowercase();
+    if host != "127.0.0.1" && host != "localhost" {
+        return false;
+    }
+    auth.port_u16() == Some(LOCAL_API_PORT)
+}
+
+fn gate_batch_origin_missing_origin_response() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({
+            "error": "missing_origin",
+            "hint": "Los GET desde Swagger a menudo no envían Origin; la API acepta llamadas al puerto local sin Origin si Host/Referer/URI indican 127.0.0.1:14500. Desde curl: -H \"Origin: http://127.0.0.1:14500\""
+        })),
+    )
+        .into_response()
+}
+
+/// Rutas batch: `Origin` debe estar en la lista **si** el navegador lo envía; si no hay `Origin`,
+/// se aceptan peticiones claras al propio listener en loopback (Swagger, HTTP/2).
+fn gate_batch_origin(state: &SharedState, headers: &HeaderMap, uri: &Uri) -> Result<(), Response> {
+    if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+        let allowed = state
+            .origins
+            .read()
+            .map(|g| g.is_allowed_origin(origin))
+            .unwrap_or(false);
+
+        if allowed {
+            return Ok(());
+        }
+
+        if let Some(ref h) = state.app_handle {
+            let _ = h.emit(
+                "origin_trust_request",
+                serde_json::json!({ "origin": origin }),
+            );
+        }
+
         return Err(
             (
                 StatusCode::FORBIDDEN,
                 Json(serde_json::json!({
-                    "error": "missing_origin",
-                    "hint": "El navegador debe enviar el header Origin; para curl use -H \"Origin: http://localhost:1420\""
+                    "error": "origin_not_trusted",
+                    "origin": origin,
                 })),
             )
                 .into_response(),
         );
-    };
+    }
 
-    let allowed = state
-        .origins
-        .read()
-        .map(|g| g.is_allowed_origin(origin))
-        .unwrap_or(false);
-
-    if allowed {
+    if headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|h| host_is_loopback_local_api(h))
+    {
         return Ok(());
     }
 
-    if let Some(ref h) = state.app_handle {
-        let _ = h.emit(
-            "origin_trust_request",
-            serde_json::json!({ "origin": origin }),
-        );
+    if headers
+        .get(header::REFERER)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|r| referer_is_loopback_local_api(r))
+    {
+        return Ok(());
     }
 
-    Err(
-        (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "origin_not_trusted",
-                "origin": origin,
-            })),
-        )
-            .into_response(),
-    )
+    if uri_authority_is_loopback_local_api(uri) {
+        return Ok(());
+    }
+
+    Err(gate_batch_origin_missing_origin_response())
 }
 
 fn emit_pending_batch_intents_changed(state: &SharedState) {
@@ -243,10 +292,11 @@ async fn post_ping() -> impl IntoResponse {
 /// Acepta `application/json` (rutas locales) o `multipart/form-data` (campos `file`/`files` + `output_dir` opcional).
 async fn post_batch_sign_intent(
     State(state): State<SharedState>,
+    uri: Uri,
     headers: HeaderMap,
     body: Body,
 ) -> impl IntoResponse {
-    if let Err(resp) = gate_batch_origin(&state, &headers) {
+    if let Err(resp) = gate_batch_origin(&state, &headers, &uri) {
         return resp;
     }
 
@@ -637,6 +687,7 @@ async fn post_batch_sign_intent_multipart(
 
 async fn post_batch_sign(
     State(state): State<SharedState>,
+    uri: Uri,
     headers: HeaderMap,
     Json(body): Json<BatchSignBody>,
 ) -> impl IntoResponse {
@@ -648,7 +699,7 @@ async fn post_batch_sign(
             .into_response();
     };
 
-    if let Err(resp) = gate_batch_origin(&state, &headers) {
+    if let Err(resp) = gate_batch_origin(&state, &headers, &uri) {
         return resp;
     }
 
@@ -847,10 +898,11 @@ async fn post_batch_sign(
 /// Sondeo desde el portal web: `request_id` del intent → fase y `job_id` cuando ya se encoló la firma.
 async fn get_batch_sign_intent_status(
     State(state): State<SharedState>,
+    uri: Uri,
     headers: HeaderMap,
     Path(request_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(resp) = gate_batch_origin(&state, &headers) {
+    if let Err(resp) = gate_batch_origin(&state, &headers, &uri) {
         return resp;
     }
 
@@ -950,10 +1002,11 @@ async fn get_batch_sign_intent_status(
 /// Estado del trabajo de firma (fase, progreso). **No** figura en `openapi/nexosign-local-api.openapi.json` (contrato externo); lo usa la UI vía fetch local.
 async fn get_batch_job_status(
     State(state): State<SharedState>,
+    uri: Uri,
     headers: HeaderMap,
     Path(job_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(resp) = gate_batch_origin(&state, &headers) {
+    if let Err(resp) = gate_batch_origin(&state, &headers, &uri) {
         return resp;
     }
     let snap = {
@@ -985,10 +1038,11 @@ async fn get_batch_job_status(
 /// Lista índices y URLs relativas para descargar los PDF firmados de un trabajo terminado.
 async fn get_batch_signed_manifest(
     State(state): State<SharedState>,
+    uri: Uri,
     headers: HeaderMap,
     Path(job_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(resp) = gate_batch_origin(&state, &headers) {
+    if let Err(resp) = gate_batch_origin(&state, &headers, &uri) {
         return resp;
     }
     let paths_opt = match state.batch_signed_outputs.lock() {
@@ -1040,10 +1094,11 @@ async fn get_batch_signed_manifest(
 /// Descarga un PDF firmado por índice (mismo orden que en `signed-files`).
 async fn download_batch_signed_file(
     State(state): State<SharedState>,
+    uri: Uri,
     headers: HeaderMap,
     Path((job_id, file_index)): Path<(String, usize)>,
 ) -> impl IntoResponse {
-    if let Err(resp) = gate_batch_origin(&state, &headers) {
+    if let Err(resp) = gate_batch_origin(&state, &headers, &uri) {
         return resp;
     }
 
@@ -1649,6 +1704,74 @@ mod tests {
         let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["error"], "missing_origin");
+    }
+
+    #[tokio::test]
+    async fn batch_job_status_swagger_origin_allowed() {
+        let app = build_router(SharedState::test_default());
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/batch/jobs/j1/status")
+                    .header("Origin", "http://127.0.0.1:14500")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(res.status(), StatusCode::FORBIDDEN);
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn batch_job_status_loopback_host_without_origin_ok() {
+        let app = build_router(SharedState::test_default());
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/batch/jobs/j1/status")
+                    .header("Host", "127.0.0.1:14500")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn batch_job_status_referer_docs_without_origin_ok() {
+        let app = build_router(SharedState::test_default());
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/batch/jobs/j1/status")
+                    .header("Referer", "http://127.0.0.1:14500/docs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn batch_job_status_uri_authority_http2_style_without_origin_ok() {
+        let app = build_router(SharedState::test_default());
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("http://127.0.0.1:14500/api/v1/batch/jobs/j1/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
