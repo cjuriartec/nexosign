@@ -106,3 +106,65 @@ pub fn validate_batch_pdf_inputs(paths: &[PathBuf]) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn magic_prefix_rejects_short_buffer() {
+        assert!(validate_pdf_magic_prefix(b"%PD").is_err());
+    }
+
+    #[test]
+    fn magic_prefix_rejects_wrong_header() {
+        assert!(validate_pdf_magic_prefix(b"<!DOCTYPE html>").is_err());
+    }
+
+    #[test]
+    fn magic_prefix_accepts_pdf_header() {
+        assert!(validate_pdf_magic_prefix(b"%PDF-1.7\n").is_ok());
+    }
+
+    #[test]
+    fn magic_and_size_rejects_over_limit() {
+        let big = MAX_BATCH_PDF_BYTES + 1;
+        assert!(validate_pdf_magic_and_size(big, b"%PDF").is_err());
+    }
+
+    #[test]
+    fn batch_inputs_empty_err() {
+        assert!(validate_batch_pdf_inputs(&[]).is_err());
+    }
+
+    #[test]
+    fn validate_single_and_partition_with_temp_pdf() {
+        let dir = std::env::temp_dir().join(format!(
+            "nexosign-pdf-val-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok_path = dir.join("good.pdf");
+        let mut f = std::fs::File::create(&ok_path).unwrap();
+        f.write_all(b"%PDF-1.7 minimal").unwrap();
+        drop(f);
+        let ok_abs = ok_path.canonicalize().unwrap();
+        assert!(validate_single_pdf_input(&ok_abs).is_ok());
+
+        let bad_path = dir.join("bad.pdf");
+        std::fs::write(&bad_path, b"not a pdf").unwrap();
+        let bad_abs = bad_path.canonicalize().unwrap();
+        assert!(validate_single_pdf_input(&bad_abs).is_err());
+
+        let (accepted, rejected) =
+            partition_pdf_paths(vec![ok_abs.clone(), bad_abs.clone()]);
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(accepted[0], ok_abs);
+
+        assert!(validate_batch_pdf_inputs(&[ok_abs]).is_ok());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

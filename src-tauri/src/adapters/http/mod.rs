@@ -1147,6 +1147,7 @@ async fn download_batch_signed_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use axum::body::{to_bytes, Body};
     use axum::http::header;
     use axum::http::{Request, StatusCode};
@@ -1519,5 +1520,245 @@ mod tests {
         assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
         let _ = rx.try_recv();
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn intent_status_expired_yields_404_intent_not_found() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        use crate::ports::QUEUE_MAX_WALL_CLOCK_SECS;
+
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let tmp = std::env::temp_dir().join(format!(
+            "nexosign-exp-intent-{}.pdf",
+            std::process::id()
+        ));
+        std::fs::write(&tmp, b"%PDF-1.4\n").unwrap();
+        let abs = tmp.canonicalize().unwrap();
+        let old_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .saturating_sub(QUEUE_MAX_WALL_CLOCK_SECS + 60);
+        {
+            let mut g = pending.lock().unwrap();
+            g.insert(
+                "expired-rid".into(),
+                PendingBatchIntent::restore_from_storage(vec![abs], None, None, old_unix),
+            );
+        }
+        let state = SharedState::test_http(None, Some(pending.clone()));
+        let app = build_router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/batch/sign/intent/expired-rid/status")
+                    .header("Origin", "http://localhost:1420")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"], "intent_not_found");
+        assert!(pending.lock().unwrap().get("expired-rid").is_none());
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn intent_json_persist_failure_returns_500() {
+        let dir = std::env::temp_dir().join(format!(
+            "nexosign-sqlite-dir-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "nexosign-persist-{}.pdf",
+            std::process::id()
+        ));
+        std::fs::write(&tmp, b"%PDF-1.4\n").unwrap();
+        let abs = tmp.canonicalize().unwrap();
+
+        let mut state = SharedState::test_http(None, None);
+        state.queue_sqlite_path = Some(Arc::new(dir.clone()));
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "inputs": [abs.to_str().unwrap()],
+        });
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign/intent")
+                    .header("Origin", "http://localhost:1420")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["error"], "intent_persist_failed");
+        let _ = std::fs::remove_file(&tmp);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn batch_origin_not_trusted_returns_403_json() {
+        let app = build_router(SharedState::test_default());
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/batch/jobs/some-id/status")
+                    .header("Origin", "https://untrusted.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["error"], "origin_not_trusted");
+    }
+
+    #[tokio::test]
+    async fn batch_job_status_missing_origin_403() {
+        let app = build_router(SharedState::test_default());
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/batch/jobs/j1/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["error"], "missing_origin");
+    }
+
+    #[tokio::test]
+    async fn signed_manifest_unknown_job_404() {
+        let app = build_router(SharedState::test_default());
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/batch/jobs/unknown-job/signed-files")
+                    .header("Origin", "http://localhost:1420")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["error"], "job_outputs_not_found");
+    }
+
+    #[tokio::test]
+    async fn download_signed_file_index_out_of_range() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        let outs = Arc::new(Mutex::new(HashMap::new()));
+        outs
+            .lock()
+            .unwrap()
+            .insert("job1".into(), vec![std::path::PathBuf::from("/tmp/a.pdf")]);
+        let mut state = SharedState::test_default();
+        state.batch_signed_outputs = outs;
+        let app = build_router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/batch/jobs/job1/files/99")
+                    .header("Origin", "http://localhost:1420")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["error"], "file_index_out_of_range");
+    }
+
+    #[tokio::test]
+    async fn download_signed_file_rejects_over_limit_bytes() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        let dir = std::env::temp_dir().join(format!("nexosign-dl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pdf_path = dir.join("big.pdf");
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&pdf_path)
+            .unwrap();
+        f.set_len(MAX_SIGNED_DOWNLOAD_BYTES + 1024).unwrap();
+        drop(f);
+
+        let outs = Arc::new(Mutex::new(HashMap::new()));
+        outs.lock().unwrap().insert("job-big".into(), vec![pdf_path]);
+        let mut state = SharedState::test_default();
+        state.batch_signed_outputs = outs;
+        let app = build_router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/batch/jobs/job-big/files/0")
+                    .header("Origin", "http://localhost:1420")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn batch_sign_body_over_default_limit_is_rejected() {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
+        let app = build_router(SharedState::test_http(Some(tx), None));
+        let big = vec![b'x'; MAX_BATCH_SIGN_BODY + 2048];
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign")
+                    .header("Origin", "http://localhost:1420")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(big))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            res.status() == StatusCode::PAYLOAD_TOO_LARGE || res.status() == StatusCode::BAD_REQUEST,
+            "unexpected status {}",
+            res.status()
+        );
     }
 }

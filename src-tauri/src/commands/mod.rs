@@ -512,4 +512,33 @@ mod tests {
         assert!(!staging.exists(), "staging debe borrarse al expirar");
         assert!(store.lock().unwrap().is_empty());
     }
+
+    #[test]
+    fn validate_partition_and_enumerate_pdf_commands() {
+        let dir = std::env::temp_dir().join(format!(
+            "nexosign-cmd-pdf-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok_pdf = dir.join("good.pdf");
+        std::fs::write(&ok_pdf, b"%PDF-1.7\n").unwrap();
+        let ok_abs = ok_pdf.canonicalize().unwrap();
+        let ok_s = ok_abs.to_string_lossy().into_owned();
+
+        validate_batch_pdf_paths(vec![ok_s.clone()]).unwrap();
+
+        let bad_txt = dir.join("x.txt");
+        std::fs::write(&bad_txt, b"hi").unwrap();
+        let bad_s = bad_txt.canonicalize().unwrap().to_string_lossy().into_owned();
+
+        let (accepted, rejected) = partition_batch_pdf_paths(vec![ok_s.clone(), bad_s]);
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(rejected.len(), 1);
+
+        let listed = enumerate_pdfs_under_folder(dir.to_string_lossy().into_owned()).unwrap();
+        assert!(listed.iter().any(|p| p.contains("good.pdf")));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

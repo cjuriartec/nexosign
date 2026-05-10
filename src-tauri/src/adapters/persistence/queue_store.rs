@@ -415,3 +415,147 @@ pub fn load_queue_snapshot(db_path: &Path) -> Result<Option<BatchQueueHistoryPay
         active_intent_request_id,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    fn temp_db_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "nexosign-queue-store-test-{}-{}",
+            name,
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn init_queue_tables_creates_expected_tables() {
+        let path = temp_db_path("schema");
+        let _ = std::fs::remove_file(&path);
+        init_queue_tables(&path).unwrap();
+        let conn = Connection::open(&path).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='intent_pending_payload'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn upsert_and_delete_intent_payload_roundtrip() {
+        let path = temp_db_path("intent");
+        let _ = std::fs::remove_file(&path);
+        init_queue_tables(&path).unwrap();
+        let intent = PendingBatchIntent::restore_from_storage(
+            vec![PathBuf::from("/tmp/a.pdf")],
+            None,
+            None,
+            42,
+        );
+        upsert_intent_payload(&path, "rid-1", &intent).unwrap();
+        delete_intent_payload(&path, "rid-1").unwrap();
+        let conn = Connection::open(&path).unwrap();
+        let cnt: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM intent_pending_payload WHERE request_id='rid-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cnt, 0);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn hydrate_removes_corrupt_inputs_json_row() {
+        let path = temp_db_path("corrupt");
+        let _ = std::fs::remove_file(&path);
+        init_queue_tables(&path).unwrap();
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO intent_pending_payload (request_id, inputs_json, output_dir, staging_dir, created_unix) VALUES (?1, ?2, NULL, NULL, ?3)",
+            params!["bad-rid", "NOT_JSON_ARRAY", 99_i64],
+        )
+        .unwrap();
+        drop(conn);
+        let map = Arc::new(Mutex::new(HashMap::new()));
+        hydrate_pending_intents_from_db(&path, &map).unwrap();
+        assert!(map.lock().unwrap().is_empty());
+        let conn = Connection::open(&path).unwrap();
+        let cnt: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM intent_pending_payload WHERE request_id='bad-rid'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cnt, 0);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn save_and_load_queue_snapshot_roundtrip() {
+        let path = temp_db_path("snapshot");
+        let _ = std::fs::remove_file(&path);
+        init_queue_tables(&path).unwrap();
+        let payload = BatchQueueHistoryPayload {
+            items: vec![BatchQueueItemPayload {
+                job_id: "j1".into(),
+                status: "running".into(),
+                label: "Lote".into(),
+                progress_pct: 50,
+                created_at: 1000,
+                finished_at: None,
+            }],
+            active_batch_job_id: Some("j1".into()),
+            intent_items: vec![IntentQueueItemPayload {
+                request_id: "i1".into(),
+                label: "1 PDF".into(),
+                file_count: 1,
+                created_at: 2000,
+            }],
+            active_intent_request_id: Some("i1".into()),
+        };
+        save_queue_snapshot(&path, &payload).unwrap();
+        let loaded = load_queue_snapshot(&path).unwrap().expect("snapshot");
+        assert_eq!(loaded.items.len(), 1);
+        assert_eq!(loaded.items[0].job_id, "j1");
+        assert_eq!(loaded.active_batch_job_id.as_deref(), Some("j1"));
+        assert_eq!(loaded.intent_items.len(), 1);
+        assert_eq!(loaded.active_intent_request_id.as_deref(), Some("i1"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn batch_job_enqueue_list_purge_delete() {
+        let path = temp_db_path("enqueue");
+        let _ = std::fs::remove_file(&path);
+        init_queue_tables(&path).unwrap();
+        upsert_batch_job_enqueue(&path, "old-job", 100).unwrap();
+        upsert_batch_job_enqueue(&path, "new-job", 500).unwrap();
+        let stale = list_batch_job_ids_enqueued_before(&path, 200).unwrap();
+        assert!(stale.contains(&"old-job".to_string()));
+        assert!(!stale.contains(&"new-job".to_string()));
+        purge_batch_job_enqueue_before(&path, 200).unwrap();
+        let conn = Connection::open(&path).unwrap();
+        let cnt: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM batch_job_enqueue WHERE job_id='old-job'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cnt, 0);
+        delete_batch_job_enqueue(&path, "new-job").unwrap();
+        let cnt2: i64 = conn
+            .query_row("SELECT COUNT(*) FROM batch_job_enqueue", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cnt2, 0);
+        let _ = std::fs::remove_file(&path);
+    }
+}

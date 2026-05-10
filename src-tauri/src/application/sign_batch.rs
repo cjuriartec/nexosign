@@ -123,3 +123,190 @@ pub fn process_batch<P: ProgressNotifier>(
     signer.end_signed_session();
     signed_outputs
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use crate::ports::{NoopProgressNotifier, ProgressEvent};
+
+    struct MockSigner {
+        session_ok: bool,
+        sign_results: Vec<Result<(), String>>,
+        sign_calls: AtomicUsize,
+        session_calls: AtomicUsize,
+        end_calls: AtomicUsize,
+    }
+
+    impl MockSigner {
+        fn new(session_ok: bool, sign_results: Vec<Result<(), String>>) -> Self {
+            Self {
+                session_ok,
+                sign_results,
+                sign_calls: AtomicUsize::new(0),
+                session_calls: AtomicUsize::new(0),
+                end_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl PdfPadesSigner for MockSigner {
+        fn ensure_signed_session(&self, _pin: Option<&str>, _cert_id_hex: &str) -> Result<(), String> {
+            self.session_calls.fetch_add(1, Ordering::SeqCst);
+            if self.session_ok {
+                Ok(())
+            } else {
+                Err("pin inválido".into())
+            }
+        }
+
+        fn sign_pdf_pades_bes(
+            &self,
+            _cert_id_hex: &str,
+            _input_path: &Path,
+            _output_path: &Path,
+            _placement: SignatureGridPlacement,
+            _seal_png: Option<&[u8]>,
+        ) -> Result<(), String> {
+            let i = self.sign_calls.fetch_add(1, Ordering::SeqCst);
+            self.sign_results
+                .get(i)
+                .cloned()
+                .unwrap_or(Ok(()))
+        }
+
+        fn end_signed_session(&self) {
+            self.end_calls.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct CollectNotifier {
+        events: Arc<std::sync::Mutex<Vec<ProgressEvent>>>,
+    }
+
+    impl CollectNotifier {
+        fn new() -> Self {
+            Self {
+                events: Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl ProgressNotifier for CollectNotifier {
+        fn notify(&self, ev: ProgressEvent) {
+            let mut g = self.events.lock().unwrap();
+            g.push(ev);
+        }
+    }
+
+    fn input_paths(n: usize) -> Vec<PathBuf> {
+        (0..n)
+            .map(|i| PathBuf::from(format!("/tmp/mock-batch-{i}.pdf")))
+            .collect()
+    }
+
+    #[test]
+    fn process_batch_session_error_emits_no_signed_outputs() {
+        let signer = Arc::new(MockSigner::new(false, vec![]));
+        let progress = CollectNotifier::new();
+        let cancel = CancellationToken::new();
+        let out = process_batch(
+            SignBatchInput {
+                job_id: "j1".into(),
+                cert_id_hex: "ab".into(),
+                inputs: input_paths(2),
+                cancel,
+                output_dir: None,
+                signature_grid: None,
+                pin: Some("1234".into()),
+                seal_png: None,
+            },
+            signer.clone(),
+            progress.clone(),
+        );
+        assert!(out.is_empty());
+        assert_eq!(signer.end_calls.load(Ordering::SeqCst), 1);
+        let evs = progress.events.lock().unwrap();
+        assert!(evs.iter().any(|e| e.error.as_deref() == Some("Sesión PKCS#11 en el proceso de firma: pin inválido")));
+    }
+
+    #[test]
+    fn process_batch_cancel_before_first_sign() {
+        let signer = Arc::new(MockSigner::new(true, vec![Ok(())]));
+        let progress = CollectNotifier::new();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let out = process_batch(
+            SignBatchInput {
+                job_id: "j2".into(),
+                cert_id_hex: "ab".into(),
+                inputs: input_paths(1),
+                cancel,
+                output_dir: None,
+                signature_grid: None,
+                pin: None,
+                seal_png: None,
+            },
+            signer.clone(),
+            progress.clone(),
+        );
+        assert!(out.is_empty());
+        assert_eq!(signer.sign_calls.load(Ordering::SeqCst), 0);
+        let evs = progress.events.lock().unwrap();
+        assert!(evs.iter().any(|e| e.error.as_deref() == Some("lote cancelado")));
+    }
+
+    #[test]
+    fn process_batch_sign_error_still_ends_session() {
+        let signer = Arc::new(MockSigner::new(
+            true,
+            vec![Err("fallo firma".into()), Ok(())],
+        ));
+        let progress = CollectNotifier::new();
+        let cancel = CancellationToken::new();
+        let out = process_batch(
+            SignBatchInput {
+                job_id: "j3".into(),
+                cert_id_hex: "ab".into(),
+                inputs: input_paths(2),
+                cancel,
+                output_dir: None,
+                signature_grid: None,
+                pin: None,
+                seal_png: None,
+            },
+            signer.clone(),
+            progress.clone(),
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(signer.sign_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(signer.end_calls.load(Ordering::SeqCst), 1);
+        let evs = progress.events.lock().unwrap();
+        assert!(evs.iter().any(|e| e.error.as_deref() == Some("fallo firma")));
+    }
+
+    #[test]
+    fn process_batch_success_invokes_noop_progress() {
+        let signer = Arc::new(MockSigner::new(true, vec![Ok(()), Ok(())]));
+        let cancel = CancellationToken::new();
+        let out = process_batch(
+            SignBatchInput {
+                job_id: "j4".into(),
+                cert_id_hex: "cd".into(),
+                inputs: input_paths(2),
+                cancel,
+                output_dir: None,
+                signature_grid: None,
+                pin: None,
+                seal_png: None,
+            },
+            signer.clone(),
+            NoopProgressNotifier,
+        );
+        assert_eq!(out.len(), 2);
+        assert_eq!(signer.end_calls.load(Ordering::SeqCst), 1);
+    }
+}

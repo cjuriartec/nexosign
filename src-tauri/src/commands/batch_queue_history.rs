@@ -51,3 +51,51 @@ pub fn save_batch_queue_history(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::adapters::persistence::queue_store::{
+        self, BatchQueueHistoryPayload, BatchQueueItemPayload, IntentQueueItemPayload,
+    };
+
+    #[test]
+    fn queue_snapshot_matches_command_persistence_contract() {
+        let path = std::env::temp_dir().join(format!(
+            "nexosign-bqh-cmd-{}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        queue_store::init_queue_tables(&path).unwrap();
+
+        let payload = BatchQueueHistoryPayload {
+            items: vec![BatchQueueItemPayload {
+                job_id: "jb".into(),
+                status: "queued".into(),
+                label: "t".into(),
+                progress_pct: 0,
+                created_at: 1,
+                finished_at: None,
+            }],
+            active_batch_job_id: None,
+            intent_items: vec![IntentQueueItemPayload {
+                request_id: "ir".into(),
+                label: "i".into(),
+                file_count: 2,
+                created_at: 2,
+            }],
+            active_intent_request_id: Some("ir".into()),
+        };
+
+        queue_store::save_queue_snapshot(&path, &payload).unwrap();
+        let loaded = queue_store::load_queue_snapshot(&path)
+            .unwrap()
+            .expect("snapshot");
+        assert_eq!(loaded.items.len(), 1);
+        assert_eq!(loaded.intent_items.len(), 1);
+        assert_eq!(
+            loaded.active_intent_request_id.as_deref(),
+            Some("ir")
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+}

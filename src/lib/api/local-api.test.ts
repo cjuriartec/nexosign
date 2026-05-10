@@ -6,6 +6,11 @@ import {
 	postBatchSign,
 	postBatchSignIntent,
 	postBatchSignIntentFormData,
+	fetchBatchSignIntentStatus,
+	fetchBatchSignedManifest,
+	fetchBatchSignedPdfBlob,
+	batchSignedFileAbsoluteUrl,
+	extractJsonErrorMessage,
 } from "./local-api";
 
 describe("local-api", () => {
@@ -218,5 +223,62 @@ describe("local-api", () => {
 		await expect(
 			postBatchSignIntent({ inputs: ["/x.pdf"] }, "http://mock.test"),
 		).rejects.toThrow(/bad/);
+	});
+
+	it("fetchBatchSignIntentStatus GETea URL codificada", async () => {
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				request_id: "rid",
+				phase: "processing",
+				job_id: "j1",
+			}),
+		});
+		const s = await fetchBatchSignIntentStatus("id/with slash", "http://mock.test");
+		expect(s.phase).toBe("processing");
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			"http://mock.test/api/v1/batch/sign/intent/id%2Fwith%20slash/status",
+			expect.any(Object),
+		);
+	});
+
+	it("fetchBatchSignedManifest parsea lista de ficheros", async () => {
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				job_id: "jb",
+				count: 1,
+				files: [{ index: 0, filename: "a.pdf", href: "/api/..." }],
+			}),
+		});
+		const m = await fetchBatchSignedManifest("jb", "http://mock.test");
+		expect(m.count).toBe(1);
+		expect(m.files[0].filename).toBe("a.pdf");
+	});
+
+	it("fetchBatchSignedPdfBlob devuelve Blob", async () => {
+		const blob = new Blob(["%PDF"], { type: "application/pdf" });
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			blob: async () => blob,
+		});
+		const out = await fetchBatchSignedPdfBlob("j", 0, "http://mock.test");
+		expect(out).toBe(blob);
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			"http://mock.test/api/v1/batch/jobs/j/files/0",
+			expect.any(Object),
+		);
+	});
+
+	it("batchSignedFileAbsoluteUrl construye ruta con índice", () => {
+		expect(batchSignedFileAbsoluteUrl("ab/cd", 2, "http://x")).toBe(
+			"http://x/api/v1/batch/jobs/ab%2Fcd/files/2",
+		);
+	});
+
+	it("extractJsonErrorMessage prioriza detail sobre error", () => {
+		expect(extractJsonErrorMessage({ detail: "d", error: "e" })).toBe("d");
+		expect(extractJsonErrorMessage({ error: "solo" })).toBe("solo");
+		expect(extractJsonErrorMessage(null)).toBeUndefined();
 	});
 });
