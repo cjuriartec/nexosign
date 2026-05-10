@@ -17,7 +17,7 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tokio_util::sync::CancellationToken;
 
-use crate::adapters::http::PendingBatchIntent;
+use crate::domain::pending_batch_intent::PendingBatchIntent;
 use crate::adapters::http::state::PendingBatchIntents;
 use crate::commands::BatchCancelRegistry;
 
@@ -101,6 +101,10 @@ pub fn run() {
             let _ = Pkcs11PathsDb::open(&db_path).map_err(|e| e.to_string())?;
             if let Ok(mut slot) = app_db_slot.lock() {
                 *slot = Some(db_path.clone());
+            }
+
+            if let Err(e) = queue_store::init_queue_tables(&db_path) {
+                tracing::warn!(error = %e, "crear tablas de colas SQLite");
             }
 
             if let Err(e) =

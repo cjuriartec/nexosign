@@ -1,0 +1,13 @@
+export const SIGN_STEPS = [
+	{ step: 1, title: "Archivos" },
+	{ step: 2, title: "Ubicación" },
+	{ step: 3, title: "Certificado" },
+	{ step: 4, title: "Confirmar" },
+	{ step: 5, title: "Resultado" },
+] as const;
+
+export const TOTAL_STEPS = 5;
+
+/** Rejilla 3×5 en primera página. */
+export const SIG_GRID_COLS = 3;
+export const SIG_GRID_ROWS = 5;

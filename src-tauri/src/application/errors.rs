@@ -11,8 +11,9 @@ pub enum SignBatchError {
     /// Mensaje libre; suele incluir detalle técnico para soporte (PKCS#11, CMS, DER).
     #[error("PDF inválido u operación PAdES fallida: {0}")]
     Pades(String),
-    #[error(transparent)]
-    Token(#[from] crate::adapters::pkcs11::error::TokenError),
+    /// Error de sesión o módulo criptográfico (texto; el adaptador mapea el error concreto).
+    #[error("sesión o módulo de firma: {0}")]
+    Signer(String),
     #[error("IO en {path}: {source}")]
     Io {
         path: PathBuf,

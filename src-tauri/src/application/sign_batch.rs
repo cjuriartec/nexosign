@@ -1,15 +1,12 @@
-//! Procesar un lote de PDFs (PAdES-BES) — orquestación sin Axum/PKCS#11 directo.
+//! Procesar un lote de PDFs (PAdES-BES) — orquestación sin Axum ni PKCS#11 directo.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::adapters::pdf::pades;
-use crate::adapters::pkcs11::token::Pkcs11TokenManager;
+use crate::ports::pdf_pades_signer::{PdfPadesSigner, SignatureGridPlacement};
 use crate::ports::{ProgressEvent, ProgressNotifier};
-
-use crate::adapters::pdf::pades::SignatureGridPlacement;
 
 pub struct SignBatchInput {
     pub job_id: String,
@@ -47,35 +44,24 @@ fn output_path_for(input: &Path, output_dir: Option<&Path>) -> PathBuf {
 /// Devuelve las rutas de los PDF firmados correctamente (en orden).
 pub fn process_batch<P: ProgressNotifier>(
     input: SignBatchInput,
-    token: Arc<Pkcs11TokenManager>,
+    signer: Arc<dyn PdfPadesSigner>,
     progress: P,
 ) -> Vec<PathBuf> {
     let mut signed_outputs = Vec::new();
     let total = input.inputs.len().try_into().unwrap_or(u32::MAX);
 
-    if let Some(ref p) = input.pin {
-        let pt = p.trim();
-        if !pt.is_empty() {
-            let _ = token.reset_pkcs11_driver_state();
-            match token.login_for_certificate(pt.to_string(), &input.cert_id_hex) {
-                Ok(()) => {}
-                Err(e) => {
-                    progress.notify(ProgressEvent {
-                        job_id: input.job_id.clone(),
-                        current: 0,
-                        total: total.max(1),
-                        file_name: String::new(),
-                        path: String::new(),
-                        output_path: None,
-                        error: Some(format!(
-                            "Sesión PKCS#11 en el proceso de firma: {e}"
-                        )),
-                    });
-                    let _ = token.logout();
-                    return signed_outputs;
-                }
-            }
-        }
+    if let Err(e) = signer.ensure_signed_session(input.pin.as_deref(), &input.cert_id_hex) {
+        progress.notify(ProgressEvent {
+            job_id: input.job_id.clone(),
+            current: 0,
+            total: total.max(1),
+            file_name: String::new(),
+            path: String::new(),
+            output_path: None,
+            error: Some(format!("Sesión PKCS#11 en el proceso de firma: {e}")),
+        });
+        signer.end_signed_session();
+        return signed_outputs;
     }
 
     for (idx, path) in input.inputs.iter().enumerate() {
@@ -102,8 +88,7 @@ pub fn process_batch<P: ProgressNotifier>(
         let placement = input.signature_grid.unwrap_or_default();
         let out_path = output_path_for(path, input.output_dir.as_deref());
 
-        let res = pades::sign_pdf_pades_bes(
-            token.clone(),
+        let res = signer.sign_pdf_pades_bes(
             &input.cert_id_hex,
             path,
             &out_path,
@@ -131,10 +116,10 @@ pub fn process_batch<P: ProgressNotifier>(
                 file_name,
                 path: path_str,
                 output_path: None,
-                error: Some(e.to_string()),
+                error: Some(e),
             }),
         }
     }
-    let _ = token.logout();
+    signer.end_signed_session();
     signed_outputs
 }

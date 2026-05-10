@@ -1,4 +1,4 @@
-//! Cola «humana» antes de encolar PKCS#11: la API guarda rutas y la app completa el asistente.
+//! Intención de firma batch recibida por HTTP antes de que el usuario confirme en la app.
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};

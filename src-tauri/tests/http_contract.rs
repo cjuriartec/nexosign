@@ -30,6 +30,7 @@ async fn integration_batch_job_status_requires_origin_and_returns_snapshot() {
                 queued_at_unix: None,
                 current_file_name: Some("doc.pdf".into()),
                 error: None,
+                terminal_at_unix: None,
             },
         );
 
@@ -242,7 +243,7 @@ async fn integration_batch_sign_intent_status_phases() {
 #[tokio::test]
 async fn integration_batch_sign_returns_queued_and_enqueues_job() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
-    let app = build_router(SharedState::test_with_batch(tx));
+    let app = build_router(SharedState::test_http(Some(tx), None));
 
     let tmp = std::env::temp_dir().join(format!(
         "nexosign-http-contract-{}.pdf",
@@ -285,7 +286,7 @@ async fn integration_batch_sign_returns_queued_and_enqueues_job() {
 async fn integration_batch_sign_intent_registers_deep_link_shape() {
     let pending = Arc::new(Mutex::new(HashMap::new()));
     let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
-    let app = build_router(SharedState::test_with_batch_intents(tx, pending.clone()));
+    let app = build_router(SharedState::test_http(Some(tx), Some(pending.clone())));
 
     let tmp = std::env::temp_dir().join(format!(
         "nexosign-http-contract-intent-{}.pdf",
@@ -327,7 +328,7 @@ async fn integration_batch_sign_intent_registers_deep_link_shape() {
 async fn integration_batch_sign_intent_multipart_registers_deep_link_shape() {
     let pending = Arc::new(Mutex::new(HashMap::new()));
     let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
-    let app = build_router(SharedState::test_with_batch_intents(tx, pending));
+    let app = build_router(SharedState::test_http(Some(tx), Some(pending)));
 
     let boundary = "contract_mp_ok";
     let ct = format!("multipart/form-data; boundary={boundary}");
@@ -363,7 +364,7 @@ async fn integration_batch_sign_intent_multipart_registers_deep_link_shape() {
 async fn integration_batch_sign_intent_multipart_invalid_pdf_returns_bad_request() {
     let pending = Arc::new(Mutex::new(HashMap::new()));
     let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
-    let app = build_router(SharedState::test_with_batch_intents(tx, pending));
+    let app = build_router(SharedState::test_http(Some(tx), Some(pending)));
 
     let boundary = "contract_mp_bad";
     let ct = format!("multipart/form-data; boundary={boundary}");
@@ -394,7 +395,7 @@ async fn integration_batch_sign_intent_multipart_invalid_pdf_returns_bad_request
 async fn integration_intent_then_batch_enqueues_with_intent_request_id() {
     let pending = Arc::new(Mutex::new(HashMap::new()));
     let (tx, mut rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
-    let app = build_router(SharedState::test_with_batch_intents(tx, pending.clone()));
+    let app = build_router(SharedState::test_http(Some(tx), Some(pending.clone())));
 
     let tmp = std::env::temp_dir().join(format!(
         "nexosign-http-contract-intent-flow-{}.pdf",

@@ -43,7 +43,6 @@ cms = { version = "0.2.3", features = ["builder", "std", "sha2", "rsa"] }
 const-oid = "0.9.6"
 rsa = "0.9.10"
 signature = "2.2"
-pkcs1 = "0.7.5"
 x509-cert = "0.2.5"
 spki = "0.7.3"
 rusqlite = { version = "0.39.0", features = ["bundled"] }

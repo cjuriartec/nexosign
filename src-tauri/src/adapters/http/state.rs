@@ -7,7 +7,7 @@ use tauri::AppHandle;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::adapters::http::pending_batch_intent::PendingBatchIntent;
+use crate::domain::pending_batch_intent::PendingBatchIntent;
 use crate::ports::BatchJobSnapshot;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::adapters::worker::batch::BatchJob;
@@ -49,6 +49,7 @@ impl SharedState {
         pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
         batch_signed_outputs: Arc<Mutex<HashMap<String, Vec<PathBuf>>>>,
         batch_job_snapshots: Arc<Mutex<HashMap<String, BatchJobSnapshot>>>,
+        intent_request_to_job: Arc<Mutex<HashMap<String, String>>>,
         queue_sqlite_path: Option<Arc<PathBuf>>,
     ) -> Self {
         Self {
@@ -58,7 +59,7 @@ impl SharedState {
             batch_cancel,
             pkcs11,
             batch_signed_outputs,
-            intent_request_to_job: Arc::new(Mutex::new(HashMap::new())),
+            intent_request_to_job,
             pending_batch_intents,
             batch_job_snapshots,
             queue_sqlite_path,
@@ -67,50 +68,24 @@ impl SharedState {
 
     /// Estado para tests sin ventana Tauri.
     pub fn test_default() -> Self {
-        Self {
-            origins: Arc::new(RwLock::new(AllowedOrigins::development_defaults())),
-            app_handle: None,
-            batch_tx: None,
-            batch_cancel: Arc::new(Mutex::new(HashMap::new())),
-            pkcs11: None,
-            batch_signed_outputs: Arc::new(Mutex::new(HashMap::new())),
-            intent_request_to_job: Arc::new(Mutex::new(HashMap::new())),
-            pending_batch_intents: Arc::new(Mutex::new(HashMap::new())),
-            batch_job_snapshots: Arc::new(Mutex::new(HashMap::new())),
-            queue_sqlite_path: None,
-        }
+        Self::test_http(None, None)
     }
 
-    /// Tests HTTP: cola batch simulada.
-    pub fn test_with_batch(sender: mpsc::Sender<BatchJob>) -> Self {
-        Self {
-            origins: Arc::new(RwLock::new(AllowedOrigins::development_defaults())),
-            app_handle: None,
-            batch_tx: Some(sender),
-            batch_cancel: Arc::new(Mutex::new(HashMap::new())),
-            pkcs11: None,
-            batch_signed_outputs: Arc::new(Mutex::new(HashMap::new())),
-            intent_request_to_job: Arc::new(Mutex::new(HashMap::new())),
-            pending_batch_intents: Arc::new(Mutex::new(HashMap::new())),
-            batch_job_snapshots: Arc::new(Mutex::new(HashMap::new())),
-            queue_sqlite_path: None,
-        }
-    }
-
-    /// Tests HTTP: cola batch + mismo mapa de intenciones que puede inspeccionar el test.
-    pub fn test_with_batch_intents(
-        sender: mpsc::Sender<BatchJob>,
-        pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
+    /// Constructor único para tests HTTP (`batch_tx` y/o mapa de intents compartido).
+    pub fn test_http(
+        batch_tx: Option<mpsc::Sender<BatchJob>>,
+        pending_batch_intents: Option<Arc<Mutex<HashMap<String, PendingBatchIntent>>>>,
     ) -> Self {
         Self {
             origins: Arc::new(RwLock::new(AllowedOrigins::development_defaults())),
             app_handle: None,
-            batch_tx: Some(sender),
+            batch_tx,
             batch_cancel: Arc::new(Mutex::new(HashMap::new())),
             pkcs11: None,
             batch_signed_outputs: Arc::new(Mutex::new(HashMap::new())),
             intent_request_to_job: Arc::new(Mutex::new(HashMap::new())),
-            pending_batch_intents,
+            pending_batch_intents: pending_batch_intents
+                .unwrap_or_else(|| Arc::new(Mutex::new(HashMap::new()))),
             batch_job_snapshots: Arc::new(Mutex::new(HashMap::new())),
             queue_sqlite_path: None,
         }

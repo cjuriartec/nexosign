@@ -1,8 +1,9 @@
 import { LOCAL_API_BASE } from "$lib/config/constants";
 
-/** Body JSON típico `{ "error": "..." }` de la API local. */
+/** Body JSON típico `{ "error": "...", "detail": "..." }` de la API local. */
 export type JsonErrorBody = {
 	error?: string;
+	detail?: string;
 };
 
 /** Error HTTP de `postBatchSign` / `postBatchSignIntent` con `status` y cuerpo parseado. */
@@ -20,13 +21,10 @@ export class LocalApiHttpError extends Error {
 }
 
 export function extractJsonErrorMessage(body: unknown): string | undefined {
-	if (
-		body &&
-		typeof body === "object" &&
-		"error" in body &&
-		typeof (body as JsonErrorBody).error === "string"
-	) {
-		return (body as JsonErrorBody).error;
+	if (body && typeof body === "object") {
+		const o = body as Record<string, unknown>;
+		if (typeof o.detail === "string" && o.detail.trim()) return o.detail;
+		if (typeof o.error === "string") return o.error;
 	}
 	return undefined;
 }
@@ -206,15 +204,93 @@ export async function postBatchSignIntentFormData(
 	return res.json() as Promise<BatchSignIntentResponse>;
 }
 
-/** POST /api/v1/demo-progress — dispara evento Tauri `progreso` (stub). */
-export async function requestDemoProgress(
+// --- Portal / integrador web (misma API local; requiere Origin permitido en el navegador)
+
+/** Respuesta de `GET /api/v1/batch/sign/intent/{request_id}/status`. */
+export type BatchIntentStatusResponse = {
+	request_id: string;
+	phase: "awaiting_confirmation" | "processing" | "completed" | string;
+	job_id?: string | null;
+	manifest_href?: string;
+	signed_file_count?: number;
+};
+
+export async function fetchBatchSignIntentStatus(
+	requestId: string,
 	baseUrl: string = LOCAL_API_BASE,
-	jobId?: string,
-): Promise<{ emitted?: boolean; error?: string }> {
-	const res = await fetch(`${baseUrl}/api/v1/demo-progress`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ job_id: jobId ?? null }),
+): Promise<BatchIntentStatusResponse> {
+	const headers: Record<string, string> = {};
+	if (typeof window === "undefined") {
+		headers["Origin"] = "http://localhost:1420";
+	}
+	const res = await fetch(
+		`${baseUrl}/api/v1/batch/sign/intent/${encodeURIComponent(requestId)}/status`,
+		{ headers },
+	);
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({}));
+		throw new LocalApiHttpError("Estado intent batch", res.status, err);
+	}
+	return res.json() as Promise<BatchIntentStatusResponse>;
+}
+
+export type SignedManifestFileEntry = {
+	index: number;
+	filename: string;
+	href: string;
+};
+
+export type SignedManifestResponse = {
+	job_id: string;
+	count: number;
+	files: SignedManifestFileEntry[];
+};
+
+/** `GET /api/v1/batch/jobs/{job_id}/signed-files` — lista índices y URLs relativas. */
+export async function fetchBatchSignedManifest(
+	jobId: string,
+	baseUrl: string = LOCAL_API_BASE,
+): Promise<SignedManifestResponse> {
+	const headers: Record<string, string> = {};
+	if (typeof window === "undefined") {
+		headers["Origin"] = "http://localhost:1420";
+	}
+	const res = await fetch(
+		`${baseUrl}/api/v1/batch/jobs/${encodeURIComponent(jobId)}/signed-files`,
+		{ headers },
+	);
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({}));
+		throw new LocalApiHttpError("Manifiesto PDF firmados", res.status, err);
+	}
+	return res.json() as Promise<SignedManifestResponse>;
+}
+
+/** URL absoluta para `GET /api/v1/batch/jobs/{job_id}/files/{i}` (PDF firmado). */
+export function batchSignedFileAbsoluteUrl(
+	jobId: string,
+	fileIndex: number,
+	baseUrl: string = LOCAL_API_BASE,
+): string {
+	return `${baseUrl}/api/v1/batch/jobs/${encodeURIComponent(jobId)}/files/${fileIndex}`;
+}
+
+/** Descarga el blob PDF (útil en portal sin usar `<a href>`). */
+export async function fetchBatchSignedPdfBlob(
+	jobId: string,
+	fileIndex: number,
+	baseUrl: string = LOCAL_API_BASE,
+): Promise<Blob> {
+	const headers: Record<string, string> = {};
+	if (typeof window === "undefined") {
+		headers["Origin"] = "http://localhost:1420";
+	}
+	const res = await fetch(batchSignedFileAbsoluteUrl(jobId, fileIndex, baseUrl), {
+		headers,
 	});
-	return res.json() as Promise<{ emitted?: boolean; error?: string }>;
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({}));
+		throw new LocalApiHttpError("Descarga PDF firmado", res.status, err);
+	}
+	return res.blob();
 }

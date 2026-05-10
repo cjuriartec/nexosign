@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { open, ask } from "@tauri-apps/plugin-dialog";
-	import { basename, dirname, join } from "@tauri-apps/api/path";
+	import { basename, dirname, join } from "$lib/tauri/path";
 	import { toast } from "svelte-sonner";
 	import * as Card from "$lib/components/ui/card/index.js";
 	import { Button } from "$lib/components/ui/button/index.js";
@@ -14,7 +14,7 @@
 	import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert/index.js";
 	import { Badge } from "$lib/components/ui/badge/index.js";
 	import { page } from "$app/state";
-	import { postBatchSign, type BatchSignBody, LocalApiHttpError, extractJsonErrorMessage } from "$lib/api/local-api";
+	import { postBatchSign, LocalApiHttpError, extractJsonErrorMessage } from "$lib/api/local-api";
 	import { subscribeProgress, type ProgressPayload } from "$lib/events/progress";
 	import * as pkcs11 from "$lib/tauri/pkcs11";
 	import type { SigningCertSummary } from "$lib/tauri/pkcs11";
@@ -25,7 +25,6 @@
 	import { getLocalApiBaseUrl } from "$lib/tauri/settings";
 	import { isTauriRuntime } from "$lib/tauri/env";
 	import { getHumanNameFromDn, extractDniFromDn } from "$lib/signature-appearance";
-	import { renderSignatureSealPngBase64 } from "$lib/signature-appearance-render";
 	import EyeIcon from "@lucide/svelte/icons/eye";
 	import EyeOffIcon from "@lucide/svelte/icons/eye-off";
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
@@ -54,25 +53,10 @@
 		upsertBatchQueueItem,
 		type BatchQueueItem,
 	} from "$lib/stores/batch-queue.svelte";
-
-	function pathBasename(path: string): string {
-		const parts = path.split(/[/\\]/).filter(Boolean);
-		return parts[parts.length - 1] ?? path;
-	}
-
-	const SIGN_STEPS = [
-		{ step: 1, title: "Archivos" },
-		{ step: 2, title: "Ubicación" },
-		{ step: 3, title: "Certificado" },
-		{ step: 4, title: "Confirmar" },
-		{ step: 5, title: "Resultado" },
-	] as const;
-
-	const TOTAL_STEPS = 5;
-
-	/** Rejilla 3×5: 3 columnas (ancho) × 5 filas (alto); col 0 izquierda, fila 0 cabecera del PDF. */
-	const SIG_GRID_COLS = 3;
-	const SIG_GRID_ROWS = 5;
+	import { SIGN_STEPS, TOTAL_STEPS, SIG_GRID_COLS, SIG_GRID_ROWS } from "$lib/sign/constants";
+	import { pdfBasenameFromPath } from "$lib/sign/path-util";
+	import { stripIntentQueryFromBrowser } from "$lib/sign/intent-url";
+	import { buildBatchSignBodyFromWizard } from "$lib/sign/build-batch-sign-body";
 
 	let paths = $state<string[]>([]);
 	/** Origen del lote actual: archivos sueltos vs carpeta (salida agrupada). */
@@ -323,7 +307,7 @@
 		outputDirForJob = payload.outputDir ?? null;
 		intentRequestId = intentParam;
 		const label =
-			paths.length > 0 ? `${paths.length} PDF · ${pathBasename(paths[0] ?? "")}` : "Pendientes";
+			paths.length > 0 ? `${paths.length} PDF · ${pdfBasenameFromPath(paths[0] ?? "")}` : "Pendientes";
 		upsertIntentQueueItem({
 			requestId: intentParam,
 			label,
@@ -334,9 +318,7 @@
 		wizardStep = 1;
 		toast.message("Cargado.");
 		if (typeof window !== "undefined") {
-			const u = new URL(window.location.href);
-			u.searchParams.delete("intent");
-			history.replaceState({}, "", `${u.pathname}${u.search}${u.hash}`);
+			stripIntentQueryFromBrowser();
 		}
 	}
 
@@ -448,25 +430,16 @@
 		wizardStep = 5;
 
 		try {
-			const body: BatchSignBody = {
-				cert_id_hex: certId.trim(),
-				inputs: paths,
-				pin: pin.trim(),
-				signature_grid: { col: sigGridCol, row: sigGridRow },
-			};
-			const selectedCert = certs.find((c) => c.id_hex === certId.trim()) ?? null;
-			try {
-				const seal = await renderSignatureSealPngBase64(selectedCert);
-				if (seal) body.signature_seal_png_base64 = seal;
-			} catch {
-				/* la API usará la apariencia vectorial de respaldo */
-			}
-			if (outputDirForJob) {
-				body.output_dir = outputDirForJob;
-			}
-			if (intentRequestId) {
-				body.intent_request_id = intentRequestId;
-			}
+			const body = await buildBatchSignBodyFromWizard({
+				certIdHex: certId,
+				paths,
+				pin,
+				sigGridCol,
+				sigGridRow,
+				outputDirForJob,
+				intentRequestId,
+				selectedCert: certs.find((c) => c.id_hex === certId.trim()) ?? null,
+			});
 			const intentToFinish = intentRequestId;
 			const res = await postBatchSign(body, apiBase);
 			if (intentToFinish) {
@@ -477,7 +450,7 @@
 			intentRequestId = null;
 			replaceQueueJobId(pendingQueueId, res.job_id, {
 				status: "running",
-				label: pathBasename(paths[0] ?? "Lote"),
+				label: pdfBasenameFromPath(paths[0] ?? "Lote"),
 			});
 		} catch (e) {
 			wizardStep = 4;
@@ -532,9 +505,11 @@
 			try {
 				unlisten = await subscribeProgress((p: ProgressPayload) => {
 					const jid =
-						typeof p.job_id === "string" && p.job_id.length > 0
+						(typeof p.job_id === "string" && p.job_id.length > 0
 							? p.job_id
-							: (p as unknown as { jobId?: string }).jobId;
+							: typeof p.jobId === "string" && p.jobId.length > 0
+								? p.jobId
+								: "") || "";
 					if (!jid) return;
 					const queueHas = batchQueue.items.some((q) => q.jobId === jid);
 					const activeMatches = activeJobRef.current === jid;
@@ -938,7 +913,7 @@
 								<dt class="text-muted-foreground shrink-0">Salida</dt>
 								<dd class="min-w-0 flex-1 text-right leading-tight">
 									{#if outputDirForJob}
-										<span class="font-medium" title={outputDirForJob}>«{pathBasename(outputDirForJob)}»</span>
+										<span class="font-medium" title={outputDirForJob}>«{pdfBasenameFromPath(outputDirForJob)}»</span>
 									{:else}
 										<code class="bg-muted rounded px-1.5 py-0.5 font-mono text-[11px]">*_firmado.pdf</code>
 									{/if}

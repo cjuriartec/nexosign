@@ -1,10 +1,7 @@
 pub mod openapi;
 pub mod state;
 
-mod pending_batch_intent;
-
-pub use pending_batch_intent::PendingBatchIntent;
-pub use crate::ports::QUEUE_MAX_WALL_CLOCK_SECS;
+pub use crate::domain::pending_batch_intent::PendingBatchIntent;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -27,7 +24,6 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::adapters::http::state::{HealthResponse, PingResponse, SharedState};
 use crate::adapters::persistence::queue_store;
-use crate::adapters::pdf::pades::SignatureGridPlacement;
 use crate::adapters::worker::batch::BatchJob;
 use crate::infrastructure::batch_pdf_validation::{
     validate_batch_pdf_inputs,
@@ -35,7 +31,7 @@ use crate::infrastructure::batch_pdf_validation::{
     MAX_PDFS_PER_BATCH_INTENT,
     MAX_TOTAL_BATCH_INTENT_BYTES,
 };
-use crate::ports::{BatchJobPhase, BatchJobSnapshot};
+use crate::ports::{BatchJobPhase, BatchJobSnapshot, SignatureGridPlacement};
 
 /// Techo para servir por HTTP un PDF firmado (entrada máx. + margen por firma incrustada).
 const MAX_SIGNED_DOWNLOAD_BYTES: u64 =
@@ -46,6 +42,9 @@ pub const LOCAL_API_PORT: u16 = 14500;
 /// Límite del cuerpo HTTP para `POST /batch/sign/intent` (multipart puede acercarse a la suma de PDF).
 const MAX_BATCH_INTENT_BODY: usize =
     (MAX_TOTAL_BATCH_INTENT_BYTES as usize).saturating_add(512 * 1024);
+
+/// Techo JSON para `POST /api/v1/batch/sign` (cert_id, inputs, pin, sello base64).
+const MAX_BATCH_SIGN_BODY: usize = 4 * 1024 * 1024;
 
 fn validate_optional_output_dir(path: Option<std::path::PathBuf>) -> Result<Option<std::path::PathBuf>, String> {
     let Some(p) = path else {
@@ -61,7 +60,19 @@ fn validate_optional_output_dir(path: Option<std::path::PathBuf>) -> Result<Opti
     Ok(Some(p))
 }
 
-/// Exige `Origin` conocido (lista CORS / SQLite) antes de encolar firma batch.
+fn api_err(status: StatusCode, code: &'static str, detail: impl Into<String>) -> Response {
+    (
+        status,
+        Json(serde_json::json!({
+            "error": code,
+            "detail": detail.into(),
+        })),
+    )
+        .into_response()
+}
+
+/// Exige `Origin` conocido (lista CORS / SQLite) antes de rutas batch: intent, estado de intent,
+/// encolado de firma, manifiesto y descargas de PDF firmados.
 fn gate_batch_origin(state: &SharedState, headers: &HeaderMap) -> Result<(), Response> {
     let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
         return Err(
@@ -188,7 +199,6 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/docs", get(openapi::get_api_docs))
         .route("/health", get(get_health))
         .route("/api/v1/ping", post(post_ping))
-        .route("/api/v1/demo-progress", post(post_demo_progress))
         .route(
             "/api/v1/batch/sign/intent",
             post(post_batch_sign_intent).layer(DefaultBodyLimit::max(MAX_BATCH_INTENT_BODY)),
@@ -197,7 +207,10 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/v1/batch/sign/intent/{request_id}/status",
             get(get_batch_sign_intent_status),
         )
-        .route("/api/v1/batch/sign", post(post_batch_sign))
+        .route(
+            "/api/v1/batch/sign",
+            post(post_batch_sign).layer(DefaultBodyLimit::max(MAX_BATCH_SIGN_BODY)),
+        )
         .route(
             "/api/v1/batch/jobs/{job_id}/status",
             get(get_batch_job_status),
@@ -224,42 +237,6 @@ async fn get_health() -> impl IntoResponse {
 
 async fn post_ping() -> impl IntoResponse {
     Json(PingResponse { ok: true })
-}
-
-#[derive(Deserialize)]
-pub struct DemoProgressPayload {
-    #[serde(default)]
-    pub job_id: Option<String>,
-}
-
-/// Emite un evento `progreso` al frontend (stub fase 1). Útil para validar el canal IPC.
-async fn post_demo_progress(
-    State(state): State<SharedState>,
-    Json(body): Json<DemoProgressPayload>,
-) -> impl IntoResponse {
-    let Some(handle) = state.app_handle.clone() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "app_handle not available (test mode)" })),
-        )
-            .into_response();
-    };
-
-    let payload = serde_json::json!({
-        "actual": 1,
-        "total": 10,
-        "job_id": body.job_id.unwrap_or_else(|| "demo".to_string()),
-    });
-
-    if let Err(e) = handle.emit("progreso", &payload) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-
-    Json(serde_json::json!({ "emitted": true })).into_response()
 }
 
 /// Registra PDF para firmar **sin encolar** hasta que el usuario complete el asistente en la app.
@@ -342,6 +319,14 @@ async fn post_batch_sign_intent_json(
                 request_id = %request_id,
                 "persistir intent JSON en SQLite"
             );
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": "intent_persist_failed",
+                    "detail": e.to_string(),
+                })),
+            )
+                .into_response();
         }
     }
 
@@ -349,11 +334,11 @@ async fn post_batch_sign_intent_json(
         let mut g = match state.pending_batch_intents.lock() {
             Ok(g) => g,
             Err(_) => {
-                return (
+                return api_err(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": "estado intents bloqueado" })),
-                )
-                    .into_response();
+                    "intent_state_locked",
+                    "estado intents bloqueado",
+                );
             }
         };
         g.insert(request_id.clone(), intent);
@@ -612,6 +597,15 @@ async fn post_batch_sign_intent_multipart(
                 request_id = %request_id,
                 "persistir intent multipart en SQLite"
             );
+            let _ = std::fs::remove_dir_all(&staging_dir);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": "intent_persist_failed",
+                    "detail": e.to_string(),
+                })),
+            )
+                .into_response();
         }
     }
 
@@ -620,11 +614,11 @@ async fn post_batch_sign_intent_multipart(
             Ok(g) => g,
             Err(_) => {
                 let _ = std::fs::remove_dir_all(&staging_dir);
-                return (
+                return api_err(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": "estado intents bloqueado" })),
-                )
-                    .into_response();
+                    "intent_state_locked",
+                    "estado intents bloqueado",
+                );
             }
         };
         g.insert(request_id.clone(), intent);
@@ -753,11 +747,11 @@ async fn post_batch_sign(
         let mut g = match state.batch_cancel.lock() {
             Ok(g) => g,
             Err(_) => {
-                return (
+                return api_err(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": "estado batch bloqueado" })),
-                )
-                    .into_response();
+                    "batch_snapshots_locked",
+                    "estado batch bloqueado",
+                );
             }
         };
         g.insert(job_id.clone(), cancel.clone());
@@ -814,6 +808,7 @@ async fn post_batch_sign(
                         queued_at_unix,
                         current_file_name: None,
                         error: None,
+                        terminal_at_unix: None,
                     },
                 );
                 if let (Some(ref db_arc), Some(ts)) = (&state.queue_sqlite_path, queued_at_unix) {
@@ -859,14 +854,32 @@ async fn get_batch_sign_intent_status(
         return resp;
     }
 
-    let awaiting = match state.pending_batch_intents.lock() {
-        Ok(g) => g.contains_key(&request_id),
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "estado intents bloqueado" })),
-            )
-                .into_response();
+    let awaiting = {
+        let mut g = match state.pending_batch_intents.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                return api_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "intent_state_locked",
+                    "estado intents bloqueado",
+                );
+            }
+        };
+        match g.get(&request_id) {
+            None => false,
+            Some(ent) if ent.is_expired() => {
+                let staging = ent.staging_dir.clone();
+                g.remove(&request_id);
+                drop(g);
+                if let Some(ref dir) = staging {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
+                if let Some(ref db_arc) = state.queue_sqlite_path {
+                    let _ = queue_store::delete_intent_payload(db_arc.as_ref(), &request_id);
+                }
+                false
+            }
+            Some(_) => true,
         }
     };
 
@@ -894,11 +907,11 @@ async fn get_batch_sign_intent_status(
             }
         },
         Err(_) => {
-            return (
+            return api_err(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "estado intent_request_to_job bloqueado" })),
-            )
-                .into_response();
+                "intent_job_map_locked",
+                "estado intent_request_to_job bloqueado",
+            );
         }
     };
 
@@ -907,11 +920,11 @@ async fn get_batch_sign_intent_status(
     let signed_paths_opt = match state.batch_signed_outputs.lock() {
         Ok(g) => g.get(&job_id).cloned(),
         Err(_) => {
-            return (
+            return api_err(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "estado batch outputs bloqueado" })),
-            )
-                .into_response();
+                "batch_outputs_locked",
+                "estado batch outputs bloqueado",
+            );
         }
     };
 
@@ -981,11 +994,11 @@ async fn get_batch_signed_manifest(
     let paths_opt = match state.batch_signed_outputs.lock() {
         Ok(g) => g.get(&job_id).cloned(),
         Err(_) => {
-            return (
+            return api_err(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "estado batch outputs bloqueado" })),
-            )
-                .into_response();
+                "batch_outputs_locked",
+                "estado batch outputs bloqueado",
+            );
         }
     };
     let Some(paths) = paths_opt else {
@@ -1038,11 +1051,11 @@ async fn download_batch_signed_file(
         let g = match state.batch_signed_outputs.lock() {
             Ok(g) => g,
             Err(_) => {
-                return (
+                return api_err(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": "estado batch outputs bloqueado" })),
-                )
-                    .into_response();
+                    "batch_outputs_locked",
+                    "estado batch outputs bloqueado",
+                );
             }
         };
         let Some(paths) = g.get(&job_id) else {
@@ -1219,108 +1232,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn batch_sign_enqueue_returns_200_and_job_id() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
-        let app = build_router(SharedState::test_with_batch(tx));
-
-        let tmp = std::env::temp_dir().join(format!(
-            "nexosign-batch-test-{}.pdf",
-            std::process::id()
-        ));
-        std::fs::write(&tmp, b"%PDF-1.1\n").unwrap();
-
-        let abs = tmp.canonicalize().unwrap();
-        let body = serde_json::json!({
-            "cert_id_hex": "01ab",
-            "inputs": [abs.to_str().unwrap()],
-            "job_id": "job-contract-1"
-        });
-
-        let res = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/batch/sign")
-                    .header("Origin", "http://localhost:1420")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(body.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(res.status(), StatusCode::OK);
-        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
-        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(v["queued"], true);
-        assert_eq!(v["job_id"], "job-contract-1");
-
-        let job = rx.try_recv().expect("job encolado");
-        assert_eq!(job.job_id, "job-contract-1");
-        let _ = std::fs::remove_file(&tmp);
-    }
-
-    #[tokio::test]
-    async fn batch_sign_intent_stores_pending_and_returns_deep_link() {
-        use std::collections::HashMap;
-        use std::sync::{Arc, Mutex};
-
-        let pending = Arc::new(Mutex::new(HashMap::new()));
-        let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
-        let state = SharedState::test_with_batch_intents(tx, pending.clone());
-        let app = build_router(state);
-
-        let tmp = std::env::temp_dir().join(format!(
-            "nexosign-intent-test-{}.pdf",
-            std::process::id()
-        ));
-        std::fs::write(&tmp, b"%PDF-1.4\n").unwrap();
-        let abs = tmp.canonicalize().unwrap();
-
-        let body = serde_json::json!({
-            "inputs": [abs.to_str().unwrap()],
-        });
-
-        let res = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/batch/sign/intent")
-                    .header("Origin", "http://localhost:1420")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(body.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(res.status(), StatusCode::OK);
-        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
-        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        let request_id = v["request_id"].as_str().unwrap();
-        assert!(!request_id.is_empty());
-        let deep_link = v["deep_link"].as_str().unwrap();
-        assert_eq!(
-            deep_link,
-            format!("nexosign://sign?intent={}", request_id)
-        );
-
-        let guard = pending.lock().unwrap();
-        assert_eq!(guard.len(), 1);
-        assert!(guard.contains_key(request_id));
-        drop(guard);
-        let _ = std::fs::remove_file(&tmp);
-    }
-
-    #[tokio::test]
     async fn batch_sign_intent_multipart_stores_staging_dir() {
         use std::collections::HashMap;
         use std::sync::{Arc, Mutex};
 
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
-        let state = SharedState::test_with_batch_intents(tx, pending.clone());
+        let state = SharedState::test_http(Some(tx), Some(pending.clone()));
         let app = build_router(state);
 
         let boundary = "nexosign_mp_test";
@@ -1368,7 +1286,7 @@ mod tests {
 
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
-        let app = build_router(SharedState::test_with_batch_intents(tx, pending.clone()));
+        let app = build_router(SharedState::test_http(Some(tx), Some(pending.clone())));
 
         let boundary = "nexosign_mp_bad";
         let ct = format!("multipart/form-data; boundary={boundary}");
@@ -1481,7 +1399,7 @@ mod tests {
     #[tokio::test]
     async fn batch_sign_rejects_empty_cert_id() {
         let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(1);
-        let app = build_router(SharedState::test_with_batch(tx));
+        let app = build_router(SharedState::test_http(Some(tx), None));
         let tmp = std::env::temp_dir().join(format!("nexosign-empty-cert-{}.pdf", std::process::id()));
         std::fs::write(&tmp, b"%PDF-1.4\n").unwrap();
         let abs = tmp.canonicalize().unwrap();
@@ -1508,7 +1426,7 @@ mod tests {
     #[tokio::test]
     async fn batch_sign_rejects_empty_pin() {
         let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(1);
-        let app = build_router(SharedState::test_with_batch(tx));
+        let app = build_router(SharedState::test_http(Some(tx), None));
         let tmp = std::env::temp_dir().join(format!("nexosign-empty-pin-{}.pdf", std::process::id()));
         std::fs::write(&tmp, b"%PDF-1.4\n").unwrap();
         let abs = tmp.canonicalize().unwrap();
@@ -1536,7 +1454,7 @@ mod tests {
     #[tokio::test]
     async fn batch_sign_rejects_out_of_range_signature_grid() {
         let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(1);
-        let app = build_router(SharedState::test_with_batch(tx));
+        let app = build_router(SharedState::test_http(Some(tx), None));
         let tmp = std::env::temp_dir().join(format!("nexosign-grid-{}.pdf", std::process::id()));
         std::fs::write(&tmp, b"%PDF-1.4\n").unwrap();
         let abs = tmp.canonicalize().unwrap();
@@ -1576,7 +1494,7 @@ mod tests {
             cleanup_paths: vec![],
         };
         tx.try_send(dummy).expect("prefill queue");
-        let app = build_router(SharedState::test_with_batch(tx));
+        let app = build_router(SharedState::test_http(Some(tx), None));
 
         let tmp = std::env::temp_dir().join(format!("nexosign-full-{}.pdf", std::process::id()));
         std::fs::write(&tmp, b"%PDF-1.4\n").unwrap();
@@ -1600,81 +1518,6 @@ mod tests {
             .unwrap();
         assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
         let _ = rx.try_recv();
-        let _ = std::fs::remove_file(&tmp);
-    }
-
-    #[tokio::test]
-    async fn batch_sign_with_intent_request_id_clears_pending_after_enqueue() {
-        use std::collections::HashMap;
-        use std::sync::{Arc, Mutex};
-
-        let pending = Arc::new(Mutex::new(HashMap::new()));
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
-        let state = SharedState::test_with_batch_intents(tx, pending.clone());
-        let app = build_router(state);
-
-        let tmp = std::env::temp_dir().join(format!(
-            "nexosign-intent-clear-{}.pdf",
-            std::process::id()
-        ));
-        std::fs::write(&tmp, b"%PDF-1.4\n").unwrap();
-        let abs = tmp.canonicalize().unwrap();
-
-        let intent_body = serde_json::json!({
-            "inputs": [abs.to_str().unwrap()],
-        });
-
-        let res_intent = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/batch/sign/intent")
-                    .header("Origin", "http://localhost:1420")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(intent_body.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(res_intent.status(), StatusCode::OK);
-        let intent_bytes = to_bytes(res_intent.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let intent_v: serde_json::Value = serde_json::from_slice(&intent_bytes).unwrap();
-        let request_id = intent_v["request_id"].as_str().unwrap().to_string();
-
-        assert_eq!(pending.lock().unwrap().len(), 1);
-
-        let batch_body = serde_json::json!({
-            "cert_id_hex": "01ff",
-            "inputs": [abs.to_str().unwrap()],
-            "job_id": "job-after-intent",
-            "intent_request_id": request_id,
-        });
-
-        let res_batch = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/batch/sign")
-                    .header("Origin", "http://localhost:1420")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(batch_body.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(res_batch.status(), StatusCode::OK);
-        let _job = rx.try_recv().expect("job tras intent");
-
-        assert!(
-            pending.lock().unwrap().is_empty(),
-            "la intención debe borrarse al encolar bien"
-        );
-
         let _ = std::fs::remove_file(&tmp);
     }
 }

@@ -26,29 +26,7 @@ use chrono;
 use crate::adapters::pdf::cms_signer::Pkcs11RsaCmsSigner;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::application::errors::SignBatchError;
-
-/// Columnas (ancho del PDF, izquierda→derecha) × filas (alto, cabecera→pie).
-/// `col` 0..=2, `row` 0..=4 (fila 0 arriba al leer la página).
-#[derive(Clone, Copy, Debug)]
-pub struct SignatureGridPlacement {
-    pub col: u8,
-    pub row: u8,
-}
-
-impl Default for SignatureGridPlacement {
-    fn default() -> Self {
-        Self { col: 1, row: 4 }
-    }
-}
-
-impl SignatureGridPlacement {
-    fn normalized(self) -> Self {
-        Self {
-            col: self.col.min(2),
-            row: self.row.min(4),
-        }
-    }
-}
+use crate::ports::pdf_pades_signer::{PdfPadesSigner, SignatureGridPlacement};
 
 /// Rejilla visible en la primera página (ancho × alto).
 const SIG_GRID_COLS: f64 = 3.0;
@@ -773,7 +751,9 @@ pub fn sign_pdf_pades_bes(
     placement: SignatureGridPlacement,
     seal_png: Option<&[u8]>,
 ) -> Result<(), SignBatchError> {
-    let cert_der = token.certificate_der_by_id_hex(cert_id_hex)?;
+    let cert_der = token
+        .certificate_der_by_id_hex(cert_id_hex)
+        .map_err(|e| SignBatchError::Signer(e.to_string()))?;
     let pdf_bytes = std::fs::read(input_path).map_err(|e| SignBatchError::Io {
         path: input_path.to_path_buf(),
         source: e,
@@ -813,7 +793,7 @@ pub fn sign_pdf_pades_bes(
         let digest = digest_pdf_pkcs7_detached(&buf)?;
 
         let cms_signer = Pkcs11RsaCmsSigner::new(token.clone(), cert_id_hex.to_string(), &cert_der)
-            .map_err(|e| SignBatchError::Token(e))?;
+            .map_err(|e| SignBatchError::Signer(e.to_string()))?;
         let cms_der = build_cms_signed_data(&cms_signer, &cert_der, &digest)?;
 
         if cms_der.len() <= der_cap {
@@ -844,6 +824,50 @@ pub fn sign_pdf_pades_bes(
     Err(SignBatchError::Pades(
         "no convergió el tamaño reservado para CMS".into(),
     ))
+}
+
+/// Adaptador PKCS#11 para el puerto [`PdfPadesSigner`].
+pub struct Pkcs11PdfPadesSigner {
+    pub token: Arc<Pkcs11TokenManager>,
+}
+
+impl PdfPadesSigner for Pkcs11PdfPadesSigner {
+    fn ensure_signed_session(&self, pin: Option<&str>, cert_id_hex: &str) -> Result<(), String> {
+        let Some(p) = pin else {
+            return Ok(());
+        };
+        let pt = p.trim();
+        if pt.is_empty() {
+            return Ok(());
+        }
+        let _ = self.token.reset_pkcs11_driver_state();
+        self.token
+            .login_for_certificate(pt.to_string(), cert_id_hex)
+            .map_err(|e| e.to_string())
+    }
+
+    fn sign_pdf_pades_bes(
+        &self,
+        cert_id_hex: &str,
+        input_path: &Path,
+        output_path: &Path,
+        placement: SignatureGridPlacement,
+        seal_png: Option<&[u8]>,
+    ) -> Result<(), String> {
+        sign_pdf_pades_bes(
+            self.token.clone(),
+            cert_id_hex,
+            input_path,
+            output_path,
+            placement,
+            seal_png,
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    fn end_signed_session(&self) {
+        let _ = self.token.logout();
+    }
 }
 
 #[cfg(test)]

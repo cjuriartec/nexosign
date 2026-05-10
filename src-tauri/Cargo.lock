@@ -2662,7 +2662,6 @@ dependencies = [
  "image",
  "lopdf",
  "multer",
- "pkcs1",
  "rsa",
  "rusqlite",
  "serde",

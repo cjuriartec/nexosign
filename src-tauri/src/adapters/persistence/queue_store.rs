@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::adapters::http::PendingBatchIntent;
+use crate::domain::pending_batch_intent::PendingBatchIntent;
 use serde::{Deserialize, Serialize};
 
 /// Misma forma que `commands::batch_queue_history` (IPC / frontend).
@@ -87,10 +87,15 @@ pub fn ensure_queue_schema(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Abre la BD de aplicación. El esquema de colas debe existir (véase [`ensure_queue_schema`] en arranque).
 pub fn open_app_db(path: &Path) -> rusqlite::Result<Connection> {
-    let conn = Connection::open(path)?;
-    ensure_queue_schema(&conn)?;
-    Ok(conn)
+    Connection::open(path)
+}
+
+/// Garantiza tablas `intent_pending_payload`, `batch_job_enqueue`, etc. Llamar una vez al iniciar el proceso.
+pub fn init_queue_tables(db_path: &Path) -> Result<(), String> {
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    ensure_queue_schema(&conn).map_err(|e| e.to_string())
 }
 
 pub fn upsert_intent_payload(
@@ -226,7 +231,18 @@ pub fn hydrate_pending_intents_from_db(
 
     for row in rows {
         let (rid, inputs_json, od, sd, cu) = row.map_err(|e| e.to_string())?;
-        let paths: Vec<String> = serde_json::from_str(&inputs_json).unwrap_or_default();
+        let paths: Vec<String> = match serde_json::from_str(&inputs_json) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    request_id = %rid,
+                    error = %e,
+                    "inputs_json corrupto en intent_pending_payload; fila eliminada"
+                );
+                to_remove.push(rid);
+                continue;
+            }
+        };
         let inputs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
         let intent = PendingBatchIntent::restore_from_storage(
             inputs,

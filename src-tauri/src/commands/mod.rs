@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 
 use crate::adapters::http::LOCAL_API_PORT;
-use crate::adapters::http::PendingBatchIntent;
+use crate::domain::pending_batch_intent::PendingBatchIntent;
 use crate::adapters::http::state::PendingBatchIntents;
 use crate::adapters::persistence::queue_store;
 use crate::adapters::persistence::{AllowedOriginsDb, Pkcs11PathsDb};

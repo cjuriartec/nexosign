@@ -94,7 +94,7 @@ flowchart LR
 - **CORS dinámico y configurable**:
   - **Sí**, el origen puede ser dinámico: en `tower-http`, usar `CorsLayer` con `AllowOrigin::predicate` que consulte un **`Arc<RwLock<Vec<Origin>>>`** (o `Vec<String>` normalizadas a esquema + host + puerto).
   - **Fuentes de la lista**: (1) archivo de config local / variables de entorno al arranque; (2) en Fase 4, **la misma tabla SQLite** de orígenes aprobados — al persistir o revocar un origen, actualizar el estado en memoria para que el predicado CORS refleje el cambio **sin reiniciar** el servidor.
-  - **Defaults de desarrollo**: incluir `http://localhost:5173` o el puerto que use Vite/SvelteKit en dev vía config por entorno.
+  - **Defaults de desarrollo**: incluir `http://localhost:1420` (puerto del frontend en este proyecto con Tauri).
   - No usar `*` si envías credenciales o cabeceras sensibles; el predicado debe comparar el header `Origin` de forma estricta (y considerar peticiones sin `Origin`, p. ej. herramientas tipo `curl`, según política).
 - La **autorización fuerte** (diálogo nativo antes de confiar en un origen nuevo) sigue siendo Fase 4; CORS es la primera línea y debe permanecer alineada con lo guardado en disco.
 

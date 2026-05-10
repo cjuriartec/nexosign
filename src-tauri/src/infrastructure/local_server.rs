@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use tauri::AppHandle;
 
-use crate::adapters::http::PendingBatchIntent;
+use crate::domain::pending_batch_intent::PendingBatchIntent;
 use crate::adapters::http::{build_router, LOCAL_API_PORT};
 use crate::adapters::http::state::SharedState;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
@@ -22,7 +22,8 @@ pub fn spawn_local_api(
     pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
     queue_sqlite_path: PathBuf,
 ) {
-    let (tx, rx) = tokio::sync::mpsc::channel(16);
+    let intent_request_to_job = Arc::new(Mutex::new(HashMap::new()));
+    let (tx, rx) = tokio::sync::mpsc::channel(crate::infrastructure::batch_runtime::BATCH_QUEUE_CAPACITY);
     let batch_signed_outputs = Arc::new(Mutex::new(HashMap::new()));
     let batch_job_snapshots = Arc::new(Mutex::new(HashMap::new()));
     crate::adapters::worker::batch::spawn_batch_worker(
@@ -37,6 +38,8 @@ pub fn spawn_local_api(
     crate::adapters::worker::batch::spawn_batch_job_timeout_watchdog(
         batch_cancel.clone(),
         batch_job_snapshots.clone(),
+        batch_signed_outputs.clone(),
+        intent_request_to_job.clone(),
         Arc::new(queue_sqlite_path.clone()),
         Some(handle.clone()),
     );
@@ -50,6 +53,7 @@ pub fn spawn_local_api(
         pending_batch_intents,
         batch_signed_outputs,
         batch_job_snapshots,
+        intent_request_to_job,
         Some(Arc::new(queue_sqlite_path)),
     );
     let router = build_router(state);

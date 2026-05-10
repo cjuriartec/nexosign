@@ -1,3 +1,11 @@
+/**
+ * Cola batch + intents en memoria con respaldo SQLite.
+ *
+ * Prioridad de fuentes:
+ * - HTTP **`GET …/batch/jobs/{job_id}/status`**: autoritativo para terminar ítems (`completed`/`failed`/`cancelled`).
+ * - Evento **`progreso`**: refinamiento en vivo de barra y etiquetas mientras el trabajo está activo.
+ * - SQLite (`batch-queue-history`): hidratación al arranque y persistencia entre sesiones.
+ */
 import {
 	fetchBatchJobStatus,
 	type BatchJobPhase,
@@ -147,6 +155,11 @@ export function setActiveBatchJobId(id: string | null): void {
 
 export function computeBatchQueueHasActiveWork(): boolean {
 	return batchQueue.items.some((q) => ACTIVE_BATCH_STATUSES.includes(q.status));
+}
+
+/** Si hay trabajo activo o intents pendientes, tiene sentido sondear la API local periódicamente. */
+export function shouldPollBatchBackend(): boolean {
+	return computeBatchQueueHasActiveWork() || intentQueue.items.length > 0;
 }
 
 function mapBackendPhaseToQueueStatus(phase: BatchJobPhase): BatchQueueStatus {

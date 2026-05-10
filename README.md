@@ -64,7 +64,7 @@ La API está en **`http://127.0.0.1:14500`** **solo con la aplicación en ejecuc
 |-----------|---------|
 | 🌍 **Origen** | Los **`POST` y `GET`** de batch en navegador necesitan cabecera **`Origin`** permitida por CORS (p. ej. `http://localhost:1420`). Incluye sondeo de estado del intent y descargas. |
 | 💻 **`curl`** | Añade `-H "Origin: http://localhost:1420"` como en los ejemplos. |
-| 📘 **OpenAPI** | Con la app en marcha: **`GET /openapi.json`** (solo endpoints pensados para integración externa: intent, estado, descargas). **`GET /docs`** abre **Swagger UI**. Importación en [Scalar](https://scalar.com), Postman, etc. |
+| 📘 **OpenAPI** | Con la app en marcha: **`GET /openapi.json`** — incluye intent, estado del intent, descargas del lote, **`GET /health`** y **`POST /api/v1/ping`**. **`GET /docs`** abre **Swagger UI**. Importación en [Scalar](https://scalar.com), Postman, etc. |
 | 📂 **Multipart vs firma** | **`multipart/form-data`** solo en **`POST …/batch/sign/intent`** (subir PDF desde el navegador). La firma la ejecuta la **app** tras el deep link; ese paso **no** está en **`openapi.json`** (contrato para integradores web). |
 
 | Endpoint | Rol |
@@ -93,7 +93,7 @@ flowchart LR
     C["nexosign:// deep link"]
     D["App NexoSign — asistente"]
   end
-  A -->|"POST /batch/sign/intent"| B
+  A -->|"POST /api/v1/batch/sign/intent"| B
   B -->|"request_id + deep_link"| A
   A -->|"Abrir enlace"| C
   C --> D
@@ -126,7 +126,7 @@ Mientras tanto verás **`awaiting_confirmation`** (intención abierta) o **`proc
 
 > **Producto (histórico):** antes el portal no tenía forma de saber el `job_id`; el endpoint de **status** cierra ese flujo.
 
-> **`GET /openapi.json`** solo incluye intent, estado del intent y descargas del lote (contrato para integradores). Rutas adicionales que usa la app en la misma máquina **no** aparecen ahí.
+> **`GET /openapi.json`** incluye intent, estado del intent, descargas del lote, **`GET /health`** y **`POST /api/v1/ping`** (contrato para integradores). Rutas como **`POST /api/v1/batch/sign`** (encolado directo con PIN) son uso interno de la app en la misma máquina y **no** aparecen en ese JSON.
 
 <details>
 <summary><strong>📋 Ejemplo — intención subiendo PDF (multipart)</strong></summary>

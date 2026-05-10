@@ -3,7 +3,6 @@
 	import { onMount } from "svelte";
 	import { goto } from "$app/navigation";
 	import { listen } from "@tauri-apps/api/event";
-	import { invoke } from "@tauri-apps/api/core";
 	import { ask } from "@tauri-apps/plugin-dialog";
 	import { toast } from "svelte-sonner";
 	import { ModeWatcher } from "mode-watcher";
@@ -15,8 +14,10 @@
 		initBatchQueuePersistence,
 		syncQueuesFromLocalBackend,
 		syncIntentQueueFromBackend,
+		shouldPollBatchBackend,
 	} from "$lib/stores/batch-queue.svelte";
 	import { isTauriRuntime } from "$lib/tauri/env";
+	import { addAllowedOrigin } from "$lib/tauri/settings";
 
 	let { children } = $props();
 
@@ -39,7 +40,7 @@
 								},
 							);
 							if (ok) {
-								await invoke("add_allowed_origin", { origin });
+								await addAllowedOrigin(origin);
 								toast.success(`Origen permitido: ${origin}`);
 							}
 						},
@@ -60,9 +61,11 @@
 				);
 				if (isTauriRuntime()) {
 					void syncQueuesFromLocalBackend();
+					const POLL_MS = 4000;
 					const poll = window.setInterval(() => {
+						if (!shouldPollBatchBackend()) return;
 						void syncQueuesFromLocalBackend();
-					}, 900);
+					}, POLL_MS);
 					unsubs.push(() => clearInterval(poll));
 					unsubs.push(
 						await listen("pending_batch_intents_changed", () => {

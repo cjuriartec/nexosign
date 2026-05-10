@@ -10,10 +10,13 @@ use tauri::Emitter;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::adapters::pdf::pades::Pkcs11PdfPadesSigner;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::application::sign_batch::{process_batch, SignBatchInput};
+use crate::infrastructure::batch_runtime::BATCH_WATCHDOG_INTERVAL_SECS;
 use crate::ports::{
-    BatchJobPhase, BatchJobSnapshot, ProgressEvent, ProgressNotifier, BATCH_JOB_MAX_WALL_CLOCK_SECS,
+    BatchJobPhase, BatchJobSnapshot, ProgressEvent, ProgressNotifier, SignatureGridPlacement,
+    BATCH_JOB_MAX_WALL_CLOCK_SECS, BATCH_JOB_RAM_GC_AFTER_TERMINAL_SECS,
 };
 
 const BATCH_JOB_TIMEOUT_EMIT_ERROR: &str =
@@ -25,7 +28,7 @@ pub struct BatchJob {
     pub inputs: Vec<std::path::PathBuf>,
     pub cancel: CancellationToken,
     pub output_dir: Option<std::path::PathBuf>,
-    pub signature_grid: Option<crate::adapters::pdf::pades::SignatureGridPlacement>,
+    pub signature_grid: Option<SignatureGridPlacement>,
     /// PIN para repetir `C_Login` en el mismo hilo que `C_Sign` (PKCS#11 suele ser por hilo).
     pub pin: Option<String>,
     /// PNG del sello visible (mismo diseño que Certificados); `None` usa apariencia vectorial.
@@ -51,6 +54,7 @@ impl ProgressNotifier for SharedBatchProgress {
                 queued_at_unix: None,
                 current_file_name: None,
                 error: None,
+                terminal_at_unix: None,
             });
             snap.phase = BatchJobPhase::Running;
             snap.actual = ev.current;
@@ -77,6 +81,13 @@ impl ProgressNotifier for SharedBatchProgress {
     }
 }
 
+fn now_unix_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 fn finalize_batch_job(
     snapshots: &Arc<Mutex<HashMap<String, BatchJobSnapshot>>>,
     queue_db: Option<&Path>,
@@ -91,6 +102,8 @@ fn finalize_batch_job(
         }
     }
 
+    let ts = now_unix_secs();
+
     let Ok(mut g) = snapshots.lock() else {
         clear_enqueue(queue_db, job_id);
         return;
@@ -101,6 +114,7 @@ fn finalize_batch_job(
     };
     if cancelled {
         s.phase = BatchJobPhase::Cancelled;
+        s.terminal_at_unix = Some(ts);
         clear_enqueue(queue_db, job_id);
         return;
     }
@@ -110,10 +124,12 @@ fn finalize_batch_job(
     }
     if outputs_len == 0 && inputs_len > 0 && s.actual == 0 && s.error.is_some() {
         s.phase = BatchJobPhase::Failed;
+        s.terminal_at_unix = Some(ts);
         clear_enqueue(queue_db, job_id);
         return;
     }
     s.phase = BatchJobPhase::Completed;
+    s.terminal_at_unix = Some(ts);
     clear_enqueue(queue_db, job_id);
 }
 
@@ -131,18 +147,55 @@ fn cleanup_staging_paths(paths: Vec<PathBuf>) {
     }
 }
 
+fn gc_terminal_batch_ram(
+    now: i64,
+    job_snapshots: &Arc<Mutex<HashMap<String, BatchJobSnapshot>>>,
+    signed_outputs: &Arc<Mutex<HashMap<String, Vec<PathBuf>>>>,
+    intent_map: &Arc<Mutex<HashMap<String, String>>>,
+) {
+    let cutoff = now.saturating_sub(BATCH_JOB_RAM_GC_AFTER_TERMINAL_SECS);
+    let mut remove_ids: Vec<String> = Vec::new();
+    if let Ok(guard) = job_snapshots.lock() {
+        for (id, snap) in guard.iter() {
+            if matches!(
+                snap.phase,
+                BatchJobPhase::Completed | BatchJobPhase::Failed | BatchJobPhase::Cancelled
+            ) {
+                if let Some(t) = snap.terminal_at_unix {
+                    if t < cutoff {
+                        remove_ids.push(id.clone());
+                    }
+                }
+            }
+        }
+    }
+    for id in remove_ids {
+        if let Ok(mut g) = job_snapshots.lock() {
+            g.remove(&id);
+        }
+        if let Ok(mut g) = signed_outputs.lock() {
+            g.remove(&id);
+        }
+        if let Ok(mut g) = intent_map.lock() {
+            g.retain(|_rid, jid| jid != &id);
+        }
+    }
+}
+
 /// Vigía trabajos en SQLite `batch_job_enqueue`: si el encolado supera [`BATCH_JOB_MAX_WALL_CLOCK_SECS`],
 /// cancela el token y marca la instantánea como `cancelled`.
 pub fn spawn_batch_job_timeout_watchdog(
     batch_cancel: Arc<Mutex<HashMap<String, CancellationToken>>>,
     job_snapshots: Arc<Mutex<HashMap<String, BatchJobSnapshot>>>,
+    batch_signed_outputs: Arc<Mutex<HashMap<String, Vec<PathBuf>>>>,
+    intent_request_to_job: Arc<Mutex<HashMap<String, String>>>,
     queue_sqlite_path: Arc<PathBuf>,
     app: Option<AppHandle>,
 ) {
     use tokio::time::{interval, Duration, MissedTickBehavior};
 
     tauri::async_runtime::spawn(async move {
-        let mut ticker = interval(Duration::from_secs(30));
+        let mut ticker = interval(Duration::from_secs(BATCH_WATCHDOG_INTERVAL_SECS));
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             ticker.tick().await;
@@ -159,7 +212,7 @@ pub fn spawn_batch_job_timeout_watchdog(
                 Ok(v) => v,
                 Err(e) => {
                     tracing::warn!(error = %e, "watchdog listar batch_job_enqueue");
-                    continue;
+                    Vec::new()
                 }
             };
 
@@ -174,6 +227,7 @@ pub fn spawn_batch_job_timeout_watchdog(
                         if matches!(s.phase, BatchJobPhase::Queued | BatchJobPhase::Running) {
                             s.phase = BatchJobPhase::Cancelled;
                             s.error = Some(BATCH_JOB_TIMEOUT_EMIT_ERROR.into());
+                            s.terminal_at_unix = Some(now);
                         }
                     }
                 }
@@ -196,6 +250,13 @@ pub fn spawn_batch_job_timeout_watchdog(
                     );
                 }
             }
+
+            gc_terminal_batch_ram(
+                now,
+                &job_snapshots,
+                &batch_signed_outputs,
+                &intent_request_to_job,
+            );
         }
     });
 }
@@ -238,7 +299,8 @@ pub fn spawn_batch_worker(
                     pin: job.pin,
                     seal_png: job.seal_png,
                 };
-                let outputs = process_batch(input, token_c, notifier);
+                let signer = Arc::new(Pkcs11PdfPadesSigner { token: token_c });
+                let outputs = process_batch(input, signer, notifier);
                 let cancelled = cancel_token.is_cancelled();
                 let qpath = qdb.as_ref().map(|a| a.as_path());
                 finalize_batch_job(

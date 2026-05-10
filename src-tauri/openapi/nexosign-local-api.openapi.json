@@ -65,45 +65,6 @@
         }
       }
     },
-    "/api/v1/demo-progress": {
-      "post": {
-        "tags": ["utils"],
-        "summary": "Emitir evento de progreso demo (IPC)",
-        "description": "Emite un evento `progreso` hacia el frontend (desarrollo / pruebas). En modo test sin `AppHandle` devuelve 503.",
-        "operationId": "postDemoProgress",
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "job_id": { "type": "string", "description": "Identificador del trabajo (opcional)" }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Evento emitido",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "emitted": { "type": "boolean" }
-                  }
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Sin ventana Tauri (tests)"
-          }
-        }
-      }
-    },
     "/api/v1/batch/sign/intent": {
       "post": {
         "tags": ["batch"],
@@ -169,9 +130,8 @@
               }
             }
           },
-          "400": { "description": "Cuerpo inválido o PDF no válido" },
+          "400": { "description": "Cuerpo inválido, PDF no válido o tamaños fuera de límite (validación de negocio)" },
           "403": { "description": "Origen no autorizado (`origin_not_trusted`)" },
-          "413": { "description": "Tamaño total del multipart fuera de límite" },
           "415": { "description": "Content-Type no soportado" }
         }
       }

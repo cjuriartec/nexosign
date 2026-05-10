@@ -8,54 +8,15 @@
 		batchQueue,
 		intentQueue,
 		computeBatchQueueHasActiveWork,
-		type BatchQueueStatus,
 	} from "$lib/stores/batch-queue.svelte";
+	import {
+		badgeVariantForSidebar,
+		batchStatusLabelCompact,
+		shortJobIdSidebar,
+	} from "$lib/queue/queue-display";
 	import { cn } from "$lib/utils.js";
 
 	const batchQueueHasActiveWork = $derived(computeBatchQueueHasActiveWork());
-
-	function statusLabel(s: BatchQueueStatus): string {
-		switch (s) {
-			case "preparing":
-				return "Prep.";
-			case "queued":
-				return "Cola";
-			case "running":
-				return "Curso";
-			case "cancelling":
-				return "…";
-			case "cancelled":
-				return "Cancel.";
-			case "finished":
-				return "OK";
-			case "error":
-				return "Err";
-			default:
-				return s;
-		}
-	}
-
-	function badgeVariantForSidebar(
-		s: BatchQueueStatus,
-	): "default" | "secondary" | "destructive" | "outline" {
-		switch (s) {
-			case "running":
-			case "queued":
-			case "preparing":
-				return "default";
-			case "cancelling":
-				return "secondary";
-			case "error":
-				return "destructive";
-			default:
-				return "outline";
-		}
-	}
-
-	function shortJobId(id: string): string {
-		if (id.length <= 14) return id;
-		return `${id.slice(0, 6)}…${id.slice(-4)}`;
-	}
 
 	interface Props {
 		showWizardLockHint?: boolean;
@@ -106,7 +67,7 @@
 						<div class="min-w-0 flex-1 space-y-0.5">
 							<p class="truncate leading-tight font-medium">{q.label}</p>
 							<p class="text-muted-foreground truncate font-mono text-[10px]" title={q.jobId}>
-								{shortJobId(q.jobId)}
+								{shortJobIdSidebar(q.jobId)}
 							</p>
 						</div>
 						<div class="flex shrink-0 flex-col items-end gap-1">
@@ -118,7 +79,7 @@
 									/>
 								{/if}
 								<Badge variant={badgeVariantForSidebar(q.status)} class="h-5 px-1.5 text-[10px]">
-									{statusLabel(q.status)}
+									{batchStatusLabelCompact(q.status)}
 								</Badge>
 							</div>
 							<span

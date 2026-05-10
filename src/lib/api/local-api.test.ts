@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
 	fetchHealth,
 	fetchPing,
+	fetchBatchJobStatus,
 	postBatchSign,
 	postBatchSignIntent,
 	postBatchSignIntentFormData,
@@ -184,6 +185,28 @@ describe("local-api", () => {
 		await expect(
 			postBatchSignIntentFormData(fd, "http://mock.test"),
 		).rejects.toThrow(/no es un PDF válido/);
+	});
+
+	it("fetchBatchJobStatus GETea estado y envía Origin en Node", async () => {
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({
+				job_id: "jid-1",
+				phase: "running",
+				actual: 1,
+				total: 3,
+			}),
+		});
+		const s = await fetchBatchJobStatus("jid-1", "http://mock.test");
+		expect(s.phase).toBe("running");
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			"http://mock.test/api/v1/batch/jobs/jid-1/status",
+			expect.objectContaining({
+				headers: expect.objectContaining({
+					Origin: "http://localhost:1420",
+				}),
+			}),
+		);
 	});
 
 	it("postBatchSignIntent lanza si no ok", async () => {

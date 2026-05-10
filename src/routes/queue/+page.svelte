@@ -26,6 +26,11 @@
 		type BatchQueueStatus,
 		type IntentQueueItem,
 	} from "$lib/stores/batch-queue.svelte";
+	import {
+		badgeVariantForBatchStatus,
+		batchStatusLabelFull,
+		shortJobIdWide,
+	} from "$lib/queue/queue-display";
 
 	type QueueFilter = "all" | "intents" | "active" | "finished" | "cancelled" | "error";
 
@@ -63,51 +68,6 @@
 
 	const showIntentBlock = $derived(filter === "all" || filter === "intents");
 	const showJobBlock = $derived(filter !== "intents");
-
-	function statusLabel(s: BatchQueueStatus): string {
-		switch (s) {
-			case "preparing":
-				return "Preparando";
-			case "queued":
-				return "En cola";
-			case "running":
-				return "En curso";
-			case "cancelling":
-				return "Cancelando";
-			case "cancelled":
-				return "Cancelado";
-			case "finished":
-				return "Completado";
-			case "error":
-				return "Error";
-			default:
-				return s;
-		}
-	}
-
-	function shortJobId(id: string): string {
-		if (id.length <= 18) return id;
-		return `${id.slice(0, 10)}…${id.slice(-6)}`;
-	}
-
-	function badgeVariantForStatus(
-		s: BatchQueueStatus,
-	): "default" | "secondary" | "destructive" | "outline" {
-		switch (s) {
-			case "running":
-			case "queued":
-			case "preparing":
-				return "default";
-			case "cancelling":
-				return "secondary";
-			case "error":
-				return "destructive";
-			case "finished":
-				return "outline";
-			default:
-				return "outline";
-		}
-	}
 
 	function activeStepHint(s: BatchQueueStatus): string {
 		switch (s) {
@@ -330,17 +290,17 @@
 													class="text-muted-foreground truncate font-mono text-[11px]"
 													title={q.jobId}
 												>
-													{shortJobId(q.jobId)}
+													{shortJobIdWide(q.jobId)}
 												</p>
 												<p class="text-muted-foreground text-[11px]">{formatJobWhen(q)}</p>
 											</div>
 											<div class="flex shrink-0 items-start gap-2">
 												<div class="flex flex-col items-end gap-1">
 													<Badge
-														variant={badgeVariantForStatus(q.status)}
+														variant={badgeVariantForBatchStatus(q.status)}
 														class="text-[10px] font-medium"
 													>
-														{statusLabel(q.status)}
+														{batchStatusLabelFull(q.status)}
 													</Badge>
 													<span
 														class={cn(
