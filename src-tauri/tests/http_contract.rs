@@ -1,10 +1,12 @@
 //! Contrato HTTP del binario (tests de integración en `tests/`).
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
+use nexosign_lib::adapters::http::PendingBatchIntent;
 use nexosign_lib::adapters::http::state::SharedState;
 use nexosign_lib::adapters::http::{build_router, LOCAL_API_PORT};
 use nexosign_lib::adapters::worker::batch::BatchJob;
@@ -27,6 +29,162 @@ async fn integration_health_echoes_version_and_port_constant() {
     let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["service"], "nexosign");
+}
+
+#[tokio::test]
+async fn integration_openapi_json_and_docs_are_served() {
+    let app = build_router(SharedState::test_default());
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/openapi.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["openapi"], "3.0.3");
+    assert!(v["paths"].is_object());
+
+    let app = build_router(SharedState::test_default());
+    let res = app
+        .oneshot(
+            Request::builder().uri("/docs").body(Body::empty()).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = String::from_utf8(to_bytes(res.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
+    assert!(html.contains("swagger-ui") || html.contains("SwaggerUIBundle"));
+}
+
+#[tokio::test]
+async fn integration_batch_signed_manifest_and_download_require_origin() {
+    let tmp = std::env::temp_dir().join(format!(
+        "nexosign-contract-signed-{}.pdf",
+        std::process::id()
+    ));
+    std::fs::write(&tmp, b"%PDF-1.4\ncontract signed").unwrap();
+
+    let state = SharedState::test_default();
+    state
+        .batch_signed_outputs
+        .lock()
+        .unwrap()
+        .insert("contract-job-dl".to_string(), vec![tmp.clone()]);
+
+    let app = build_router(state.clone());
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/batch/jobs/contract-job-dl/signed-files")
+                .header("Origin", "http://localhost:1420")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["count"], 1);
+
+    let app = build_router(state);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/batch/jobs/contract-job-dl/files/0")
+                .header("Origin", "http://localhost:1420")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()
+            .get("content-type")
+            .and_then(|h| h.to_str().ok()),
+        Some("application/pdf")
+    );
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert!(bytes.starts_with(b"%PDF"));
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[tokio::test]
+async fn integration_batch_sign_intent_status_phases() {
+    let state = SharedState::test_default();
+    state.pending_batch_intents.lock().unwrap().insert(
+        "rid-phase".to_string(),
+        PendingBatchIntent::new(vec![PathBuf::from("/tmp/a.pdf")], None, None),
+    );
+
+    let app = build_router(state.clone());
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/batch/sign/intent/rid-phase/status")
+                .header("Origin", "http://localhost:1420")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["phase"], "awaiting_confirmation");
+
+    state.pending_batch_intents.lock().unwrap().remove("rid-phase");
+    state
+        .intent_request_to_job
+        .lock()
+        .unwrap()
+        .insert("rid-phase".into(), "job-phase-1".into());
+
+    let app = build_router(state.clone());
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/batch/sign/intent/rid-phase/status")
+                .header("Origin", "http://localhost:1420")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["phase"], "processing");
+    assert_eq!(v["job_id"], "job-phase-1");
+
+    state
+        .batch_signed_outputs
+        .lock()
+        .unwrap()
+        .insert("job-phase-1".into(), vec![PathBuf::from("/tmp/out.pdf")]);
+
+    let app = build_router(state);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/batch/sign/intent/rid-phase/status")
+                .header("Origin", "http://localhost:1420")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["phase"], "completed");
+    assert_eq!(v["signed_file_count"], 1);
 }
 
 #[tokio::test]

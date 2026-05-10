@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
 use serde::Serialize;
@@ -21,6 +22,10 @@ pub struct SharedState {
     pub batch_cancel: Arc<Mutex<HashMap<String, CancellationToken>>>,
     /// Para `POST /batch/sign` con PIN opcional (solo proceso real Tauri).
     pub pkcs11: Option<std::sync::Arc<Pkcs11TokenManager>>,
+    /// Tras terminar un `job_id`, rutas de los `*_firmado.pdf` listos para `GET …/files/{i}`.
+    pub batch_signed_outputs: Arc<Mutex<HashMap<String, Vec<PathBuf>>>>,
+    /// Tras encolar con `intent_request_id`, correlación para sondeo del portal (`GET …/intent/{request_id}/status`).
+    pub intent_request_to_job: Arc<Mutex<HashMap<String, String>>>,
     /// Firma diferida: POST `/batch/sign/intent` registra aquí; la UI consume al confirmar.
     pub pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
 }
@@ -37,6 +42,7 @@ impl SharedState {
         batch_cancel: Arc<Mutex<HashMap<String, CancellationToken>>>,
         pkcs11: Option<std::sync::Arc<Pkcs11TokenManager>>,
         pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
+        batch_signed_outputs: Arc<Mutex<HashMap<String, Vec<PathBuf>>>>,
     ) -> Self {
         Self {
             origins,
@@ -44,6 +50,8 @@ impl SharedState {
             batch_tx,
             batch_cancel,
             pkcs11,
+            batch_signed_outputs,
+            intent_request_to_job: Arc::new(Mutex::new(HashMap::new())),
             pending_batch_intents,
         }
     }
@@ -56,6 +64,8 @@ impl SharedState {
             batch_tx: None,
             batch_cancel: Arc::new(Mutex::new(HashMap::new())),
             pkcs11: None,
+            batch_signed_outputs: Arc::new(Mutex::new(HashMap::new())),
+            intent_request_to_job: Arc::new(Mutex::new(HashMap::new())),
             pending_batch_intents: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -68,6 +78,8 @@ impl SharedState {
             batch_tx: Some(sender),
             batch_cancel: Arc::new(Mutex::new(HashMap::new())),
             pkcs11: None,
+            batch_signed_outputs: Arc::new(Mutex::new(HashMap::new())),
+            intent_request_to_job: Arc::new(Mutex::new(HashMap::new())),
             pending_batch_intents: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -83,6 +95,8 @@ impl SharedState {
             batch_tx: Some(sender),
             batch_cancel: Arc::new(Mutex::new(HashMap::new())),
             pkcs11: None,
+            batch_signed_outputs: Arc::new(Mutex::new(HashMap::new())),
+            intent_request_to_job: Arc::new(Mutex::new(HashMap::new())),
             pending_batch_intents,
         }
     }

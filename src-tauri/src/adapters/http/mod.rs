@@ -1,3 +1,4 @@
+pub mod openapi;
 pub mod state;
 
 mod pending_batch_intent;
@@ -6,7 +7,7 @@ pub use pending_batch_intent::{PendingBatchIntent, PENDING_INTENT_TTL_SECS};
 
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -30,6 +31,10 @@ use crate::infrastructure::batch_pdf_validation::{
     MAX_PDFS_PER_BATCH_INTENT,
     MAX_TOTAL_BATCH_INTENT_BYTES,
 };
+
+/// Techo para servir por HTTP un PDF firmado (entrada máx. + margen por firma incrustada).
+const MAX_SIGNED_DOWNLOAD_BYTES: u64 =
+    crate::infrastructure::batch_pdf_validation::MAX_BATCH_PDF_BYTES + 8 * 1024 * 1024;
 
 pub const LOCAL_API_PORT: u16 = 14500;
 
@@ -168,6 +173,8 @@ pub fn build_router(state: SharedState) -> Router {
         ));
 
     Router::new()
+        .route("/openapi.json", get(openapi::get_openapi_json))
+        .route("/docs", get(openapi::get_api_docs))
         .route("/health", get(get_health))
         .route("/api/v1/ping", post(post_ping))
         .route("/api/v1/demo-progress", post(post_demo_progress))
@@ -175,7 +182,19 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/v1/batch/sign/intent",
             post(post_batch_sign_intent).layer(DefaultBodyLimit::max(MAX_BATCH_INTENT_BODY)),
         )
+        .route(
+            "/api/v1/batch/sign/intent/{request_id}/status",
+            get(get_batch_sign_intent_status),
+        )
         .route("/api/v1/batch/sign", post(post_batch_sign))
+        .route(
+            "/api/v1/batch/jobs/{job_id}/signed-files",
+            get(get_batch_signed_manifest),
+        )
+        .route(
+            "/api/v1/batch/jobs/{job_id}/files/{file_index}",
+            get(download_batch_signed_file),
+        )
         .layer(cors)
         .with_state(state)
 }
@@ -733,6 +752,9 @@ async fn post_batch_sign(
                 if let Ok(mut p) = state.pending_batch_intents.lock() {
                     p.remove(&rid);
                 }
+                if let Ok(mut m) = state.intent_request_to_job.lock() {
+                    m.insert(rid, job_id.clone());
+                }
             }
             Json(BatchSignResponse {
                 job_id,
@@ -760,6 +782,253 @@ async fn post_batch_sign(
             )
                 .into_response()
         }
+    }
+}
+
+/// Sondeo desde el portal web: `request_id` del intent → fase y `job_id` cuando ya se encoló la firma.
+async fn get_batch_sign_intent_status(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(request_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = gate_batch_origin(&state, &headers) {
+        return resp;
+    }
+
+    let awaiting = match state.pending_batch_intents.lock() {
+        Ok(g) => g.contains_key(&request_id),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "estado intents bloqueado" })),
+            )
+                .into_response();
+        }
+    };
+
+    if awaiting {
+        return Json(serde_json::json!({
+            "request_id": request_id,
+            "phase": "awaiting_confirmation",
+            "job_id": serde_json::Value::Null,
+        }))
+        .into_response();
+    }
+
+    let job_id = match state.intent_request_to_job.lock() {
+        Ok(g) => match g.get(&request_id).cloned() {
+            Some(j) => j,
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({
+                        "error": "intent_not_found",
+                        "detail": "request_id desconocido, expirado o sin encolar firma tras el intent."
+                    })),
+                )
+                    .into_response();
+            }
+        },
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "estado intent_request_to_job bloqueado" })),
+            )
+                .into_response();
+        }
+    };
+
+    let manifest_href = format!("/api/v1/batch/jobs/{}/signed-files", job_id);
+
+    let signed_paths_opt = match state.batch_signed_outputs.lock() {
+        Ok(g) => g.get(&job_id).cloned(),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "estado batch outputs bloqueado" })),
+            )
+                .into_response();
+        }
+    };
+
+    match signed_paths_opt {
+        None => Json(serde_json::json!({
+            "request_id": request_id,
+            "phase": "processing",
+            "job_id": job_id,
+            "manifest_href": manifest_href,
+        }))
+        .into_response(),
+        Some(paths) => Json(serde_json::json!({
+            "request_id": request_id,
+            "phase": "completed",
+            "job_id": job_id,
+            "signed_file_count": paths.len(),
+            "manifest_href": manifest_href,
+        }))
+        .into_response(),
+    }
+}
+
+/// Lista índices y URLs relativas para descargar los PDF firmados de un trabajo terminado.
+async fn get_batch_signed_manifest(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(job_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = gate_batch_origin(&state, &headers) {
+        return resp;
+    }
+    let paths_opt = match state.batch_signed_outputs.lock() {
+        Ok(g) => g.get(&job_id).cloned(),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "estado batch outputs bloqueado" })),
+            )
+                .into_response();
+        }
+    };
+    let Some(paths) = paths_opt else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "job_outputs_not_found",
+                "detail": "Sin salidas registradas: el trabajo no existe, no ha terminado o el job_id es incorrecto."
+            })),
+        )
+            .into_response();
+    };
+    let count = paths.len();
+    let files: Vec<serde_json::Value> = paths
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let filename = p
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("signed.pdf")
+                .to_string();
+            serde_json::json!({
+                "index": i,
+                "filename": filename,
+                "href": format!("/api/v1/batch/jobs/{}/files/{}", job_id, i),
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "job_id": job_id,
+        "count": count,
+        "files": files,
+    }))
+    .into_response()
+}
+
+/// Descarga un PDF firmado por índice (mismo orden que en `signed-files`).
+async fn download_batch_signed_file(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path((job_id, file_index)): Path<(String, usize)>,
+) -> impl IntoResponse {
+    if let Err(resp) = gate_batch_origin(&state, &headers) {
+        return resp;
+    }
+
+    let path = {
+        let g = match state.batch_signed_outputs.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "estado batch outputs bloqueado" })),
+                )
+                    .into_response();
+            }
+        };
+        let Some(paths) = g.get(&job_id) else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "job_outputs_not_found" })),
+            )
+                .into_response();
+        };
+        if file_index >= paths.len() {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "file_index_out_of_range" })),
+            )
+                .into_response();
+        }
+        paths[file_index].clone()
+    };
+
+    let meta = match std::fs::metadata(&path) {
+        Ok(m) => m,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "archivo ya no disponible en disco" })),
+            )
+                .into_response();
+        }
+    };
+    if !meta.is_file() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "no es un fichero regular" })),
+        )
+            .into_response();
+    }
+    let len = meta.len();
+    if len > MAX_SIGNED_DOWNLOAD_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(serde_json::json!({ "error": "pdf firmado supera el límite de descarga" })),
+        )
+            .into_response();
+    }
+
+    let path_for_read = path.clone();
+    let bytes = match tokio::task::spawn_blocking(move || std::fs::read(&path_for_read)).await {
+        Ok(Ok(b)) => b,
+        Ok(Err(e)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("lectura: {e}") })),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "fallo al leer fichero" })),
+            )
+                .into_response();
+        }
+    };
+
+    let fname = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("documento_firmado.pdf");
+    let safe_fname: String = fname.chars().filter(|c| !matches!(c, '"' | '\\' | '\r' | '\n')).collect();
+
+    match Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/pdf")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", safe_fname),
+        )
+        .body(Body::from(bytes))
+    {
+        Ok(res) => res.into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "respuesta HTTP" })),
+        )
+            .into_response(),
     }
 }
 

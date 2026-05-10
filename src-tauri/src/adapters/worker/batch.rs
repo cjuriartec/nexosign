@@ -38,6 +38,7 @@ impl ProgressNotifier for TauriProgress {
             "job_id": ev.job_id,
             "nombre_archivo": ev.file_name,
             "path": ev.path,
+            "output_path": ev.output_path,
             "error": ev.error,
         });
         let _ = self.0.emit("progreso", &payload);
@@ -64,6 +65,7 @@ pub fn spawn_batch_worker(
     token: Arc<Pkcs11TokenManager>,
     app: Option<AppHandle>,
     cancel_registry: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    signed_outputs: Arc<Mutex<HashMap<String, Vec<PathBuf>>>>,
 ) {
     // Debe usar el runtime de Tauri (`setup` no tiene Tokio activo en el hilo actual).
     tauri::async_runtime::spawn(async move {
@@ -73,13 +75,14 @@ pub fn spawn_batch_worker(
             let app_c = app.clone();
             let reg_c = cancel_registry.clone();
             let cleanup = job.cleanup_paths.clone();
+            let signed_outputs_c = signed_outputs.clone();
             let run = tokio::task::spawn_blocking(move || {
                 let notifier: Box<dyn ProgressNotifier> = match app_c {
                     Some(h) => Box::new(TauriProgress(h)),
                     None => Box::new(NoopProgressNotifier),
                 };
                 let input = SignBatchInput {
-                    job_id: job.job_id,
+                    job_id: job.job_id.clone(),
                     cert_id_hex: job.cert_id_hex,
                     inputs: job.inputs,
                     cancel: job.cancel,
@@ -88,7 +91,10 @@ pub fn spawn_batch_worker(
                     pin: job.pin,
                     seal_png: job.seal_png,
                 };
-                let _ = process_batch(input, token_c, notifier);
+                let outputs = process_batch(input, token_c, notifier);
+                if let Ok(mut m) = signed_outputs_c.lock() {
+                    m.insert(jid.clone(), outputs);
+                }
                 cleanup_staging_paths(cleanup);
                 if let Ok(mut g) = reg_c.lock() {
                     g.remove(&jid);

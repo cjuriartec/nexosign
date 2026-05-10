@@ -6,7 +6,10 @@ pub struct ProgressEvent {
     pub current: u32,
     pub total: u32,
     pub file_name: String,
+    /// Ruta del PDF de entrada (pendiente de firma).
     pub path: String,
+    /// Ruta absoluta del PDF firmado escrito en disco; solo si la firma de ese ítem tuvo éxito.
+    pub output_path: Option<String>,
     pub error: Option<String>,
 }
 

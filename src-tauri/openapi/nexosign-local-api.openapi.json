@@ -1,0 +1,336 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "NexoSign API local",
+    "description": "API HTTP en loopback (`127.0.0.1:14500`) cuando NexoSign está en ejecución.\n\n**CORS / origen:** los `POST` y los **`GET`** de batch (descargas, estado del intent) exigen cabecera **`Origin`** autorizada. Desde curl: `-H \"Origin: http://localhost:1420\"`.\n\n**Portal sin backend:** tras `POST …/batch/sign/intent`, sondea `GET /api/v1/batch/sign/intent/{request_id}/status` hasta `completed`; luego `GET …/jobs/{job_id}/signed-files` y cada `GET …/files/{i}`.\n\n**No incluido aquí:** la encolación directa de firma (`POST …/batch/sign`) la usa la app de escritorio y automatización local en la misma máquina; **no** forma parte de este contrato público.\n\n**Scalar / otros:** importa `http://127.0.0.1:14500/openapi.json` con la app abierta.",
+    "version": "0.1.0"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:14500",
+      "description": "API local (solo con la app en marcha)"
+    }
+  ],
+  "tags": [
+    { "name": "health", "description": "Estado del servicio" },
+    { "name": "utils", "description": "Utilidades y pruebas" },
+    { "name": "batch", "description": "Firma por lotes — contrato integradores (intent, estado, descargas); requiere Origin permitido" }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["health"],
+        "summary": "Salud",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "Servicio activo",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["status", "service", "version"],
+                  "properties": {
+                    "status": { "type": "string", "example": "ok" },
+                    "service": { "type": "string", "example": "nexosign" },
+                    "version": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ping": {
+      "post": {
+        "tags": ["utils"],
+        "summary": "Ping",
+        "operationId": "postPing",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["ok"],
+                  "properties": {
+                    "ok": { "type": "boolean", "example": true }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/demo-progress": {
+      "post": {
+        "tags": ["utils"],
+        "summary": "Emitir evento de progreso demo (IPC)",
+        "description": "Emite un evento `progreso` hacia el frontend (desarrollo / pruebas). En modo test sin `AppHandle` devuelve 503.",
+        "operationId": "postDemoProgress",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "job_id": { "type": "string", "description": "Identificador del trabajo (opcional)" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Evento emitido",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "emitted": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sin ventana Tauri (tests)"
+          }
+        }
+      }
+    },
+    "/api/v1/batch/sign/intent": {
+      "post": {
+        "tags": ["batch"],
+        "summary": "Registrar intención de firma (sin encolar)",
+        "description": "Registra PDFs para el asistente en la app **sin encolar la firma**. Integración web: **`multipart/form-data`** con el campo repetible **`files`** (un PDF por parte). También **`application/json`** con rutas absolutas locales (`inputs`). Requiere **Origin** permitido.",
+        "operationId": "postBatchSignIntent",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" },
+            "example": "http://localhost:1420"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["inputs"],
+                "properties": {
+                  "inputs": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Rutas absolutas a PDF en disco"
+                  }
+                }
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["files"],
+                "properties": {
+                  "files": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "PDF a registrar. Repite el mismo nombre de campo `files` por cada archivo (hasta el máximo del producto)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Intención creada",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["request_id", "deep_link"],
+                  "properties": {
+                    "request_id": { "type": "string", "format": "uuid" },
+                    "deep_link": {
+                      "type": "string",
+                      "description": "nexosign://… para abrir la app"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Cuerpo inválido o PDF no válido" },
+          "403": { "description": "Origen no autorizado (`origin_not_trusted`)" },
+          "413": { "description": "Tamaño total del multipart fuera de límite" },
+          "415": { "description": "Content-Type no soportado" }
+        }
+      }
+    },
+    "/api/v1/batch/sign/intent/{request_id}/status": {
+      "get": {
+        "tags": ["batch"],
+        "summary": "Estado del intent (portal sin backend)",
+        "description": "Sondeo desde el navegador con el **`request_id`** devuelto por `POST …/intent`. Fases: **`awaiting_confirmation`** (intención aún abierta), **`processing`** (ya hay `job_id`, el worker no ha registrado salidas), **`completed`** (firma terminada; usar `manifest_href` y `GET …/jobs/{job_id}/files/{i}`). Requiere **Origin** permitido.",
+        "operationId": "getBatchSignIntentStatus",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" },
+            "example": "http://localhost:1420"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Estado actual",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["request_id", "phase"],
+                  "properties": {
+                    "request_id": { "type": "string" },
+                    "phase": {
+                      "type": "string",
+                      "enum": [
+                        "awaiting_confirmation",
+                        "processing",
+                        "completed"
+                      ]
+                    },
+                    "job_id": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Presente en processing y completed"
+                    },
+                    "signed_file_count": {
+                      "type": "integer",
+                      "description": "Solo en completed: número de PDF firmados correctamente"
+                    },
+                    "manifest_href": {
+                      "type": "string",
+                      "description": "Ruta relativa al listado de descargas (processing y completed)"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": { "description": "Origen no autorizado" },
+          "404": { "description": "request_id desconocido o sin correlación intent→job" }
+        }
+      }
+    },
+    "/api/v1/batch/jobs/{job_id}/signed-files": {
+      "get": {
+        "tags": ["batch"],
+        "summary": "Listar PDF firmados listos para descargar",
+        "description": "Tras terminar el trabajo `job_id`, devuelve índices y rutas relativas `href` para `GET …/files/{file_index}`. Requiere **Origin** permitido.",
+        "operationId": "getBatchSignedManifest",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" },
+            "example": "http://localhost:1420"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lista de ficheros firmados",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "job_id": { "type": "string" },
+                    "count": { "type": "integer" },
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "index": { "type": "integer" },
+                          "filename": { "type": "string" },
+                          "href": { "type": "string" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": { "description": "Origen no autorizado" },
+          "404": { "description": "Trabajo sin salidas registradas o aún en curso" }
+        }
+      }
+    },
+    "/api/v1/batch/jobs/{job_id}/files/{file_index}": {
+      "get": {
+        "tags": ["batch"],
+        "summary": "Descargar un PDF firmado",
+        "description": "Devuelve el PDF en **`application/pdf`** (cabecera `Content-Disposition: attachment`). El índice coincide con `signed-files`. Requiere **Origin** permitido.",
+        "operationId": "downloadBatchSignedFile",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "file_index",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer", "minimum": 0 }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" },
+            "example": "http://localhost:1420"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cuerpo binario PDF",
+            "content": {
+              "application/pdf": {
+                "schema": { "type": "string", "format": "binary" }
+              }
+            }
+          },
+          "403": { "description": "Origen no autorizado" },
+          "404": { "description": "Índice fuera de rango o fichero ya no en disco" },
+          "413": { "description": "PDF demasiado grande para servir" }
+        }
+      }
+    }
+  }
+}

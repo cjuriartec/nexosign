@@ -21,11 +21,13 @@ pub fn spawn_local_api(
     pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
 ) {
     let (tx, rx) = tokio::sync::mpsc::channel(16);
+    let batch_signed_outputs = Arc::new(Mutex::new(HashMap::new()));
     crate::adapters::worker::batch::spawn_batch_worker(
         rx,
         pkcs11.clone(),
         Some(handle.clone()),
         batch_cancel.clone(),
+        batch_signed_outputs.clone(),
     );
 
     let state = SharedState::new(
@@ -35,6 +37,7 @@ pub fn spawn_local_api(
         batch_cancel,
         Some(pkcs11),
         pending_batch_intents,
+        batch_signed_outputs,
     );
     let router = build_router(state);
     let addr = SocketAddr::from(([127, 0, 0, 1], LOCAL_API_PORT));

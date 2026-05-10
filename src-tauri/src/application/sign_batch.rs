@@ -7,7 +7,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::adapters::pdf::pades;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
-use crate::application::errors::SignBatchError;
 use crate::ports::{ProgressEvent, ProgressNotifier};
 
 use crate::adapters::pdf::pades::SignatureGridPlacement;
@@ -45,11 +44,13 @@ fn output_path_for(input: &Path, output_dir: Option<&Path>) -> PathBuf {
 }
 
 /// Ejecuta el lote en el hilo actual (el worker lo invoca dentro de `spawn_blocking`).
+/// Devuelve las rutas de los PDF firmados correctamente (en orden).
 pub fn process_batch<P: ProgressNotifier>(
     input: SignBatchInput,
     token: Arc<Pkcs11TokenManager>,
     progress: P,
-) -> Result<(), SignBatchError> {
+) -> Vec<PathBuf> {
+    let mut signed_outputs = Vec::new();
     let total = input.inputs.len().try_into().unwrap_or(u32::MAX);
 
     if let Some(ref p) = input.pin {
@@ -65,12 +66,13 @@ pub fn process_batch<P: ProgressNotifier>(
                         total: total.max(1),
                         file_name: String::new(),
                         path: String::new(),
+                        output_path: None,
                         error: Some(format!(
                             "Sesión PKCS#11 en el proceso de firma: {e}"
                         )),
                     });
                     let _ = token.logout();
-                    return Ok(());
+                    return signed_outputs;
                 }
             }
         }
@@ -84,6 +86,7 @@ pub fn process_batch<P: ProgressNotifier>(
                 total,
                 file_name: String::new(),
                 path: String::new(),
+                output_path: None,
                 error: Some("lote cancelado".into()),
             });
             break;
@@ -97,35 +100,41 @@ pub fn process_batch<P: ProgressNotifier>(
         let path_str = path.display().to_string();
 
         let placement = input.signature_grid.unwrap_or_default();
+        let out_path = output_path_for(path, input.output_dir.as_deref());
 
         let res = pades::sign_pdf_pades_bes(
             token.clone(),
             &input.cert_id_hex,
             path,
-            &output_path_for(path, input.output_dir.as_deref()),
+            &out_path,
             placement,
             input.seal_png.as_deref(),
         );
 
         match res {
-            Ok(()) => progress.notify(ProgressEvent {
-                job_id: input.job_id.clone(),
-                current,
-                total,
-                file_name,
-                path: path_str,
-                error: None,
-            }),
+            Ok(()) => {
+                signed_outputs.push(out_path.clone());
+                progress.notify(ProgressEvent {
+                    job_id: input.job_id.clone(),
+                    current,
+                    total,
+                    file_name,
+                    path: path_str,
+                    output_path: Some(out_path.display().to_string()),
+                    error: None,
+                });
+            }
             Err(e) => progress.notify(ProgressEvent {
                 job_id: input.job_id.clone(),
                 current,
                 total,
                 file_name,
                 path: path_str,
+                output_path: None,
                 error: Some(e.to_string()),
             }),
         }
     }
     let _ = token.logout();
-    Ok(())
+    signed_outputs
 }

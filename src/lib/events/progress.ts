@@ -6,6 +6,8 @@ export type ProgressPayload = {
 	job_id: string;
 	nombre_archivo?: string;
 	path?: string;
+	/** Ruta absoluta del PDF firmado en disco si ese ítem se firmó correctamente. */
+	output_path?: string | null;
 	error?: string | null;
 };
 

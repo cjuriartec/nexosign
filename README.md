@@ -41,7 +41,7 @@
 | 🔒 **Privacidad por diseño** | La firma y el PIN ocurren **en el equipo del usuario**. La API solo escucha en **loopback** — no es un SaaS que centralice tus PDF ni tus claves. |
 | 🖲️ **Hardware real** | PKCS#11: mismo modelo que **DNIe**, tarjetas y HSM. **Una cola, un firmador**: el paralelismo no rompe lo que el chip no permite. |
 | 🧩 **Tu web, el escritorio** | Desde el navegador puedes registrar una **intención** (`POST …/intent`), recibir un **`deep_link`** y abrir la app con **`nexosign://`** para que el usuario **complete el asistente** (certificado, PIN, casilla). |
-| ⚙️ **Automatización local** | Cuando la política lo permite, **`POST /api/v1/batch/sign`** encola el lote **en un solo paso** con rutas absolutas y PIN opcional. |
+| ⚙️ **Automatización local** | La **app de escritorio** y herramientas en la misma máquina pueden seguir rutas HTTP internas no descritas en OpenAPI; integradores remotos usan **intent → estado → descargas**. |
 
 ---
 
@@ -62,14 +62,17 @@ La API está en **`http://127.0.0.1:14500`** **solo con la aplicación en ejecuc
 
 | Requisito | Detalle |
 |-----------|---------|
-| 🌍 **Origen** | Los `POST` de batch en navegador necesitan cabecera **`Origin`** permitida por CORS (p. ej. `http://localhost:1420`). |
+| 🌍 **Origen** | Los **`POST` y `GET`** de batch en navegador necesitan cabecera **`Origin`** permitida por CORS (p. ej. `http://localhost:1420`). Incluye sondeo de estado del intent y descargas. |
 | 💻 **`curl`** | Añade `-H "Origin: http://localhost:1420"` como en los ejemplos. |
-| 📂 **Rutas vs subida** | Con JSON, `inputs` y `output_dir` son **rutas absolutas** en el PC con NexoSign. Con **multipart**, envías el **contenido** del PDF; `output_dir` en texto sigue siendo ruta absoluta en ese equipo (suele omitirse en integración web). |
+| 📘 **OpenAPI** | Con la app en marcha: **`GET /openapi.json`** (solo endpoints pensados para integración externa: intent, estado, descargas). **`GET /docs`** abre **Swagger UI**. Importación en [Scalar](https://scalar.com), Postman, etc. |
+| 📂 **Multipart vs firma** | **`multipart/form-data`** solo en **`POST …/batch/sign/intent`** (subir PDF desde el navegador). La firma la ejecuta la **app** tras el deep link; ese paso **no** está en **`openapi.json`** (contrato para integradores web). |
 
 | Endpoint | Rol |
 |----------|-----|
-| **`POST /api/v1/batch/sign`** | Encola **de inmediato**. Body: `cert_id_hex`, `inputs`, opcional `job_id`, **`pin`**, **`output_dir`**, **`signature_grid`** (rejilla **5×7** en la primera página), **`intent_request_id`** si viene de una intención. → `{ job_id, queued: true }`. |
-| **`POST /api/v1/batch/sign/intent`** | **No firma aún.** Acepta **`application/json`** (rutas absolutas locales) **o** **`multipart/form-data`** (campos **`file`** / **`files`** repetibles + **`output_dir`** opcional como texto). Los PDF subidos se guardan en staging temporal; responde **`request_id`** + **`deep_link`**. TTL ~30 min. |
+| **`GET /api/v1/batch/jobs/{job_id}/signed-files`** | Cuando el lote **ha terminado**: JSON con `files[]` (`index`, `filename`, `href`) para descargar cada PDF firmado **desde el navegador** (cabecera **Origin** igual que en los POST). |
+| **`GET /api/v1/batch/jobs/{job_id}/files/{i}`** | Respuesta **`application/pdf`** del firmado *i*-ésimo (mismo orden que `inputs` / solo los firmados con éxito). |
+| **`GET /api/v1/batch/sign/intent/{request_id}/status`** | **Sondeo** tras el intent: `phase` = `awaiting_confirmation` \| `processing` \| `completed`, `job_id`, `manifest_href`, `signed_file_count`. Sin servidor propio: tu página hace polling a `127.0.0.1:14500` con el mismo **Origin**. |
+| **`POST /api/v1/batch/sign/intent`** | **No firma aún.** **`application/json`** (`inputs`: rutas absolutas) **o** **`multipart/form-data`** con el campo repetible **`files`** (un PDF por parte). Los PDF subidos van a staging temporal; responde **`request_id`** + **`deep_link`**. TTL ~30 min. |
 | **`GET /health`** | Estado del servicio (sin `Origin`). |
 | **`POST /api/v1/ping`** | Eco para pruebas. |
 | **`NEXOSIGN_BATCH_OUTPUT_DIR`** | Variable de entorno: fuerza carpeta de salida global `{stem}_firmado.pdf`. |
@@ -94,19 +97,36 @@ flowchart LR
   B -->|"request_id + deep_link"| A
   A -->|"Abrir enlace"| C
   C --> D
-  D -->|"POST /batch/sign + intent_request_id"| B
+  D -->|"Confirma y encola (uso interno)"| B
 ```
 
 **Pasos**
 
 1. **JSON:** los PDF ya están **en disco** (rutas absolutas) en ese PC.
-2. **Multipart:** el navegador o el cliente envía los **ficheros** en `file` / `files` (hasta 20 PDF, 50 MiB c/u, techo de suma 20×50 MiB); la API materializa temporales y el asistente los trata como entradas del lote.
+2. **Multipart:** el navegador envía los PDF en el campo repetible **`files`** (hasta 20 PDF, 50 MiB c/u, techo de suma 20×50 MiB); la API materializa temporales y el asistente los trata como entradas del lote.
 3. Tu cliente llama **`POST /api/v1/batch/sign/intent`** (JSON o multipart).
 4. Recibes **`request_id`** y **`deep_link`** — úsalos en un botón del tipo **«Abrir en NexoSign»**.
 5. El sistema operativo abre la app registrada para **`nexosign://`** (en desarrollo a veces conviene lanzar la app manualmente).
-6. El usuario completa el asistente; al confirmar, la app llama **`POST /api/v1/batch/sign`** con **`intent_request_id`** igual al **`request_id`** recibido; al terminar el lote se **borra** el directorio de staging.
+6. El usuario completa el asistente; al confirmar, **NexoSign** encola la firma **localmente** y relaciona el **`request_id`** del intent con el trabajo (`job_id`) para el sondeo y las descargas; al terminar el lote se **borra** el staging.
 
-> **Producto:** el resultado de la firma **no** regresa por el mismo HTTP que disparó el deep link; el proceso es **asíncrono** entre portal y app. Podéis combinar mensajes en UI, polling propio o callbacks cuando exista backend intermedio.
+### Portal sin backend propio (solo HTML/JS en tu dominio)
+
+No hace falta un callback HTTP a tu servidor. Con el **`request_id`** del intent:
+
+1. Abres el **`deep_link`** (o equivalente) para lanzar NexoSign.
+2. Desde la misma pestaña (origen ya autorizado en Ajustes), **sondea** cada pocos segundos:  
+   `GET http://127.0.0.1:14500/api/v1/batch/sign/intent/{request_id}/status`  
+   con cabecera **`Origin`** (la de tu portal).
+3. Cuando **`phase`** sea **`completed`**, usa **`manifest_href`** (o el **`job_id`**) para  
+   `GET …/batch/jobs/{job_id}/signed-files` y luego cada **`GET …/files/{i}`** y guardar los blobs en el cliente.
+
+Mientras tanto verás **`awaiting_confirmation`** (intención abierta) o **`processing`** (trabajo encolado, firma en curso).
+
+> **Nota:** si no añades un backend intermedio, el sondeo es siempre contra **loopback** desde el navegador del usuario (misma máquina que NexoSign).
+
+> **Producto (histórico):** antes el portal no tenía forma de saber el `job_id`; el endpoint de **status** cierra ese flujo.
+
+> **`GET /openapi.json`** solo incluye intent, estado del intent y descargas del lote (contrato para integradores). Rutas adicionales que usa la app en la misma máquina **no** aparecen ahí.
 
 <details>
 <summary><strong>📋 Ejemplo — intención subiendo PDF (multipart)</strong></summary>
@@ -139,28 +159,9 @@ curl -sS -X POST "http://127.0.0.1:14500/api/v1/batch/sign/intent" \
 ```
 
 
-<details>
-<summary><strong>📋 Ejemplo — encolar tras confirmar en la UI</strong> (referencia; la app rellena PIN en producción)</summary>
+### Fuera del OpenAPI público
 
-```bash
-curl -sS -X POST "http://127.0.0.1:14500/api/v1/batch/sign" \
-  -H "Content-Type: application/json" \
-  -H "Origin: http://localhost:1420" \
-  -d "{
-    \"cert_id_hex\": \"ABCDEF…\",
-    \"inputs\": [\"/Users/tu/usuario/documentos/doc.pdf\"],
-    \"job_id\": \"mi-trabajo-1\",
-    \"pin\": \"****\",
-    \"intent_request_id\": \"f47ac10b-58cc-4372-a567-0e02b2c3d479\",
-    \"signature_grid\": { \"col\": 2, \"row\": 6 }
-  }"
-```
-
-</details>
-
-### Batch directo (sin intención)
-
-En la misma máquina y con política que lo permita: **`POST /api/v1/batch/sign`** con todo en un solo JSON — ideal para **scripts y automatización local**; no sustituye el flujo con intención cuando buscas una UX guiada y trazable.
+La app de escritorio y otros procesos **locales** pueden usar rutas HTTP adicionales en loopback; **no** forman parte de **`openapi.json`**. Para una integración desde tu dominio, ceñirse a **intent → sondeo de estado → descargas**.
 
 ---
 
