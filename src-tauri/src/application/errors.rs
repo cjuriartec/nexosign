@@ -8,6 +8,7 @@ use thiserror::Error;
 pub enum SignBatchError {
     #[error("entrada inválida: {0}")]
     InvalidInput(String),
+    /// Mensaje libre; suele incluir detalle técnico para soporte (PKCS#11, CMS, DER).
     #[error("PDF inválido u operación PAdES fallida: {0}")]
     Pades(String),
     #[error(transparent)]

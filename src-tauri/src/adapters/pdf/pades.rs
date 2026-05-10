@@ -5,18 +5,21 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
-use cms::builder::{
-    SignedDataBuilder, SignerInfoBuilder, create_signing_time_attribute,
-};
+use cms::builder::{SignerInfoBuilder, create_signing_time_attribute};
 use cms::cert::{CertificateChoices, IssuerAndSerialNumber};
-use cms::signed_data::{EncapsulatedContentInfo, SignerIdentifier};
-use const_oid::db::rfc5911::ID_DATA;
+use cms::content_info::{CmsVersion, ContentInfo};
+use cms::signed_data::{
+    CertificateSet, DigestAlgorithmIdentifiers, EncapsulatedContentInfo, SignerIdentifier, SignedData,
+    SignerInfos,
+};
+use const_oid::db::rfc5911::{ID_DATA, ID_SIGNED_DATA};
 use const_oid::db::rfc5912::ID_SHA_256;
-use der::{Decode, Encode};
+use der::{Any, AnyRef, Decode, Encode};
 use lopdf::{Dictionary, Document, IncrementalDocument, Object, StringFormat};
 use sha2::{Digest, Sha256};
 use spki::AlgorithmIdentifierOwned;
 use x509_cert::Certificate;
+use x509_cert::builder::Builder;
 
 use crate::adapters::pdf::cms_signer::Pkcs11RsaCmsSigner;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
@@ -131,6 +134,28 @@ fn patch_pdf_contents_der(buf: &mut Vec<u8>, cms_der: &[u8]) -> Result<(), SignB
     Ok(())
 }
 
+/// Expone el motivo real del fallo (la crate `cms` lo ocultaba en `add_signer_info`).
+/// El texto conserva el error original para soporte; el encabezado orienta al usuario.
+fn map_signer_info_build_error(e: x509_cert::builder::Error) -> String {
+    match e {
+        x509_cert::builder::Error::Signature(inner) => format!(
+            "Error de firma con el token (PKCS#11 / RSA): {inner} · Comprueba PIN, sesión del lector y que el certificado sea RSA con SHA-256 RSA PKCS#1."
+        ),
+        x509_cert::builder::Error::Asn1(inner) => format!(
+            "Error DER al construir el CMS (SignerInfo): {inner} · Suele ser atributos firmados o codificación de la firma; conserva este texto para soporte."
+        ),
+        x509_cert::builder::Error::PublicKey(inner) => format!(
+            "Error de clave pública del certificado (SPKI): {inner}"
+        ),
+        other => other.to_string(),
+    }
+}
+
+/// Equivalente a `SignedDataBuilder::calculate_version` para un único `SignerInfo` con `issuerAndSerialNumber` y certificado X.509.
+fn signed_data_version_nexosign_bes() -> CmsVersion {
+    CmsVersion::V1
+}
+
 fn build_cms_signed_data(
     signer: &Pkcs11RsaCmsSigner,
     cert_der: &[u8],
@@ -159,17 +184,39 @@ fn build_cms_signed_data(
         .add_signed_attribute(create_signing_time_attribute().map_err(|e| SignBatchError::Pades(format!("signingTime: {e}")))?)
         .map_err(|e| SignBatchError::Pades(format!("signed attr: {e}")))?;
 
-    let mut sd = SignedDataBuilder::new(&encap);
-    sd.add_digest_algorithm(digest_algorithm.clone())
-        .map_err(|e| SignBatchError::Pades(format!("digest alg: {e}")))?;
-    sd.add_certificate(CertificateChoices::Certificate(cert.clone()))
-        .map_err(|e| SignBatchError::Pades(format!("cert: {e}")))?;
-    sd.add_signer_info::<Pkcs11RsaCmsSigner, rsa::pkcs1v15::Signature>(signer_info_builder)
-        .map_err(|e| SignBatchError::Pades(format!("CMS SignerInfo: {e}")))?;
+    let signer_info = signer_info_builder
+        .build::<rsa::pkcs1v15::Signature>()
+        .map_err(|e| SignBatchError::Pades(map_signer_info_build_error(e)))?;
 
-    let ci = sd.build().map_err(|e| SignBatchError::Pades(format!("SignedData: {e}")))?;
+    let digest_algorithms = DigestAlgorithmIdentifiers::try_from(vec![digest_algorithm.clone()])
+        .map_err(|e| SignBatchError::Pades(format!("digestAlgorithms CMS: {e}")))?;
+    let certificate_set =
+        CertificateSet::try_from(vec![CertificateChoices::Certificate(cert.clone())])
+            .map_err(|e| SignBatchError::Pades(format!("CertificateSet CMS: {e}")))?;
+    let signer_infos =
+        SignerInfos::try_from(vec![signer_info]).map_err(|e| SignBatchError::Pades(format!("SignerInfos CMS: {e}")))?;
+
+    let signed_data = SignedData {
+        version: signed_data_version_nexosign_bes(),
+        digest_algorithms,
+        encap_content_info: encap,
+        certificates: Some(certificate_set),
+        crls: None,
+        signer_infos,
+    };
+
+    let signed_data_der = signed_data
+        .to_der()
+        .map_err(|e| SignBatchError::Pades(format!("SignedData DER: {e}")))?;
+    let content = AnyRef::try_from(signed_data_der.as_slice())
+        .map_err(|e| SignBatchError::Pades(format!("CMS ContentInfo (AnyRef): {e}")))?;
+
+    let ci = ContentInfo {
+        content_type: ID_SIGNED_DATA,
+        content: Any::from(content),
+    };
     ci.to_der()
-        .map_err(|e| SignBatchError::Pades(format!("CMS DER: {e}")))
+        .map_err(|e| SignBatchError::Pades(format!("ContentInfo DER: {e}")))
 }
 
 fn object_to_f64(obj: &Object) -> Result<f64, SignBatchError> {
