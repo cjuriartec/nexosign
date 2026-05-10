@@ -467,7 +467,7 @@
 				</div>
 				<div class="px-2 pt-1 pb-2 text-justify">
 					{#each previewLines as line}
-						<p class="text-[9px] leading-tight text-foreground break-words">{line}</p>
+						<p class="text-[9px] leading-tight text-foreground wrap-break-word">{line}</p>
 					{/each}
 				</div>
 				{#if !previewCert}
