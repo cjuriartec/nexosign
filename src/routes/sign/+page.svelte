@@ -30,6 +30,7 @@
 	import EyeOffIcon from "@lucide/svelte/icons/eye-off";
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import CircleCheckIcon from "@lucide/svelte/icons/circle-check";
+	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import FileStackIcon from "@lucide/svelte/icons/files";
 	import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
@@ -49,7 +50,10 @@
 		{ step: 2, title: "Ubicación" },
 		{ step: 3, title: "Certificado" },
 		{ step: 4, title: "Confirmar" },
+		{ step: 5, title: "Resultado" },
 	] as const;
+
+	const TOTAL_STEPS = 5;
 
 	/** Rejilla 3×5: 3 columnas (ancho) × 5 filas (alto); col 0 izquierda, fila 0 cabecera del PDF. */
 	const SIG_GRID_COLS = 3;
@@ -93,10 +97,8 @@
 	} | null>(null);
 
 	let logViewportEl = $state<HTMLElement | null>(null);
-
-	const showProgressPanel = $derived(
-		activeJobId !== null || logLines.length > 0 || progressPct > 0,
-	);
+	/** Evita reenviar al paso 5 si el usuario vuelve atrás desde Resultado. */
+	let didAutoAdvanceToResult = $state(false);
 
 	const progressSubtitle = $derived.by(() => {
 		if (!progressSnapshot) {
@@ -109,14 +111,6 @@
 
 	const executionFinished = $derived(activeJobId !== null && progressPct >= 100);
 
-	const wizardBarPct = $derived(Math.round((wizardStep / 4) * 100));
-
-	const selectedCert = $derived(certs.find((c) => c.id_hex === certId) ?? null);
-
-	function pushLog(line: string) {
-		logLines = [...logLines, line].slice(-120);
-	}
-
 	function logLineTone(line: string): "muted" | "ok" | "err" {
 		const lower = line.toLowerCase();
 		if (
@@ -124,8 +118,7 @@
 			/\bfallo\b/.test(lower) ||
 			/\bfalló\b/.test(lower) ||
 			/\bincorrecto\b/.test(lower) ||
-			line.includes(" · ") &&
-				line.split(" · ").length >= 3
+			(line.includes(" · ") && line.split(" · ").length >= 3)
 		) {
 			return "err";
 		}
@@ -133,6 +126,39 @@
 			return "ok";
 		}
 		return "muted";
+	}
+
+	const jobLogHasErrors = $derived(logLines.some((l) => logLineTone(l) === "err"));
+
+	const inlineSigningActive = $derived(
+		activeJobId !== null && wizardStep === 4 && !executionFinished,
+	);
+
+	const wizardBarPct = $derived(Math.round((wizardStep / TOTAL_STEPS) * 100));
+
+	const selectedCert = $derived(certs.find((c) => c.id_hex === certId) ?? null);
+
+	function isStepNavDisabled(stepNum: number): boolean {
+		if (stepNum === wizardStep) return true;
+		if (stepNum < wizardStep) return false;
+		if (stepNum === 5 && executionFinished) return false;
+		return true;
+	}
+
+	function startNewSigningRound() {
+		wizardStep = 1;
+		activeJobId = null;
+		activeJobRef.current = null;
+		progressPct = 0;
+		progressSnapshot = null;
+		logLines = [];
+		pin = "";
+		pinError = null;
+		didAutoAdvanceToResult = false;
+	}
+
+	function pushLog(line: string) {
+		logLines = [...logLines, line].slice(-120);
 	}
 
 	$effect(() => {
@@ -326,7 +352,9 @@
 	}
 
 	function jumpToStep(step: number) {
-		if (step < 1 || step >= wizardStep) return;
+		if (step < 1 || step > TOTAL_STEPS) return;
+		if (step === wizardStep) return;
+		if (step > wizardStep && !(step === 5 && executionFinished)) return;
 		wizardStep = step;
 	}
 
@@ -371,6 +399,7 @@
 		logLines = [];
 		progressPct = 0;
 		progressSnapshot = null;
+		didAutoAdvanceToResult = false;
 		activeJobId = null;
 		activeJobRef.current = null;
 		try {
@@ -484,6 +513,14 @@
 	$effect(() => {
 		activeJobRef.current = activeJobId;
 	});
+
+	/** Al terminar el lote, pasar automáticamente al paso Resultado (una vez por trabajo). */
+	$effect(() => {
+		if (executionFinished && wizardStep === 4 && activeJobId && !didAutoAdvanceToResult) {
+			didAutoAdvanceToResult = true;
+			wizardStep = 5;
+		}
+	});
 </script>
 
 <svelte:head>
@@ -502,14 +539,14 @@
 	</div>
 
 	<nav class="space-y-2" aria-label="Pasos del asistente de firma">
-		<div class="grid grid-cols-4 gap-1 sm:gap-1.5">
+		<div class="grid grid-cols-5 gap-0.5 sm:gap-1">
 			{#each SIGN_STEPS as s}
 				{@const done = wizardStep > s.step}
 				{@const active = wizardStep === s.step}
 				<button
 					type="button"
-					disabled={s.step >= wizardStep}
-					title={s.step >= wizardStep ? "" : `Ir al paso ${s.step}: ${s.title}`}
+					disabled={isStepNavDisabled(s.step)}
+					title={`Paso ${s.step}: ${s.title}`}
 					class={cn(
 						"flex flex-col items-center gap-0.5 rounded-md border px-1 py-1.5 text-center transition-colors sm:px-2 sm:py-2",
 						active && "border-primary bg-primary/5 ring-primary/25 ring-2",
@@ -555,8 +592,16 @@
 			</p>
 		{/if}
 		<div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
-			{#if wizardStep === 4}
-				<Button type="button" variant="outline" size="sm" disabled={busy} onclick={() => cancelJob()}>
+			{#if wizardStep === 5}
+				<Button type="button" size="sm" onclick={() => startNewSigningRound()}>Nuevo lote</Button>
+			{:else if wizardStep === 4}
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					disabled={busy || !activeJobId}
+					onclick={() => cancelJob()}
+				>
 					Cancelar cola
 				</Button>
 				<Button
@@ -793,155 +838,233 @@
 	{/if}
 
 	{#if wizardStep === 4}
-		<Card.Root size="sm">
-			<Card.Header class="pb-2">
-				<Card.Title class="text-sm font-medium">Confirmar</Card.Title>
-				<Card.Description class="text-xs">PIN del token (no se guarda).</Card.Description>
+		<Card.Root size="sm" class="w-full overflow-hidden">
+			<Card.Header class="border-border/50 border-b pb-3">
+				<Card.Title class="text-base font-semibold">Confirmar firma</Card.Title>
+				<Card.Description class="text-xs leading-relaxed">
+					Comprueba el resumen e introduce el PIN del token. El PIN no se almacena.
+				</Card.Description>
 			</Card.Header>
-			<Card.Content class="space-y-3 pt-0 text-sm">
-				<dl class="border-border/50 bg-muted/20 divide-border/40 grid max-w-lg divide-y rounded-lg border text-xs">
-					<div class="flex items-start justify-between gap-3 px-3 py-2">
-						<dt class="text-muted-foreground shrink-0">PDF</dt>
-						<dd class="text-foreground font-medium tabular-nums">{paths.length}</dd>
-					</div>
-					<div class="flex items-start justify-between gap-3 px-3 py-2">
-						<dt class="text-muted-foreground shrink-0">Firma</dt>
-						<dd class="min-w-0 text-right leading-tight">
-							{#if selectedCert}
-								<span class="text-foreground font-medium">
-									{getHumanNameFromDn(selectedCert.subject_dn) || "Titular"}
-								</span>
-								{#if extractDniFromDn(selectedCert.subject_dn)}
-									<span class="text-muted-foreground mt-0.5 block text-[11px]">{extractDniFromDn(selectedCert.subject_dn)}</span>
+			<Card.Content class="px-4 pt-4 pb-4 text-sm sm:px-5">
+				<div class="mx-auto w-full max-w-xl space-y-0">
+					<div
+						class="border-border/60 bg-card w-full overflow-hidden rounded-lg border shadow-sm"
+					>
+						<p class="text-muted-foreground border-border/50 bg-muted/30 border-b px-3 py-2 text-[11px] font-medium tracking-wide uppercase">
+							Resumen
+						</p>
+						<dl class="divide-border/40 divide-y text-xs">
+							<div class="flex items-start justify-between gap-4 px-3 py-2.5">
+								<dt class="text-muted-foreground shrink-0">PDF</dt>
+								<dd class="text-foreground font-semibold tabular-nums">{paths.length}</dd>
+							</div>
+							<div class="flex items-start justify-between gap-4 px-3 py-2.5">
+								<dt class="text-muted-foreground shrink-0">Firma</dt>
+								<dd class="min-w-0 flex-1 text-right leading-tight">
+									{#if selectedCert}
+										<span class="text-foreground font-medium">
+											{getHumanNameFromDn(selectedCert.subject_dn) || "Titular"}
+										</span>
+										{#if extractDniFromDn(selectedCert.subject_dn)}
+											<span class="text-muted-foreground mt-0.5 block text-[11px]"
+												>{extractDniFromDn(selectedCert.subject_dn)}</span
+											>
+										{/if}
+									{:else}
+										<span class="text-muted-foreground">—</span>
+									{/if}
+								</dd>
+							</div>
+							<div class="flex items-start justify-between gap-4 px-3 py-2.5">
+								<dt class="text-muted-foreground shrink-0">Sello</dt>
+								<dd class="text-foreground text-right font-medium">
+									Col. {sigGridCol + 1}, fila {sigGridRow + 1}
+								</dd>
+							</div>
+							<div class="flex items-start justify-between gap-4 px-3 py-2.5">
+								<dt class="text-muted-foreground shrink-0">Salida</dt>
+								<dd class="min-w-0 flex-1 text-right leading-tight">
+									{#if outputDirForJob}
+										<span class="font-medium" title={outputDirForJob}>«{pathBasename(outputDirForJob)}»</span>
+									{:else}
+										<code class="bg-muted rounded px-1.5 py-0.5 font-mono text-[11px]">*_firmado.pdf</code>
+									{/if}
+								</dd>
+							</div>
+						</dl>
+						<div class="border-border/50 bg-muted/25 border-t">
+							<div class="px-3 pb-3 pt-3">
+								<Label for="pin-confirm" class="text-xs font-medium">PIN del token</Label>
+								<div class="relative mt-1.5">
+									<Input
+										id="pin-confirm"
+										type={pinVisible ? "text" : "password"}
+										autocomplete="off"
+										bind:value={pin}
+										placeholder="PIN"
+										class={cn(
+											"h-10 w-full pr-10",
+											pinError ? "border-destructive focus-visible:ring-destructive" : "",
+										)}
+										oninput={() => {
+											pinError = null;
+										}}
+										onkeydown={(e) => {
+											if (e.key === "Enter") {
+												e.preventDefault();
+												void submitBatch();
+											}
+										}}
+									/>
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon"
+										class="text-muted-foreground absolute right-0.5 top-1/2 h-9 w-9 -translate-y-1/2"
+										aria-label={pinVisible ? "Ocultar PIN" : "Mostrar PIN"}
+										title={pinVisible ? "Ocultar PIN" : "Mostrar PIN"}
+										onclick={() => {
+											pinVisible = !pinVisible;
+										}}
+									>
+										{#if pinVisible}
+											<EyeOffIcon class="h-4 w-4" />
+										{:else}
+											<EyeIcon class="h-4 w-4" />
+										{/if}
+									</Button>
+								</div>
+								{#if pinError}
+									<p class="mt-2 text-xs font-medium text-destructive">{pinError}</p>
 								{/if}
-							{:else}
-								<span class="text-muted-foreground">—</span>
+							</div>
+						</div>
+					</div>
+
+				{#if inlineSigningActive}
+					<div
+						class="border-primary/25 bg-primary/3 ring-primary/15 mt-4 w-full space-y-3 rounded-lg border p-3 ring-1"
+					>
+						<div class="flex flex-wrap items-center justify-between gap-2">
+							<div class="flex items-center gap-2">
+								<Loader2Icon class="text-primary size-4 animate-spin" aria-hidden="true" />
+								<span class="text-sm font-medium">Firmando el lote…</span>
+								<Badge variant="secondary" class="h-5 text-[10px]">En curso</Badge>
+							</div>
+							{#if activeJobId}
+								<span class="text-muted-foreground font-mono text-[10px]" title={activeJobId}
+									>{activeJobId.slice(0, 8)}…</span
+								>
 							{/if}
-						</dd>
-					</div>
-					<div class="flex items-start justify-between gap-3 px-3 py-2">
-						<dt class="text-muted-foreground shrink-0">Sello</dt>
-						<dd class="text-foreground text-right font-medium">Col. {sigGridCol + 1}, fila {sigGridRow + 1}</dd>
-					</div>
-					<div class="flex items-start justify-between gap-3 px-3 py-2">
-						<dt class="text-muted-foreground shrink-0">Salida</dt>
-						<dd class="min-w-0 text-right leading-tight">
-							{#if outputDirForJob}
-								<span class="font-medium" title={outputDirForJob}>«{pathBasename(outputDirForJob)}»</span>
-							{:else}
-								<code class="bg-muted rounded px-1 py-0.5 font-mono text-[11px]">*_firmado.pdf</code>
+						</div>
+						{#if progressSubtitle}
+							<p class="text-muted-foreground truncate text-xs">{progressSubtitle}</p>
+						{/if}
+						<div class="flex items-end justify-between gap-2">
+							<div class="flex items-baseline gap-1">
+								<span class="text-foreground tabular-nums text-xl font-semibold">{progressPct}</span>
+								<span class="text-muted-foreground text-xs">%</span>
+							</div>
+							{#if progressSnapshot}
+								<span class="text-muted-foreground text-xs tabular-nums"
+									>{progressSnapshot.actual}/{progressSnapshot.total}</span
+								>
 							{/if}
-						</dd>
-					</div>
-				</dl>
-				<div class="grid max-w-md gap-1.5">
-					<Label for="pin-confirm" class="text-xs">PIN</Label>
-					<div class="relative">
-						<Input
-							id="pin-confirm"
-							type={pinVisible ? "text" : "password"}
-							autocomplete="off"
-							bind:value={pin}
-							placeholder="PIN"
-							class={cn(
-								"h-9 pr-10",
-								pinError ? "border-destructive focus-visible:ring-destructive" : "",
-							)}
-							oninput={() => {
-								pinError = null;
-							}}
-							onkeydown={(e) => {
-								if (e.key === "Enter") {
-									e.preventDefault();
-									void submitBatch();
-								}
-							}}
-						/>
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon"
-							class="text-muted-foreground absolute right-0.5 top-1/2 h-8 w-8 -translate-y-1/2"
-							aria-label={pinVisible ? "Ocultar PIN" : "Mostrar PIN"}
-							title={pinVisible ? "Ocultar PIN" : "Mostrar PIN"}
-							onclick={() => {
-								pinVisible = !pinVisible;
-							}}
+						</div>
+						<Progress value={progressPct} max={100} class="h-2 rounded-full" />
+						<ScrollArea.Root
+							bind:viewportRef={logViewportEl}
+							class="bg-background/80 h-28 rounded-md border text-[11px] shadow-inner"
 						>
-							{#if pinVisible}
-								<EyeOffIcon class="h-4 w-4" />
-							{:else}
-								<EyeIcon class="h-4 w-4" />
-							{/if}
-						</Button>
+							<div class="space-y-0 p-2 font-mono leading-relaxed">
+								{#if logLines.length === 0}
+									<p class="text-muted-foreground py-3 text-center text-[11px]">Esperando eventos…</p>
+								{:else}
+									{#each logLines as line, i}
+										{@const tone = logLineTone(line)}
+										<div
+											class={cn(
+												"rounded py-0.5 pl-2",
+												i === logLines.length - 1 ? "bg-primary/8 border-primary/35 border-l-2" : "border-l-2 border-transparent",
+												tone === "err" && "text-destructive",
+												tone === "ok" && "text-emerald-700 dark:text-emerald-400",
+												tone === "muted" && "text-foreground/85",
+											)}
+										>
+											{line}
+										</div>
+									{/each}
+								{/if}
+							</div>
+						</ScrollArea.Root>
 					</div>
-					{#if pinError}
-						<p class="text-xs font-medium text-destructive">{pinError}</p>
-					{/if}
+				{/if}
 				</div>
 			</Card.Content>
 		</Card.Root>
 	{/if}
-	{#if showProgressPanel}
-		<Card.Root
-			class={cn(
-				"border-primary/15 shadow-sm transition-shadow",
-				activeJobId && !executionFinished && "ring-primary/10 ring-2",
-			)}
-			size="sm"
-		>
-			<Card.Header class="border-border/50 gap-2 border-b py-3">
-				<div class="flex flex-wrap items-center justify-between gap-2">
-					<div class="flex flex-wrap items-center gap-2">
-						<Card.Title class="text-sm font-medium">Firma en curso</Card.Title>
-						{#if activeJobId && !executionFinished}
-							<Badge variant="secondary" class="h-5 gap-1 px-1.5 text-[10px] font-normal">
-								<Loader2Icon class="size-3 animate-spin" aria-hidden="true" />
-								En curso
-							</Badge>
-						{:else if executionFinished}
-							<Badge variant="outline" class="h-5 gap-1 border-emerald-500/40 px-1.5 text-[10px] font-normal text-emerald-700 dark:text-emerald-400">
-								<CircleCheckIcon class="size-3" aria-hidden="true" />
-								Listo
-							</Badge>
-						{/if}
+
+	{#if wizardStep === 5}
+		<Card.Root size="sm" class="overflow-hidden">
+			<Card.Header class="pb-3">
+				{#if jobLogHasErrors}
+					<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
+						<div
+							class="flex size-12 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400"
+						>
+							<TriangleAlertIcon class="size-7" aria-hidden="true" />
+						</div>
+						<div class="min-w-0 space-y-1">
+							<Card.Title class="text-base font-semibold">Proceso terminado con incidencias</Card.Title>
+							<Card.Description class="text-xs leading-relaxed">
+								Revisa el registro: algunos archivos pueden haber fallado o mostrar avisos.
+							</Card.Description>
+						</div>
 					</div>
-					{#if activeJobId}
-						<span class="text-muted-foreground font-mono text-[10px]" title={activeJobId}>{activeJobId.slice(0, 8)}…</span>
-					{/if}
-				</div>
-				{#if progressSubtitle}
-					<p class="text-muted-foreground truncate text-xs">{progressSubtitle}</p>
+				{:else}
+					<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+						<div
+							class="flex size-14 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+						>
+							<CircleCheckIcon class="size-8" aria-hidden="true" />
+						</div>
+						<div class="min-w-0 space-y-0.5">
+							<Card.Title class="text-lg font-semibold tracking-tight">Firma completada</Card.Title>
+							<Card.Description class="text-xs">
+								{#if progressSnapshot}
+									{progressSnapshot.total} documento(s) procesado(s).
+								{:else}
+									Lote finalizado correctamente.
+								{/if}
+							</Card.Description>
+						</div>
+					</div>
 				{/if}
-				<div class="flex items-end justify-between gap-3 pt-1">
-					<div class="flex items-baseline gap-1">
-						<span class="text-foreground tabular-nums text-2xl font-semibold">{progressPct}</span>
-						<span class="text-muted-foreground text-xs">%</span>
-					</div>
-					{#if progressSnapshot}
-						<p class="text-muted-foreground text-xs tabular-nums">{progressSnapshot.actual}/{progressSnapshot.total}</p>
-					{/if}
-				</div>
-				<Progress value={progressPct} max={100} class="h-2 rounded-full" />
+				{#if activeJobId}
+					<p class="text-muted-foreground pt-2 font-mono text-[10px]">
+						ID trabajo: <span title={activeJobId}>{activeJobId}</span>
+					</p>
+				{/if}
 			</Card.Header>
-			<Card.Content class="space-y-2 pt-2">
+			<Card.Content class="space-y-2 pt-0">
+				<p class="text-muted-foreground text-[11px] font-medium uppercase tracking-wide">Registro del proceso</p>
 				<ScrollArea.Root
 					bind:viewportRef={logViewportEl}
-					class="bg-muted/20 dark:bg-muted/10 h-36 rounded-md border text-[11px]"
+					class="bg-muted/25 dark:bg-muted/15 h-52 rounded-lg border shadow-inner sm:h-60"
 				>
-					<div class="space-y-0 p-2 font-mono leading-relaxed">
+					<div class="space-y-0 p-3 font-mono text-[11px] leading-relaxed">
 						{#if logLines.length === 0}
-							<p class="text-muted-foreground px-1 py-4 text-center text-[11px]">Esperando eventos…</p>
+							<p class="text-muted-foreground py-8 text-center text-xs">No hay líneas de registro.</p>
 						{:else}
 							{#each logLines as line, i}
 								{@const tone = logLineTone(line)}
 								<div
 									class={cn(
-										"rounded py-1 pl-2 transition-colors",
-										i === logLines.length - 1 ? "bg-primary/6 border-primary/40 border-l-2" : "border-l-2 border-transparent",
+										"border-border/30 rounded-md border-l-2 py-1.5 pl-2 pr-1",
+										i === logLines.length - 1 ? "border-primary bg-primary/6" : "border-transparent",
 										tone === "err" && "text-destructive",
 										tone === "ok" && "text-emerald-700 dark:text-emerald-400",
-										tone === "muted" && "text-foreground/85",
+										tone === "muted" && "text-foreground/90",
 									)}
 								>
 									{line}
