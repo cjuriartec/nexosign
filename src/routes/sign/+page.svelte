@@ -82,6 +82,9 @@
 	/** Si viene de `POST /api/v1/batch/sign/intent`, se envía al confirmar para cerrar la intención. */
 	let intentRequestId = $state<string | null>(null);
 
+	/** Invalida respuestas async viejas de `applyPendingIntent` (otro intent, «Nuevo lote», etc.). */
+	let intentApplyGeneration = 0;
+
 	const activeJobRef: { current: string | null } = { current: null };
 	/** Tras pulsar "Firmar", no se vuelve a pasos anteriores hasta "Nuevo lote". */
 	let stepHistoryLocked = $state(false);
@@ -145,6 +148,7 @@
 	}
 
 	function startNewSigningRound() {
+		intentApplyGeneration++;
 		wizardStep = 1;
 		clearActiveBatchJobOnly();
 		activeJobRef.current = null;
@@ -155,6 +159,7 @@
 		pinError = null;
 		submitInFlight = false;
 		stepHistoryLocked = false;
+		clearPaths();
 	}
 
 	function pushLog(line: string) {
@@ -296,12 +301,19 @@
 	}
 
 	async function applyPendingIntent(intentParam: string) {
+		const gen = ++intentApplyGeneration;
+		// Quitar PDF/carpeta previos de inmediato; el lote debe ser solo el del intent.
+		clearPaths();
+
 		const payload = await getBatchSignIntent(intentParam);
+		if (gen !== intentApplyGeneration) return;
+
 		if (!payload) {
 			toast.error("La solicitud no existe o caducó (~5 min). Abre el enlace desde la integración de nuevo.");
 			return;
 		}
 		paths = await partitionPaths([...payload.inputs]);
+		if (gen !== intentApplyGeneration) return;
 		sourceMode = "files";
 		folderPath = null;
 		outputDirForJob = payload.outputDir ?? null;
@@ -315,6 +327,7 @@
 		});
 		setIntentActiveRequestId(intentParam);
 		await refreshCerts();
+		if (gen !== intentApplyGeneration) return;
 		wizardStep = 1;
 		toast.message("Cargado.");
 		if (typeof window !== "undefined") {
