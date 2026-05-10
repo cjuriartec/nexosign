@@ -23,6 +23,8 @@ pub struct SignBatchInput {
     pub signature_grid: Option<SignatureGridPlacement>,
     /// Mismo PIN que `POST /batch/sign`; el worker repite login en su hilo para PKCS#11.
     pub pin: Option<String>,
+    /// PNG del sello (render del diseño en Certificados).
+    pub seal_png: Option<Vec<u8>>,
 }
 
 fn output_path_for(input: &Path, output_dir: Option<&Path>) -> PathBuf {
@@ -53,16 +55,10 @@ pub fn process_batch<P: ProgressNotifier>(
     if let Some(ref p) = input.pin {
         let pt = p.trim();
         if !pt.is_empty() {
-            eprintln!("[NexoSign DIAG] Worker: PIN presente ({} chars), cert_id_hex={}", pt.len(), &input.cert_id_hex);
-            eprintln!("[NexoSign DIAG] Worker: reset_pkcs11_driver_state...");
             let _ = token.reset_pkcs11_driver_state();
-            eprintln!("[NexoSign DIAG] Worker: login_for_certificate...");
             match token.login_for_certificate(pt.to_string(), &input.cert_id_hex) {
-                Ok(()) => {
-                    eprintln!("[NexoSign DIAG] Worker: login_for_certificate OK ✓");
-                }
+                Ok(()) => {}
                 Err(e) => {
-                    eprintln!("[NexoSign DIAG] Worker: login_for_certificate FAILED: {e}");
                     progress.notify(ProgressEvent {
                         job_id: input.job_id.clone(),
                         current: 1,
@@ -77,11 +73,7 @@ pub fn process_batch<P: ProgressNotifier>(
                     return Ok(());
                 }
             }
-        } else {
-            eprintln!("[NexoSign DIAG] Worker: PIN presente pero vacío tras trim");
         }
-    } else {
-        eprintln!("[NexoSign DIAG] Worker: input.pin es None — NO SE HARÁ LOGIN");
     }
 
     for (idx, path) in input.inputs.iter().enumerate() {
@@ -112,6 +104,7 @@ pub fn process_batch<P: ProgressNotifier>(
             path,
             &output_path_for(path, input.output_dir.as_deref()),
             placement,
+            input.seal_png.as_deref(),
         );
 
         match res {

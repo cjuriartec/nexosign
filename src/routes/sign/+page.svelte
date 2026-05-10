@@ -17,12 +17,14 @@
 	import { subscribeProgress, type ProgressPayload } from "$lib/events/progress";
 	import * as pkcs11 from "$lib/tauri/pkcs11";
 	import type { SigningCertSummary } from "$lib/tauri/pkcs11";
-	import { validateBatchPdfPaths } from "$lib/tauri/batch-validation";
+	import { partitionBatchPdfPaths } from "$lib/tauri/batch-validation";
+	import { enumeratePdfsUnderFolder } from "$lib/tauri/batch";
 	import { getBatchSignIntent } from "$lib/tauri/batch-sign-intent";
 	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
 	import { cancelBatchJob, getLocalApiBaseUrl } from "$lib/tauri/settings";
 	import { isTauriRuntime } from "$lib/tauri/env";
 	import { getHumanNameFromDn, extractDniFromDn } from "$lib/signature-appearance";
+	import { renderSignatureSealPngBase64 } from "$lib/signature-appearance-render";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import FileStackIcon from "@lucide/svelte/icons/files";
 	import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
@@ -33,10 +35,9 @@
 
 	const SIGN_STEPS = [
 		{ step: 1, title: "Archivos", hint: "PDF sueltos o carpeta entera" },
-		{ step: 2, title: "Certificado", hint: "Tu identidad para firmar" },
-		{ step: 3, title: "PIN", hint: "Del DNIe o tarjeta (no se guarda)" },
-		{ step: 4, title: "Ubicación", hint: "Casilla en la 1.ª página (pie discreto)" },
-		{ step: 5, title: "Confirmar", hint: "Revisa y pulsa Firmar" },
+		{ step: 2, title: "Ubicación", hint: "Casilla en la 1.ª página (pie discreto)" },
+		{ step: 3, title: "Certificado", hint: "Tu identidad para firmar" },
+		{ step: 4, title: "Confirmar", hint: "PIN y firma (no se guarda el PIN)" },
 	] as const;
 
 	/** Rejilla 5×7 (vertical, tipo hoja): col 0 izquierda, fila 0 arriba (como se lee el PDF). */
@@ -57,7 +58,7 @@
 	let apiBase = $state("");
 	let busy = $state(false);
 
-	/** 1 archivos · 2 cert · 3 PIN · 4 ubicación · 5 confirmar */
+	/** 1 archivos · 2 ubicación · 3 certificado · 4 confirmar + PIN */
 	let wizardStep = $state(1);
 
 	let sigGridCol = $state(2);
@@ -77,21 +78,26 @@
 		activeJobId !== null || logLines.length > 0 || progressPct > 0,
 	);
 
-	const wizardBarPct = $derived(Math.round((wizardStep / 5) * 100));
+	const wizardBarPct = $derived(Math.round((wizardStep / 4) * 100));
 
 	function pushLog(line: string) {
 		logLines = [...logLines, line].slice(-120);
 	}
 
-	async function warnIfPathsInvalid(list: string[]): Promise<boolean> {
-		if (!isTauriRuntime() || list.length === 0) return true;
-		try {
-			await validateBatchPdfPaths(list);
-			return true;
-		} catch (e) {
-			toast.error(String(e));
-			return false;
+	async function partitionPaths(list: string[]): Promise<string[]> {
+		if (!isTauriRuntime()) return list;
+		if (list.length === 0) return [];
+		const { accepted, rejected } = await partitionBatchPdfPaths(list);
+		if (rejected.length > 0) {
+			const desc = rejected.map((r) => `${r.path}: ${r.reason}`).join("\n");
+			toast.error(
+				rejected.length === 1
+					? rejected[0].reason
+					: `${rejected.length} archivo(s) no se incluyeron (revisa tamaño ≤ 50 MiB y extensión .pdf)`,
+				{ description: desc },
+			);
 		}
+		return accepted;
 	}
 
 	async function refreshCerts(): Promise<number> {
@@ -166,9 +172,8 @@
 		folderPath = null;
 		outputDirForJob = null;
 		const unique = [...new Set(list)];
-		paths = unique;
+		paths = await partitionPaths(unique);
 		intentRequestId = null;
-		await warnIfPathsInvalid(unique);
 	}
 
 	async function pickFolder() {
@@ -181,14 +186,15 @@
 		busy = true;
 		try {
 			const pdfs = await enumeratePdfsUnderFolder(sel);
-			paths = pdfs;
+			paths = await partitionPaths(pdfs);
 			sourceMode = "folder";
 			folderPath = sel;
 			outputDirForJob = await computeFirmadosDir(sel);
 			intentRequestId = null;
-			await warnIfPathsInvalid(pdfs);
 			if (pdfs.length === 0) {
 				toast.message("No hay PDFs en esa carpeta.");
+			} else if (paths.length === 0) {
+				toast.message("Ningún PDF válido en esa carpeta.");
 			}
 		} catch (e) {
 			toast.error(String(e));
@@ -203,14 +209,13 @@
 			toast.error("La solicitud no existe o caducó (30 min). Abre el enlace desde la integración de nuevo.");
 			return;
 		}
-		paths = [...payload.inputs];
+		paths = await partitionPaths([...payload.inputs]);
 		sourceMode = "files";
 		folderPath = null;
 		outputDirForJob = payload.outputDir ?? null;
 		intentRequestId = intentParam;
 		await refreshCerts();
 		wizardStep = 1;
-		void warnIfPathsInvalid([...payload.inputs]);
 		toast.message("Lote recibido desde la integración: revisa los pasos y confirma aquí.");
 		if (typeof window !== "undefined") {
 			const u = new URL(window.location.href);
@@ -234,51 +239,21 @@
 
 	async function step1Continue() {
 		if (paths.length === 0) return;
-		if (!(await warnIfPathsInvalid(paths))) return;
-		await refreshCerts();
 		wizardStep = 2;
 	}
 
-	async function step2Continue() {
+	async function step2PlacementContinue() {
+		wizardStep = 3;
+		void refreshCerts();
+	}
+
+	async function step3CertContinue() {
 		if (!certId.trim()) {
 			toast.error("Selecciona un certificado.");
 			return;
 		}
-		wizardStep = 3;
-	}
-
-	async function pinStepContinue() {
-		if (!pin.trim()) return;
-		busy = true;
 		pinError = null;
-		try {
-			if (isTauriRuntime()) {
-				await pkcs11.pkcs11VerifyPin(pin.trim(), certId.trim());
-			}
-			wizardStep = 4;
-		} catch (e) {
-			const msg = String(e);
-			if (msg.includes("PIN is incorrect") || msg.includes("CKR_PIN_INCORRECT")) {
-				pinError = "El PIN ingresado es incorrecto. Inténtalo de nuevo.";
-			} else if (msg.includes("LOCKED") || msg.includes("CKR_PIN_LOCKED")) {
-				pinError = "El DNI/Token ha sido bloqueado por múltiples intentos fallidos.";
-			} else if (
-				msg.includes("already logged") ||
-				msg.includes("UserAlreadyLoggedIn") ||
-				msg.includes("USER_ALREADY_LOGGED_IN")
-			) {
-				pinError = null;
-				wizardStep = 4;
-			} else {
-				pinError = `Error al verificar: ${msg}`;
-			}
-		} finally {
-			busy = false;
-		}
-	}
-
-	function placementStepContinue() {
-		wizardStep = 5;
+		wizardStep = 4;
 	}
 
 	function goBack() {
@@ -301,12 +276,13 @@
 			return;
 		}
 		if (!pin.trim()) {
-			toast.error("Indica el PIN del token en el paso 3.");
-			wizardStep = 3;
+			toast.error("Indica el PIN del token para firmar.");
+			pinError = "Introduce el PIN del token.";
 			return;
 		}
 
 		busy = true;
+		pinError = null;
 		logLines = [];
 		progressPct = 0;
 		activeJobId = null;
@@ -318,6 +294,13 @@
 				pin: pin.trim(),
 				signature_grid: { col: sigGridCol, row: sigGridRow },
 			};
+			const selectedCert = certs.find((c) => c.id_hex === certId.trim()) ?? null;
+			try {
+				const seal = await renderSignatureSealPngBase64(selectedCert);
+				if (seal) body.signature_seal_png_base64 = seal;
+			} catch {
+				/* la API usará la apariencia vectorial de respaldo */
+			}
 			if (outputDirForJob) {
 				body.output_dir = outputDirForJob;
 			}
@@ -337,9 +320,9 @@
 						"Uno o más PDF superan 50 MiB. Reduce el tamaño, divide el documento o quítalo del lote.",
 					);
 				} else if (e.status === 401) {
-					toast.error(
-						"No se pudo desbloquear el token con ese PIN o la sesión del lector está bloqueada. Vuelve al paso del PIN, o en Certificados usa «Volver a detectar la tarjeta».",
-					);
+					pinError =
+						"No se pudo desbloquear el token con ese PIN o la sesión del lector está bloqueada.";
+					toast.error(pinError);
 				} else if (e.status === 403 && String(detail).toLowerCase().includes("origin")) {
 					toast.error(
 						"Origen no autorizado para la API local. Añade este origen en Ajustes → Orígenes permitidos.",
@@ -420,7 +403,7 @@
 		<div>
 			<h1 class="text-3xl font-semibold tracking-tight">Firmar</h1>
 			<p class="text-muted-foreground mt-1 text-sm">
-				Paso <span class="text-foreground font-medium">{wizardStep}</span> de 5 · sigue el orden o vuelve atrás con el botón o tocando un paso ya hecho.
+				Paso <span class="text-foreground font-medium">{wizardStep}</span> de 4 · sigue el orden o vuelve atrás con el botón o tocando un paso ya hecho.
 			</p>
 		</div>
 		{#if wizardStep > 1}
@@ -432,7 +415,7 @@
 	</div>
 
 	<nav class="space-y-3" aria-label="Pasos del asistente de firma">
-		<div class="grid grid-cols-5 gap-1.5 sm:gap-3">
+		<div class="grid grid-cols-4 gap-1.5 sm:gap-2">
 			{#each SIGN_STEPS as s}
 				{@const done = wizardStep > s.step}
 				{@const active = wizardStep === s.step}
@@ -566,6 +549,60 @@
 		<Card.Root>
 			<Card.Header>
 				<Card.Title class="text-base">{SIGN_STEPS[1].title}</Card.Title>
+				<Card.Description class="text-xs">
+					{SIGN_STEPS[1].hint}. La firma usa tu certificado y el sello de Certificados; aquí solo eliges la casilla visible en la primera página.
+				</Card.Description>
+			</Card.Header>
+			<Card.Content class="space-y-4">
+				<p class="text-muted-foreground text-xs leading-snug">
+					Hoja en vertical: 5 columnas × 7 filas. Fila superior = cabecera del PDF. Cada PDF del lote usa la misma casilla.
+				</p>
+				<div class="mx-auto w-fit overflow-hidden rounded-lg border border-border bg-muted/25 shadow-sm">
+					{#each [0, 1, 2, 3, 4, 5, 6] as row}
+						<div class="flex border-b border-border/70 last:border-b-0">
+							{#each [0, 1, 2, 3, 4] as col}
+								<button
+									type="button"
+									class={cn(
+										"flex h-9 w-9 shrink-0 items-center justify-center border-r border-border/70 text-[10px] font-medium transition-colors last:border-r-0 sm:h-10 sm:w-10",
+										sigGridCol === col && sigGridRow === row
+											? "bg-primary/20 text-foreground ring-2 ring-primary/35 ring-inset"
+											: "bg-background/90 text-muted-foreground hover:bg-muted/80",
+									)}
+									aria-label="Casilla columna {col + 1}, fila {row + 1}"
+									aria-pressed={sigGridCol === col && sigGridRow === row}
+									onclick={() => {
+										sigGridCol = col;
+										sigGridRow = row;
+									}}
+								>
+									{row * SIG_GRID_COLS + col + 1}
+								</button>
+							{/each}
+						</div>
+					{/each}
+				</div>
+				<p class="text-muted-foreground text-xs">
+					Selección: columna {sigGridCol + 1} · fila {sigGridRow + 1}
+				</p>
+				<Button
+					type="button"
+					onclick={() => step2PlacementContinue()}
+					aria-label={`Siguiente paso: ${SIGN_STEPS[2].title}`}
+				>
+					Continuar
+					<span class="text-primary-foreground/85 ml-1 hidden font-normal sm:inline">
+						→ {SIGN_STEPS[2].title}
+					</span>
+				</Button>
+			</Card.Content>
+		</Card.Root>
+	{/if}
+
+	{#if wizardStep === 3}
+		<Card.Root>
+			<Card.Header>
+				<Card.Title class="text-base">{SIGN_STEPS[2].title}</Card.Title>
 				<Card.Description class="text-xs leading-relaxed">
 					Selecciona el certificado con el que quieres firmar (suele ser el del DNIe). Si acabas de enchufar el
 					lector, espera unos segundos y pulsa <span class="text-foreground font-medium">Actualizar lista</span>.
@@ -604,7 +641,7 @@
 					</div>
 				{/if}
 				<div class="flex flex-col gap-3">
-					<div class="flex flex-wrap gap-2 items-center">
+					<div class="flex flex-wrap items-center gap-2">
 						<Button
 							type="button"
 							variant="outline"
@@ -619,12 +656,12 @@
 						<Button
 							type="button"
 							disabled={busy || !certId.trim() || certs.length === 0}
-							onclick={() => step2Continue()}
-							aria-label={`Siguiente paso: ${SIGN_STEPS[2].title}`}
+							onclick={() => step3CertContinue()}
+							aria-label={`Siguiente paso: ${SIGN_STEPS[3].title}`}
 						>
 							Continuar
 							<span class="text-primary-foreground/85 ml-1 hidden font-normal sm:inline">
-								→ {SIGN_STEPS[2].title}
+								→ {SIGN_STEPS[3].title}
 							</span>
 						</Button>
 					</div>
@@ -636,7 +673,7 @@
 							class="cursor-pointer list-none px-2 py-1.5 text-[11px] leading-snug outline-none marker:content-none [&::-webkit-details-marker]:hidden"
 						>
 							<span class="opacity-75 group-open:opacity-90">
-								Solo si el lector falla o fallaste el PIN varias veces…
+								Solo si el lector falla o hubo problemas con el PIN…
 							</span>
 						</summary>
 						<div class="space-y-2 border-t border-border/40 px-2 pb-2 pt-2 text-[11px] leading-relaxed">
@@ -661,109 +698,13 @@
 		</Card.Root>
 	{/if}
 
-	{#if wizardStep === 3}
-		<Card.Root>
-			<Card.Header>
-				<Card.Title class="text-base">{SIGN_STEPS[2].title}</Card.Title>
-				<Card.Description class="text-xs">{SIGN_STEPS[2].hint}. No se guarda en disco.</Card.Description>
-			</Card.Header>
-			<Card.Content class="space-y-4">
-				<div class="grid max-w-md gap-2">
-					<Label for="pin-wizard">PIN</Label>
-					<Input
-						id="pin-wizard"
-						type="password"
-						autocomplete="off"
-						bind:value={pin}
-						placeholder="PIN"
-						class={pinError ? "border-destructive focus-visible:ring-destructive" : ""}
-						oninput={() => { pinError = null; }}
-						onkeydown={(e) => {
-							if (e.key === "Enter") {
-								e.preventDefault();
-								pinStepContinue();
-							}
-						}}
-					/>
-					{#if pinError}
-						<p class="text-sm font-medium text-destructive">{pinError}</p>
-					{/if}
-				</div>
-				<Button
-					type="button"
-					disabled={busy || !pin.trim()}
-					onclick={() => pinStepContinue()}
-					aria-label={`Siguiente paso: ${SIGN_STEPS[3].title}`}
-				>
-					Continuar
-					<span class="text-primary-foreground/85 ml-1 hidden font-normal sm:inline">
-						→ {SIGN_STEPS[3].title}
-					</span>
-				</Button>
-			</Card.Content>
-		</Card.Root>
-	{/if}
-
 	{#if wizardStep === 4}
 		<Card.Root>
 			<Card.Header>
 				<Card.Title class="text-base">{SIGN_STEPS[3].title}</Card.Title>
 				<Card.Description class="text-xs">
-					{SIGN_STEPS[3].hint}. La firma criptográfica usa tu certificado y el diseño del sello configurado; aquí solo eliges dónde colocar el recuadro visible (pequeño) en la primera página.
+					Introduce el PIN del token y pulsa <span class="text-foreground font-medium">Firmar</span> (o Enter). El PIN no se guarda.
 				</Card.Description>
-			</Card.Header>
-			<Card.Content class="space-y-4">
-				<p class="text-muted-foreground text-xs leading-snug">
-					Como una hoja en vertical: 5 columnas × 7 filas. Fila superior = cabecera del PDF · columnas de
-					izquierda a derecha. Cada PDF del lote usa la misma casilla.
-				</p>
-				<div class="mx-auto w-full max-w-xs space-y-1 sm:max-w-sm">
-					{#each [0, 1, 2, 3, 4, 5, 6] as row}
-						<div class="grid grid-cols-5 gap-1">
-							{#each [0, 1, 2, 3, 4] as col}
-								<button
-									type="button"
-									class={cn(
-										"aspect-square max-h-10 rounded-md border text-[10px] font-medium transition-colors sm:max-h-11",
-										sigGridCol === col && sigGridRow === row
-											? "border-primary bg-primary/15 text-foreground ring-primary/30 ring-2"
-											: "border-border bg-muted/30 text-muted-foreground hover:bg-muted/60",
-									)}
-									aria-label="Casilla columna {col + 1}, fila {row + 1}"
-									aria-pressed={sigGridCol === col && sigGridRow === row}
-									onclick={() => {
-										sigGridCol = col;
-										sigGridRow = row;
-									}}
-								>
-									{row * SIG_GRID_COLS + col + 1}
-								</button>
-							{/each}
-						</div>
-					{/each}
-				</div>
-				<p class="text-muted-foreground text-xs">
-					Selección: columna {sigGridCol + 1} · fila {sigGridRow + 1}
-				</p>
-				<Button
-					type="button"
-					onclick={() => placementStepContinue()}
-					aria-label={`Siguiente paso: ${SIGN_STEPS[4].title}`}
-				>
-					Continuar
-					<span class="text-primary-foreground/85 ml-1 hidden font-normal sm:inline">
-						→ {SIGN_STEPS[4].title}
-					</span>
-				</Button>
-			</Card.Content>
-		</Card.Root>
-	{/if}
-
-	{#if wizardStep === 5}
-		<Card.Root>
-			<Card.Header>
-				<Card.Title class="text-base">{SIGN_STEPS[4].title}</Card.Title>
-				<Card.Description class="text-xs">{SIGN_STEPS[4].hint}</Card.Description>
 			</Card.Header>
 			<Card.Content class="space-y-4 text-sm">
 				<div class="text-muted-foreground space-y-1 text-xs">
@@ -777,7 +718,7 @@
 					<p>
 						Primera página: columna <span class="text-foreground font-medium">{sigGridCol + 1}</span>,
 						fila <span class="text-foreground font-medium">{sigGridRow + 1}</span>
-						<span class="text-muted-foreground"> (rejilla 5×7 · tipo hoja vertical)</span>
+						<span class="text-muted-foreground"> (rejilla 5×7)</span>
 					</p>
 					{#if outputDirForJob}
 						<p class="truncate font-mono" title={outputDirForJob}>{outputDirForJob}</p>
@@ -785,16 +726,42 @@
 						<p><code class="bg-muted rounded px-1">*_firmado.pdf</code> junto a cada PDF</p>
 					{/if}
 				</div>
+				<div class="grid max-w-md gap-2">
+					<Label for="pin-confirm">PIN del token</Label>
+					<Input
+						id="pin-confirm"
+						type="password"
+						autocomplete="off"
+						bind:value={pin}
+						placeholder="PIN"
+						class={pinError ? "border-destructive focus-visible:ring-destructive" : ""}
+						oninput={() => {
+							pinError = null;
+						}}
+						onkeydown={(e) => {
+							if (e.key === "Enter") {
+								e.preventDefault();
+								void submitBatch();
+							}
+						}}
+					/>
+					{#if pinError}
+						<p class="text-sm font-medium text-destructive">{pinError}</p>
+					{/if}
+				</div>
 				<div class="flex flex-wrap gap-2">
-					<Button type="button" disabled={busy || paths.length === 0 || !certId} onclick={() => submitBatch()}>
+					<Button
+						type="button"
+						disabled={busy || paths.length === 0 || !certId.trim() || !pin.trim()}
+						onclick={() => submitBatch()}
+					>
 						Firmar
 					</Button>
-					<Button type="button" variant="outline" disabled={busy} onclick={() => cancelJob()}>Cancelar</Button>
+					<Button type="button" variant="outline" disabled={busy} onclick={() => cancelJob()}>Cancelar cola</Button>
 				</div>
 			</Card.Content>
 		</Card.Root>
 	{/if}
-
 	{#if showProgressPanel}
 		<Card.Root>
 			<Card.Header class="pb-2">

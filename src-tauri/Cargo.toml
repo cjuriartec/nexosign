@@ -49,4 +49,7 @@ tokio-util = "0.7.18"
 tauri-plugin-deep-link = "2.4.9"
 tauri-plugin-dialog = "2.7.1"
 chrono = { version = "0.4.44", features = ["clock"] }
+base64 = "0.22"
+flate2 = "1.1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 

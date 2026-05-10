@@ -314,6 +314,20 @@ pub fn validate_batch_pdf_paths(paths: Vec<String>) -> Result<(), String> {
     crate::infrastructure::batch_pdf_validation::validate_batch_pdf_inputs(&pb)
 }
 
+/// Devuelve rutas aceptadas y rechazadas por archivo (tamaño, extensión, etc.).
+#[tauri::command]
+pub fn partition_batch_pdf_paths(
+    paths: Vec<String>,
+) -> (
+    Vec<String>,
+    Vec<crate::infrastructure::batch_pdf_validation::RejectedPdfPath>,
+) {
+    let pb: Vec<std::path::PathBuf> = paths.into_iter().map(std::path::PathBuf::from).collect();
+    let (ok, rej) = crate::infrastructure::batch_pdf_validation::partition_pdf_paths(pb);
+    let ok_s: Vec<String> = ok.into_iter().map(|p| p.display().to_string()).collect();
+    (ok_s, rej)
+}
+
 #[tauri::command]
 pub async fn pkcs11_logout(state: tauri::State<'_, Pkcs11Store>) -> Result<(), String> {
     let mgr = Arc::clone(&*state);

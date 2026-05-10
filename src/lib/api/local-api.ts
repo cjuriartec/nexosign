@@ -57,6 +57,8 @@ export type BatchSignBody = {
 	signature_grid?: { col: number; row: number };
 	/** Si la firma sigue a `POST /api/v1/batch/sign/intent`, elimina la intención pendiente al encolar. */
 	intent_request_id?: string;
+	/** PNG del sello en base64 (sin prefijo data URL), mismo diseño que Certificados. */
+	signature_seal_png_base64?: string;
 };
 
 export type BatchSignIntentBody = {

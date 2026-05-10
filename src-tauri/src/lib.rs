@@ -81,6 +81,7 @@ pub fn run() {
             commands::get_batch_sign_intent,
             commands::enumerate_pdfs_under_folder,
             commands::validate_batch_pdf_paths,
+            commands::partition_batch_pdf_paths,
         ])
         .setup(move |app| {
             let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;

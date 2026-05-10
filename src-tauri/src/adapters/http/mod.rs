@@ -12,6 +12,7 @@ use axum::{
     Router,
 };
 use http::request::Parts;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 use tokio_util::sync::CancellationToken;
@@ -120,6 +121,9 @@ pub struct BatchSignBody {
     /// Consumido si la firma viene de `POST /api/v1/batch/sign/intent`.
     #[serde(default)]
     pub intent_request_id: Option<String>,
+    /// PNG del sello (base64 estándar), mismo aspecto que Certificados — opcional.
+    #[serde(default)]
+    pub signature_seal_png_base64: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -326,6 +330,38 @@ async fn post_batch_sign(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
+    let seal_png: Option<Vec<u8>> = match body.signature_seal_png_base64.as_ref() {
+        None => None,
+        Some(s) => {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                match base64::engine::general_purpose::STANDARD.decode(t) {
+                    Ok(raw) if raw.len() <= 1_500_000 => Some(raw),
+                    Ok(_) => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(serde_json::json!({
+                                "error": "signature_seal_png_base64 supera 1,5 MiB"
+                            })),
+                        )
+                            .into_response();
+                    }
+                    Err(_) => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(serde_json::json!({
+                                "error": "signature_seal_png_base64 no es base64 válido"
+                            })),
+                        )
+                            .into_response();
+                    }
+                }
+            }
+        }
+    };
+
     let job_id = body
         .job_id
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -353,6 +389,7 @@ async fn post_batch_sign(
         output_dir,
         signature_grid,
         pin: pin_for_worker,
+        seal_png,
     };
 
     match tx.try_send(job) {

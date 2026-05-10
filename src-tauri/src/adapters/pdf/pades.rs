@@ -15,6 +15,9 @@ use cms::signed_data::{
 use const_oid::db::rfc5911::{ID_DATA, ID_SIGNED_DATA};
 use const_oid::db::rfc5912::ID_SHA_256;
 use der::{Any, AnyRef, Decode, Encode};
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
+use image::GenericImageView;
 use lopdf::{Dictionary, Document, IncrementalDocument, Object, Stream, StringFormat};
 use sha2::{Digest, Sha256};
 use spki::AlgorithmIdentifierOwned;
@@ -324,6 +327,158 @@ fn rect_from_grid(page_box: [f64; 4], g: SignatureGridPlacement) -> [i64; 4] {
     ]
 }
 
+fn pdf_escape_pdf_literal(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)")
+}
+
+fn zlib_compress_pdf(data: &[u8]) -> Result<Vec<u8>, SignBatchError> {
+    let mut enc = ZlibEncoder::new(Vec::new(), Compression::best());
+    enc.write_all(data)
+        .map_err(|e| SignBatchError::Pades(format!("compresión sello: {e}")))?;
+    enc.finish()
+        .map_err(|e| SignBatchError::Pades(format!("compresión sello: {e}")))
+}
+
+fn flip_rgb_rows_vertical(rgb: &mut [u8], width: u32, height: u32) {
+    let row_len = (width * 3) as usize;
+    let h = height as usize;
+    for y in 0..(h / 2) {
+        let y2 = h - 1 - y;
+        let a = y * row_len;
+        let b = y2 * row_len;
+        for i in 0..row_len {
+            rgb.swap(a + i, b + i);
+        }
+    }
+}
+
+/// `Rect` del widget según proporción del PNG del sello (caben imagen + texto como en Certificados).
+fn rect_from_grid_with_aspect(page_box: [f64; 4], g: SignatureGridPlacement, aspect: f64) -> [i64; 4] {
+    let g = g.normalized();
+    let page_llx = page_box[0];
+    let page_lly = page_box[1];
+    let page_urx = page_box[2];
+    let page_ury = page_box[3];
+    let w = (page_urx - page_llx).max(1.0);
+    let h = (page_ury - page_lly).max(1.0);
+    let margin = (w.min(h) * 0.028).clamp(16.0, 44.0);
+    let inner_w = w - 2.0 * margin;
+    let inner_h = h - 2.0 * margin;
+    let cell_w = inner_w / 5.0;
+    let cell_h = inner_h / 7.0;
+    let col = f64::from(g.col);
+    let row = f64::from(g.row);
+    let x0 = page_llx + margin + col * cell_w;
+    let y_cell_bottom = page_ury - margin - (row + 1.0) * cell_h;
+
+    let ar = aspect.clamp(0.25, 4.0);
+    let max_w = cell_w * 0.94;
+    let max_h = cell_h * 0.94;
+    let mut widget_w = max_w;
+    let mut widget_h = widget_w / ar;
+    if widget_h > max_h {
+        widget_h = max_h;
+        widget_w = widget_h * ar;
+    }
+
+    let llx = x0 + (cell_w - widget_w) * 0.5;
+    let lly = y_cell_bottom + (cell_h - widget_h) * 0.5;
+    let urx = llx + widget_w;
+    let ury = lly + widget_h;
+    let llx = llx.max(page_llx);
+    let lly = lly.max(page_lly);
+    let mut urx = urx.min(page_urx);
+    let mut ury = ury.min(page_ury);
+    if urx <= llx {
+        urx = llx + 1.0;
+    }
+    if ury <= lly {
+        ury = lly + 1.0;
+    }
+    [
+        llx.round() as i64,
+        lly.round() as i64,
+        urx.round() as i64,
+        ury.round() as i64,
+    ]
+}
+
+fn seal_png_dimensions(bytes: &[u8]) -> Result<(u32, u32), SignBatchError> {
+    let img = image::load_from_memory(bytes)
+        .map_err(|e| SignBatchError::Pades(format!("imagen sello: {e}")))?;
+    Ok(img.dimensions())
+}
+
+fn create_appearance_from_seal_png(
+    doc: &mut IncrementalDocument,
+    rect: [i64; 4],
+    png_bytes: &[u8],
+) -> Result<Object, SignBatchError> {
+    let dyn_img = image::load_from_memory(png_bytes)
+        .map_err(|e| SignBatchError::Pades(format!("imagen sello: {e}")))?;
+    let rgba = dyn_img.to_rgba8();
+    let (iw, ih) = rgba.dimensions();
+    if iw == 0 || ih == 0 {
+        return Err(SignBatchError::Pades("imagen sello vacía".into()));
+    }
+
+    let mut rgb = Vec::with_capacity((iw * ih * 3) as usize);
+    for p in rgba.pixels() {
+        let a = p[3] as f32 / 255.0;
+        let r = ((p[0] as f32) * a + 255.0 * (1.0 - a)).round() as u8;
+        let g = ((p[1] as f32) * a + 255.0 * (1.0 - a)).round() as u8;
+        let b = ((p[2] as f32) * a + 255.0 * (1.0 - a)).round() as u8;
+        rgb.extend_from_slice(&[r, g, b]);
+    }
+    flip_rgb_rows_vertical(&mut rgb, iw, ih);
+    let compressed = zlib_compress_pdf(&rgb)?;
+
+    let fw = (rect[2] - rect[0]).abs() as f64;
+    let fh = (rect[3] - rect[1]).abs() as f64;
+
+    let mut img_dict = Dictionary::new();
+    img_dict.set("Type", Object::Name(b"XObject".to_vec()));
+    img_dict.set("Subtype", Object::Name(b"Image".to_vec()));
+    img_dict.set("Width", Object::Integer(iw.into()));
+    img_dict.set("Height", Object::Integer(ih.into()));
+    img_dict.set("ColorSpace", Object::Name(b"DeviceRGB".to_vec()));
+    img_dict.set("BitsPerComponent", Object::Integer(8));
+    img_dict.set("Filter", Object::Name(b"FlateDecode".to_vec()));
+    let img_stream = Stream::new(img_dict, compressed);
+    let img_ref = doc
+        .new_document
+        .add_object(Object::Stream(img_stream));
+
+    let sx = fw / f64::from(iw);
+    let sy = fh / f64::from(ih);
+    let content = format!("q {} 0 0 {} 0 0 cm /Img0 Do Q", sx, sy);
+
+    let mut xobj = Dictionary::new();
+    xobj.set("Img0", Object::Reference(img_ref));
+
+    let mut form_res = Dictionary::new();
+    form_res.set("XObject", Object::Dictionary(xobj));
+
+    let mut form_dict = Dictionary::new();
+    form_dict.set("Type", Object::Name(b"XObject".to_vec()));
+    form_dict.set("Subtype", Object::Name(b"Form".to_vec()));
+    form_dict.set(
+        "BBox",
+        Object::Array(vec![
+            Object::Real(0.0),
+            Object::Real(0.0),
+            Object::Real(fw as f32),
+            Object::Real(fh as f32),
+        ]),
+    );
+    form_dict.set("Resources", Object::Dictionary(form_res));
+    let form_stream = Stream::new(form_dict, content.into_bytes());
+    Ok(Object::Reference(
+        doc.new_document
+            .add_object(Object::Stream(form_stream)),
+    ))
+}
+
 fn create_appearance_stream(
     doc: &mut IncrementalDocument,
     rect: [i64; 4],
@@ -336,7 +491,7 @@ fn create_appearance_stream(
     let mut font_dict = Dictionary::new();
     font_dict.set("Type", Object::Name(b"Font".to_vec()));
     font_dict.set("Subtype", Object::Name(b"Type1".to_vec()));
-    font_dict.set("BaseFont", Object::Name(b"Helvetica-Bold".to_vec()));
+    font_dict.set("BaseFont", Object::Name(b"Helvetica".to_vec()));
     let font_id = doc.new_document.add_object(Object::Dictionary(font_dict));
 
     let mut fonts = Dictionary::new();
@@ -357,19 +512,20 @@ fn create_appearance_stream(
     );
     xobject.set("Resources", Object::Dictionary(resources));
 
-    let now = chrono::Local::now().format("%Y/%m/%d %H:%M").to_string();
-    let signer_sanitized = signer_name.replace('(', "\\(").replace(')', "\\)");
+    let now = chrono::Local::now().format("%d/%m/%Y %H:%M").to_string();
+    let name_esc = pdf_escape_pdf_literal(signer_name);
+    let now_esc = pdf_escape_pdf_literal(&now);
 
     let content = format!(
-        "q 0.1 0.5 0.8 rg 0.5 0.5 {w_minus} {h_minus} re s Q \
-         BT /F1 7 Tf 0.2 0.2 0.2 rg 6 {y1} Td (Firmado digitalmente por:) Tj \
-         /F1 8 Tf 0 0 0 rg 0 -10 Td ({name}) Tj \
-         /F1 6 Tf 0.4 0.4 0.4 rg 0 -8 Td (Fecha: {now}) Tj ET",
-        w_minus = w - 1.0,
-        h_minus = h - 1.0,
-        y1 = h - 12.0,
-        name = signer_sanitized,
-        now = now
+        "q 0.97 0.98 1 rg 0 0 {w} {h} re f Q \
+         BT /F1 7 Tf 0.22 0.24 0.3 rg 8 {y1} Td (Firma digital PAdES) Tj \
+         /F1 8 Tf 0.07 0.09 0.14 rg 0 -12 Td ({name}) Tj \
+         /F1 6.5 Tf 0.4 0.42 0.46 rg 0 -10 Td ({now}) Tj ET",
+        w = w,
+        h = h,
+        y1 = h - 13.0,
+        name = name_esc,
+        now = now_esc,
     );
 
     let stream = Stream::new(xobject, content.into_bytes());
@@ -394,6 +550,7 @@ fn append_signature_objects(
     der_placeholder_len: usize,
     rect: [i64; 4],
     signer_name: &str,
+    seal_png: Option<&[u8]>,
 ) -> Result<(), SignBatchError> {
     let prev = doc.get_prev_documents();
     let page_id = prev
@@ -441,7 +598,10 @@ fn append_signature_objects(
 
     let sig_id = doc.new_document.add_object(Object::Dictionary(sig_dict));
 
-    let ap_ref = create_appearance_stream(doc, rect, signer_name)?;
+    let ap_ref = match seal_png {
+        Some(bytes) => create_appearance_from_seal_png(doc, rect, bytes)?,
+        None => create_appearance_stream(doc, rect, signer_name)?,
+    };
     let mut ap_dict = Dictionary::new();
     ap_dict.set("N", ap_ref);
 
@@ -536,6 +696,7 @@ pub fn sign_pdf_pades_bes(
     input_path: &Path,
     output_path: &Path,
     placement: SignatureGridPlacement,
+    seal_png: Option<&[u8]>,
 ) -> Result<(), SignBatchError> {
     let cert_der = token.certificate_der_by_id_hex(cert_id_hex)?;
     let pdf_bytes = std::fs::read(input_path).map_err(|e| SignBatchError::Io {
@@ -544,7 +705,18 @@ pub fn sign_pdf_pades_bes(
     })?;
 
     let page_box = read_first_page_box(&pdf_bytes)?;
-    let rect = rect_from_grid(page_box, placement);
+    let rect = if let Some(png) = seal_png {
+        match seal_png_dimensions(png) {
+            Ok((iw, ih)) if iw > 0 && ih > 0 => rect_from_grid_with_aspect(
+                page_box,
+                placement,
+                f64::from(iw) / f64::from(ih),
+            ),
+            _ => rect_from_grid(page_box, placement),
+        }
+    } else {
+        rect_from_grid(page_box, placement)
+    };
 
     let signer_name = get_signer_name_from_der(&cert_der);
     let mut der_cap = 8192usize;
@@ -555,7 +727,7 @@ pub fn sign_pdf_pades_bes(
             .try_into()
             .map_err(|e| SignBatchError::Pades(format!("PDF lectura: {e}")))?;
 
-        append_signature_objects(&mut doc, der_cap, rect, &signer_name)?;
+        append_signature_objects(&mut doc, der_cap, rect, &signer_name, seal_png)?;
 
         let mut buf = Vec::new();
         doc.save_to(&mut buf)

@@ -21,6 +21,8 @@ pub struct BatchJob {
     pub signature_grid: Option<crate::adapters::pdf::pades::SignatureGridPlacement>,
     /// PIN para repetir `C_Login` en el mismo hilo que `C_Sign` (PKCS#11 suele ser por hilo).
     pub pin: Option<String>,
+    /// PNG del sello visible (mismo diseño que Certificados); `None` usa apariencia vectorial.
+    pub seal_png: Option<Vec<u8>>,
 }
 
 struct TauriProgress(AppHandle);
@@ -66,6 +68,7 @@ pub fn spawn_batch_worker(
                     output_dir: job.output_dir,
                     signature_grid: job.signature_grid,
                     pin: job.pin,
+                    seal_png: job.seal_png,
                 };
                 let _ = process_batch(input, token_c, notifier);
                 if let Ok(mut g) = reg_c.lock() {
