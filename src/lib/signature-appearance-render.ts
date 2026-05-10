@@ -149,8 +149,8 @@ export async function renderSignatureSealPngBase64(
 				cx += ctx.measureText(words[i]).width + spacePerWord;
 			}
 		} else {
-			ctx.textAlign = "center";
-			ctx.fillText(ln.text, layoutW / 2, ty);
+			ctx.textAlign = "left";
+			ctx.fillText(ln.text, 0, ty);
 		}
 		ty += lineLeading;
 	}
