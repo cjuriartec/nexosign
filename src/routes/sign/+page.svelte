@@ -15,6 +15,7 @@
 	import { Badge } from "$lib/components/ui/badge/index.js";
 	import { page } from "$app/state";
 	import { postBatchSign, LocalApiHttpError, extractJsonErrorMessage } from "$lib/api/local-api";
+	import { ipcPostBatchSign, LocalBackendInvokeError } from "$lib/tauri/local-backend";
 	import { subscribeProgress, type ProgressPayload } from "$lib/events/progress";
 	import * as pkcs11 from "$lib/tauri/pkcs11";
 	import type { SigningCertSummary } from "$lib/tauri/pkcs11";
@@ -515,7 +516,9 @@
 				selectedCert: certs.find((c) => c.id_hex === certId.trim()) ?? null,
 			});
 			const intentToFinish = intentRequestId;
-			const res = await postBatchSign(body, apiBase);
+			const res = isTauriRuntime()
+				? await ipcPostBatchSign(body)
+				: await postBatchSign(body, apiBase);
 			if (intentToFinish) {
 				completeIntentQueueItem(intentToFinish);
 			}
@@ -529,7 +532,24 @@
 		} catch (e) {
 			wizardStep = 4;
 			upsertBatchQueueItem(pendingQueueId, { status: "error" });
-			if (e instanceof LocalApiHttpError) {
+			if (e instanceof LocalBackendInvokeError) {
+				const detail = e.detail || e.code;
+				if (detail.toLowerCase().includes("demasiado grande") || detail.includes("50 MiB")) {
+					toast.error(
+						"Uno o más PDF superan 50 MiB. Reduce el tamaño, divide el documento o quítalo del lote.",
+					);
+				} else if (
+					detail.toLowerCase().includes("pin") ||
+					detail.toLowerCase().includes("token") ||
+					detail.toLowerCase().includes("sesión")
+				) {
+					pinError =
+						"No se pudo desbloquear el token con ese PIN o la sesión del lector está bloqueada.";
+					toast.error(pinError);
+				} else {
+					toast.error(detail);
+				}
+			} else if (e instanceof LocalApiHttpError) {
 				const detail = extractJsonErrorMessage(e.body) ?? e.message;
 				if (e.status === 400 && detail.includes("demasiado grande")) {
 					toast.error(

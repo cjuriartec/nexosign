@@ -2,21 +2,18 @@
  * Cola batch + intents en memoria con respaldo SQLite.
  *
  * Prioridad de fuentes:
- * - HTTP **`GET …/batch/jobs/{job_id}/status`**: autoritativo para terminar ítems (`completed`/`failed`/`cancelled`).
+ * - **`local_api_batch_job_status`** (app) o HTTP **`GET …/batch/jobs/{job_id}/status`**: autoritativo para terminar ítems.
  * - Evento **`progreso`**: refinamiento en vivo de barra y etiquetas mientras el trabajo está activo.
  * - SQLite (`batch-queue-history`): hidratación al arranque y persistencia entre sesiones.
  */
-import {
-	fetchBatchJobStatus,
-	type BatchJobPhase,
-} from "$lib/api/local-api";
+import { fetchBatchJobStatus, type BatchJobPhase } from "$lib/api/local-api";
 import {
 	backendLoadBatchQueueHistory,
 	backendSaveBatchQueueHistory,
 	type BatchQueueSnapshot,
 } from "$lib/tauri/batch-queue-history";
 import { isTauriRuntime } from "$lib/tauri/env";
-import { getLocalApiBaseUrl } from "$lib/tauri/settings";
+import { ipcFetchBatchJobStatus } from "$lib/tauri/local-backend";
 import { listPendingBatchIntents } from "$lib/tauri/batch-sign-intent";
 
 export type BatchQueueStatus =
@@ -179,14 +176,16 @@ function mapBackendPhaseToQueueStatus(phase: BatchJobPhase): BatchQueueStatus {
 	}
 }
 
-/** Refresca ítems activos contra `GET …/batch/jobs/{job_id}/status` (estado en el proceso NexoSign). */
+/** Refresca ítems activos contra el estado del trabajo en el proceso NexoSign (IPC o HTTP). */
 export async function syncBatchQueueFromApi(baseUrl: string): Promise<void> {
 	for (const item of batchQueue.items) {
 		if (!ACTIVE_BATCH_STATUSES.includes(item.status)) continue;
 		if (!item.jobId || item.jobId.startsWith("pending-")) continue;
 		let snap: Awaited<ReturnType<typeof fetchBatchJobStatus>>;
 		try {
-			snap = await fetchBatchJobStatus(item.jobId, baseUrl);
+			snap = isTauriRuntime()
+				? await ipcFetchBatchJobStatus(item.jobId)
+				: await fetchBatchJobStatus(item.jobId, baseUrl);
 		} catch {
 			continue;
 		}
@@ -202,10 +201,9 @@ export async function syncBatchQueueFromApi(baseUrl: string): Promise<void> {
 export async function syncBatchQueueFromLocalApi(): Promise<void> {
 	if (!isTauriRuntime()) return;
 	try {
-		const base = await getLocalApiBaseUrl();
-		await syncBatchQueueFromApi(base);
+		await syncBatchQueueFromApi("");
 	} catch {
-		/* API local no disponible */
+		/* backend local no disponible */
 	}
 }
 

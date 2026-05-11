@@ -146,6 +146,10 @@ pub fn run() {
             commands::batch_queue_history::load_batch_queue_history,
             commands::batch_queue_history::save_batch_queue_history,
             commands::clear_local_api_temp_cache,
+            commands::local_api::local_api_health,
+            commands::local_api::local_api_ping,
+            commands::local_api::local_api_enqueue_batch_sign,
+            commands::local_api::local_api_batch_job_status,
         ])
         .on_window_event(|window, event| {
             if window.label() != MAIN_WINDOW_LABEL {
@@ -203,6 +207,17 @@ pub fn run() {
 
             app.manage(BatchSignedOutputsStore(batch_signed_outputs.clone()));
 
+            let api_state = infrastructure::local_server::build_shared_api_state(
+                app.handle().clone(),
+                origins.clone(),
+                pkcs11.clone(),
+                batch_cancel.clone(),
+                pending_batch_intents.clone(),
+                db_path.clone(),
+                batch_signed_outputs.clone(),
+            );
+            app.manage(api_state.clone());
+
             let emit_for_deep_link = app.handle().clone();
             app.handle().deep_link().on_open_url(move |event| {
                 show_main_window(&emit_for_deep_link);
@@ -217,16 +232,7 @@ pub fn run() {
             #[cfg(desktop)]
             try_install_tray(app.handle());
 
-            let handle = app.handle().clone();
-            infrastructure::local_server::spawn_local_api(
-                handle,
-                origins.clone(),
-                pkcs11.clone(),
-                batch_cancel.clone(),
-                pending_batch_intents.clone(),
-                db_path.clone(),
-                batch_signed_outputs.clone(),
-            );
+            infrastructure::local_server::spawn_local_api(api_state);
 
             Ok(())
         })

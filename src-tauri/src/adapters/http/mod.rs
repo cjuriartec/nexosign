@@ -1,9 +1,8 @@
+pub mod local_api_ops;
 pub mod openapi;
 pub mod state;
 
 pub use crate::domain::pending_batch_intent::PendingBatchIntent;
-
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     body::Body,
@@ -14,24 +13,20 @@ use axum::{
     Router,
 };
 use http::request::Parts;
-use base64::Engine;
 use bytes::Bytes;
 use futures_util::stream;
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
-use tokio_util::sync::CancellationToken;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
-use crate::adapters::http::state::{HealthResponse, PingResponse, SharedState};
+use crate::adapters::http::state::SharedState;
 use crate::adapters::persistence::queue_store;
-use crate::adapters::worker::batch::BatchJob;
 use crate::infrastructure::batch_pdf_validation::{
     validate_batch_pdf_inputs,
     validate_pdf_magic_and_size,
     MAX_PDFS_PER_BATCH_INTENT,
     MAX_TOTAL_BATCH_INTENT_BYTES,
 };
-use crate::ports::{BatchJobPhase, BatchJobSnapshot, SignatureGridPlacement};
 
 /// Techo para servir por HTTP un PDF firmado (entrada máx. + margen por firma incrustada).
 const MAX_SIGNED_DOWNLOAD_BYTES: u64 =
@@ -46,7 +41,7 @@ const MAX_BATCH_INTENT_BODY: usize =
 /// Techo JSON para `POST /api/v1/batch/sign` (cert_id, inputs, pin, sello base64).
 const MAX_BATCH_SIGN_BODY: usize = 4 * 1024 * 1024;
 
-fn validate_optional_output_dir(path: Option<std::path::PathBuf>) -> Result<Option<std::path::PathBuf>, String> {
+pub(crate) fn validate_optional_output_dir(path: Option<std::path::PathBuf>) -> Result<Option<std::path::PathBuf>, String> {
     let Some(p) = path else {
         return Ok(None);
     };
@@ -277,15 +272,11 @@ pub fn build_router(state: SharedState) -> Router {
 }
 
 async fn get_health() -> impl IntoResponse {
-    Json(HealthResponse {
-        status: "ok",
-        service: "nexosign",
-        version: env!("CARGO_PKG_VERSION"),
-    })
+    Json(local_api_ops::health_payload())
 }
 
 async fn post_ping() -> impl IntoResponse {
-    Json(PingResponse { ok: true })
+    Json(local_api_ops::ping_payload())
 }
 
 /// Registra PDF para firmar **sin encolar** hasta que el usuario complete el asistente en la app.
@@ -691,207 +682,20 @@ async fn post_batch_sign(
     headers: HeaderMap,
     Json(body): Json<BatchSignBody>,
 ) -> impl IntoResponse {
-    let Some(tx) = state.batch_tx.clone() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "cola batch no configurada" })),
-        )
-            .into_response();
-    };
-
     if let Err(resp) = gate_batch_origin(&state, &headers, &uri) {
         return resp;
     }
 
-    if body.cert_id_hex.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "cert_id_hex requerido" })),
+    match local_api_ops::try_enqueue_batch_sign(&state, body) {
+        Ok(r) => Json(r).into_response(),
+        Err(e) => (
+            e.status,
+            Json(serde_json::json!({
+                "error": e.code,
+                "detail": e.detail,
+            })),
         )
-            .into_response();
-    }
-
-    if let Err(msg) = validate_batch_pdf_inputs(&body.inputs) {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response();
-    }
-
-    let output_dir = match validate_optional_output_dir(body.output_dir) {
-        Ok(d) => d,
-        Err(msg) => {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg }))).into_response();
-        }
-    };
-
-    let signature_grid = match body.signature_grid {
-        Some(g) => {
-            if g.col > 2 || g.row > 4 {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(
-                        serde_json::json!({ "error": "signature_grid: col debe ser 0–2 y row 0–4 (rejilla 3×5)" }),
-                    ),
-                )
-                    .into_response();
-            }
-            Some(SignatureGridPlacement { col: g.col, row: g.row })
-        }
-        None => None,
-    };
-
-    if let Some(ref pin_raw) = body.pin {
-        if pin_raw.trim().is_empty() {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "PIN vacío" })),
-            )
-                .into_response();
-        }
-        // La validación real del PIN se hace en el worker (spawn_blocking) para
-        // que C_Initialize, C_Login y C_Sign ocurran en el mismo hilo OS.
-    }
-
-    let pin_for_worker = body
-        .pin
-        .as_ref()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-
-    let seal_png: Option<Vec<u8>> = match body.signature_seal_png_base64.as_ref() {
-        None => None,
-        Some(s) => {
-            let t = s.trim();
-            if t.is_empty() {
-                None
-            } else {
-                match base64::engine::general_purpose::STANDARD.decode(t) {
-                    Ok(raw) if raw.len() <= 1_500_000 => Some(raw),
-                    Ok(_) => {
-                        return (
-                            StatusCode::BAD_REQUEST,
-                            Json(serde_json::json!({
-                                "error": "signature_seal_png_base64 supera 1,5 MiB"
-                            })),
-                        )
-                            .into_response();
-                    }
-                    Err(_) => {
-                        return (
-                            StatusCode::BAD_REQUEST,
-                            Json(serde_json::json!({
-                                "error": "signature_seal_png_base64 no es base64 válido"
-                            })),
-                        )
-                            .into_response();
-                    }
-                }
-            }
-        }
-    };
-
-    let job_id = body
-        .job_id
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-    let input_count = body.inputs.len();
-    let cancel = CancellationToken::new();
-    {
-        let mut g = match state.batch_cancel.lock() {
-            Ok(g) => g,
-            Err(_) => {
-                return api_err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "batch_snapshots_locked",
-                    "estado batch bloqueado",
-                );
-            }
-        };
-        g.insert(job_id.clone(), cancel.clone());
-    }
-
-    let mut cleanup_paths: Vec<std::path::PathBuf> = Vec::new();
-    if let Some(ref rid) = body.intent_request_id {
-        if let Ok(g) = state.pending_batch_intents.lock() {
-            if let Some(ent) = g.get(rid) {
-                if let Some(ref d) = ent.staging_dir {
-                    cleanup_paths.push(d.clone());
-                }
-            }
-        }
-    }
-
-    let job = BatchJob {
-        job_id: job_id.clone(),
-        cert_id_hex: body.cert_id_hex,
-        inputs: body.inputs,
-        cancel,
-        output_dir,
-        signature_grid,
-        pin: pin_for_worker,
-        seal_png,
-        cleanup_paths,
-    };
-
-    match tx.try_send(job) {
-        Ok(()) => {
-            if let Some(rid) = body.intent_request_id.clone() {
-                if let Ok(mut p) = state.pending_batch_intents.lock() {
-                    p.remove(&rid);
-                }
-                if let Some(ref db_arc) = state.queue_sqlite_path {
-                    let _ = queue_store::delete_intent_payload(db_arc.as_ref(), &rid);
-                }
-                if let Ok(mut m) = state.intent_request_to_job.lock() {
-                    m.insert(rid, job_id.clone());
-                }
-            }
-            if let Ok(mut m) = state.batch_job_snapshots.lock() {
-                let queued_at_unix = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .ok();
-                m.insert(
-                    job_id.clone(),
-                    BatchJobSnapshot {
-                        job_id: job_id.clone(),
-                        phase: BatchJobPhase::Queued,
-                        actual: 0,
-                        total: u32::try_from(input_count).unwrap_or(1).max(1),
-                        queued_at_unix,
-                        current_file_name: None,
-                        error: None,
-                        terminal_at_unix: None,
-                    },
-                );
-                if let (Some(ref db_arc), Some(ts)) = (&state.queue_sqlite_path, queued_at_unix) {
-                    let _ = queue_store::upsert_batch_job_enqueue(db_arc.as_ref(), &job_id, ts);
-                }
-            }
-            Json(BatchSignResponse {
-                job_id,
-                queued: true,
-            })
-            .into_response()
-        }
-        Err(tokio::sync::mpsc::error::TrySendError::Full(j)) => {
-            if let Ok(mut g) = state.batch_cancel.lock() {
-                g.remove(&j.job_id);
-            }
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({ "error": "cola batch llena, reintente" })),
-            )
-                .into_response()
-        }
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(j)) => {
-            if let Ok(mut g) = state.batch_cancel.lock() {
-                g.remove(&j.job_id);
-            }
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({ "error": "cola batch cerrada" })),
-            )
-                .into_response()
-        }
+            .into_response(),
     }
 }
 
@@ -1009,30 +813,17 @@ async fn get_batch_job_status(
     if let Err(resp) = gate_batch_origin(&state, &headers, &uri) {
         return resp;
     }
-    let snap = {
-        let guard = match state.batch_job_snapshots.lock() {
-            Ok(g) => g,
-            Err(_) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": "estado batch snapshots bloqueado" })),
-                )
-                    .into_response();
-            }
-        };
-        guard.get(&job_id).cloned()
-    };
-    let Some(snap) = snap else {
-        return (
-            StatusCode::NOT_FOUND,
+    match local_api_ops::try_get_batch_job_snapshot(&state, &job_id) {
+        Ok(snap) => Json(snap).into_response(),
+        Err(e) => (
+            e.status,
             Json(serde_json::json!({
-                "error": "job_not_found",
-                "detail": "Sin estado para este job_id."
+                "error": e.code,
+                "detail": e.detail,
             })),
         )
-            .into_response();
-    };
-    Json(snap).into_response()
+            .into_response(),
+    }
 }
 
 /// Lista índices y URLs relativas para descargar los PDF firmados de un trabajo terminado.
@@ -1202,7 +993,9 @@ async fn download_batch_signed_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::worker::batch::BatchJob;
     use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
     use axum::body::{to_bytes, Body};
     use axum::http::header;
     use axum::http::{Request, StatusCode};

@@ -62,6 +62,8 @@
 
 La API está en **`http://127.0.0.1:14500`** **solo con la aplicación en ejecución** (`npm run tauri dev` o binario instalado).
 
+**App de escritorio:** la interfaz usa **`invoke`** (comandos `local_api_*` en Rust) para health, ping, encolar firma y consultar estado de trabajo — misma lógica que los endpoints HTTP, sin `fetch` al loopback (evita CORS y problemas de contenido mixto en release). **`127.0.0.1:14500`** sigue siendo el canal pensado para **integradores**, portales y herramientas externas.
+
 | Requisito | Detalle |
 |-----------|---------|
 | 🌍 **Origen** | Los **`POST` y `GET`** de batch en navegador necesitan cabecera **`Origin`** permitida por CORS (p. ej. `http://localhost:1420`). Incluye sondeo de estado del intent y descargas. |

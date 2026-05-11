@@ -31,6 +31,7 @@
 	import { ask } from "@tauri-apps/plugin-dialog";
 	import { LOCAL_API_BASE } from "$lib/config/constants";
 	import { fetchHealth, fetchPing } from "$lib/api/local-api";
+	import { ipcFetchHealth, ipcFetchPing } from "$lib/tauri/local-backend";
 	import * as ScrollArea from "$lib/components/ui/scroll-area/index.js";
 	import * as pkcs11 from "$lib/tauri/pkcs11";
 	import type { Pkcs11Diagnostics } from "$lib/tauri/pkcs11";
@@ -371,11 +372,17 @@
 	async function refreshDiagnostics() {
 		diagLoading = true;
 		try {
-			const base = isTauriRuntime() ? await getLocalApiBaseUrl() : LOCAL_API_BASE;
-			apiUrl = base;
-			health = await fetchHealth(base);
-			const p = await fetchPing(base);
-			pingOk = p.ok;
+			if (isTauriRuntime()) {
+				apiUrl = await getLocalApiBaseUrl();
+				health = await ipcFetchHealth();
+				const p = await ipcFetchPing();
+				pingOk = p.ok;
+			} else {
+				apiUrl = LOCAL_API_BASE;
+				health = await fetchHealth(LOCAL_API_BASE);
+				const p = await fetchPing(LOCAL_API_BASE);
+				pingOk = p.ok;
+			}
 		} catch {
 			health = null;
 			pingOk = false;
