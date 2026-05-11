@@ -12,3 +12,5 @@ vite.config.ts.timestamp-*
 /test-results/
 /blob-report/
 /playwright/.cache/
+/scripts/load-test-pdfs/
+/scripts/load-test/pdfs/

@@ -74,10 +74,11 @@ La API está en **`http://127.0.0.1:14500`** **solo con la aplicación en ejecuc
 | **`GET /api/v1/batch/jobs/{job_id}/signed-files`** | Cuando el lote **ha terminado**: JSON con `files[]` (`index`, `filename`, `href`) para descargar cada PDF firmado **desde el navegador** (cabecera **Origin** igual que en los POST). |
 | **`GET /api/v1/batch/jobs/{job_id}/files/{i}`** | Respuesta **`application/pdf`** del firmado *i*-ésimo (mismo orden que `inputs` / solo los firmados con éxito). |
 | **`GET /api/v1/batch/sign/intent/{request_id}/status`** | **Sondeo** tras el intent: `phase` = `awaiting_confirmation` \| `processing` \| `completed`, `job_id`, `manifest_href`, `signed_file_count`. Sin servidor propio: tu página hace polling a `127.0.0.1:14500` con el mismo **Origin**. |
-| **`POST /api/v1/batch/sign/intent`** | **No firma aún.** **`application/json`** (`inputs`: rutas absolutas) **o** **`multipart/form-data`** con el campo repetible **`files`** (un PDF por parte). Los PDF subidos van a staging temporal; responde **`request_id`** + **`deep_link`**. Si no se confirma a tiempo, caduca (misma ventana de ~5 min que el trabajo de firma encolado). |
+| **`POST /api/v1/batch/sign/intent`** | **No firma aún.** **`application/json`** (`inputs`: rutas absolutas) **o** **`multipart/form-data`** con el campo repetible **`files`** (un PDF por parte). Los PDF subidos van a staging temporal; responde **`request_id`** + **`deep_link`**. Si no se confirma a tiempo, caduca (misma ventana que el tiempo máximo del trabajo batch; por defecto ~5 min, configurable con `NEXOSIGN_BATCH_JOB_MAX_SECS`). |
 | **`GET /health`** | Estado del servicio (sin `Origin`). |
 | **`POST /api/v1/ping`** | Eco para pruebas. |
 | **`NEXOSIGN_BATCH_OUTPUT_DIR`** | Variable de entorno: fuerza carpeta de salida global `{stem}_firmado.pdf`. |
+| **`NEXOSIGN_BATCH_JOB_MAX_SECS`** | Ventana máxima (segundos) para intents pendientes y trabajos batch encolados (por defecto **300**). Lot grandes o pruebas de carga: aumentar (p. ej. **7200**). |
 
 ---
 
@@ -185,8 +186,17 @@ La app de escritorio y otros procesos **locales** pueden usar rutas HTTP adicion
 |----------|-----|
 | `NEXOSIGN_PKCS11_MODULE` | Ruta absoluta al `.dll` / `.so` / `.dylib` (prioridad sobre rutas por defecto). |
 | `NEXOSIGN_PKCS11_SLOT` | Índice del slot (`0` por defecto). |
+| `NEXOSIGN_BATCH_JOB_MAX_SECS` | Tiempo máximo (segundos) para intents pendientes y cola batch en SQLite (default **300**). |
 
 Si el DNIe funciona en el navegador del sistema pero NexoSign muestra **0 slots**, suele ser **middleware PKCS#11 distinto**: prueba el del **proveedor oficial del DNIe** (FNMT/CCN) con `NEXOSIGN_PKCS11_MODULE`. OpenSC a veces no expone la tarjeta aunque el USB sí esté reconocido.
+
+### Empaquetado (MSI / notarización macOS)
+
+Guías: **[`docs/distribucion-windows.md`](./docs/distribucion-windows.md)** y **[`docs/distribucion-macos.md`](./docs/distribucion-macos.md)**.
+
+### Prueba de carga (PDFs de test)
+
+Ver **[`scripts/load-test/README.md`](./scripts/load-test/README.md)** y **`scripts/gen-load-test-pdfs.mjs`**.
 
 ---
 

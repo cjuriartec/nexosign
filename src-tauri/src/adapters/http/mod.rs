@@ -1582,7 +1582,7 @@ mod tests {
         use std::collections::HashMap;
         use std::sync::{Arc, Mutex};
 
-        use crate::ports::QUEUE_MAX_WALL_CLOCK_SECS;
+        use crate::ports::queue_max_wall_clock_secs;
 
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let tmp = std::env::temp_dir().join(format!(
@@ -1595,7 +1595,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs()
-            .saturating_sub(QUEUE_MAX_WALL_CLOCK_SECS + 60);
+            .saturating_sub(queue_max_wall_clock_secs() + 60);
         {
             let mut g = pending.lock().unwrap();
             g.insert(

@@ -22,7 +22,7 @@ todos:
     status: completed
   - id: f5-test-pack
     content: Prueba 100x10MB, timeouts; build MSI y documentar notarización macOS
-    status: pending
+    status: completed
 isProject: false
 ---
 

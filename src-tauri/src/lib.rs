@@ -113,6 +113,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             commands::get_local_api_base_url,
+            commands::get_batch_job_max_secs_config,
+            commands::set_batch_job_max_secs,
             commands::list_allowed_origins,
             commands::add_allowed_origin,
             commands::remove_allowed_origin,
@@ -179,12 +181,16 @@ pub fn run() {
                 tracing::warn!(error = %e, "hidratar intents pendientes desde SQLite");
             }
 
+            let stored_batch_max =
+                queue_store::get_batch_job_max_secs_stored(&db_path).unwrap_or(None);
+            crate::ports::batch_job_snapshot::init_stored_queue_max_secs_from_db(stored_batch_max);
+
             let now_secs = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
             let stale_cutoff =
-                now_secs.saturating_sub(crate::ports::BATCH_JOB_MAX_WALL_CLOCK_SECS);
+                now_secs.saturating_sub(crate::ports::batch_job_max_wall_clock_secs_i64());
             if let Err(e) = queue_store::purge_batch_job_enqueue_before(&db_path, stale_cutoff) {
                 tracing::warn!(error = %e, "purgar batch_job_enqueue obsoleto");
             }

@@ -416,6 +416,37 @@ pub fn load_queue_snapshot(db_path: &Path) -> Result<Option<BatchQueueHistoryPay
     }))
 }
 
+/// Clave en `queue_ui_state` para el tiempo máximo de lote (segundos) guardado en ajustes.
+pub const QUEUE_UI_KEY_BATCH_JOB_MAX_SECS: &str = "batch_job_max_secs";
+
+pub fn get_batch_job_max_secs_stored(db_path: &Path) -> Result<Option<u64>, String> {
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let val: Option<String> = conn
+        .query_row(
+            "SELECT value FROM queue_ui_state WHERE key = ?1",
+            params![QUEUE_UI_KEY_BATCH_JOB_MAX_SECS],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some(s) = val else {
+        return Ok(None);
+    };
+    s.parse::<u64>()
+        .map(Some)
+        .map_err(|_| "batch_job_max_secs almacenado no es un entero válido".into())
+}
+
+pub fn set_batch_job_max_secs_stored(db_path: &Path, secs: u64) -> Result<(), String> {
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO queue_ui_state (key, value) VALUES (?1, ?2)",
+        params![QUEUE_UI_KEY_BATCH_JOB_MAX_SECS, secs.to_string()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

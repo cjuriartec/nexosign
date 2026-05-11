@@ -15,6 +15,8 @@
 		removeAllowedOrigin,
 		getLocalApiBaseUrl,
 		clearLocalApiTempCache,
+		getBatchJobMaxSecsConfig,
+		setBatchJobMaxSecs,
 		listPkcs11DriverPaths,
 		addPkcs11DriverPath,
 		removePkcs11DriverPath,
@@ -68,6 +70,12 @@
 	let pathGhostY = $state(0);
 	let pathListEl = $state<HTMLElement | null>(null);
 	let cacheClearing = $state(false);
+	const BATCH_JOB_TIMEOUT_MIN = 60;
+	const BATCH_JOB_TIMEOUT_MAX = 604800;
+	let batchJobTimeoutStored = $state(300);
+	let batchJobTimeoutEffective = $state(300);
+	let batchJobTimeoutLockedByEnv = $state(false);
+	let batchJobTimeoutBusy = $state(false);
 	const PATH_DRAG_THRESHOLD = 4;
 
 	async function probeActiveModulePath() {
@@ -288,6 +296,38 @@
 		}
 	}
 
+	async function syncBatchJobTimeout() {
+		if (!isTauriRuntime()) return;
+		try {
+			const c = await getBatchJobMaxSecsConfig();
+			batchJobTimeoutStored = c.storedSecs;
+			batchJobTimeoutEffective = c.effectiveSecs;
+			batchJobTimeoutLockedByEnv = c.lockedByEnv;
+		} catch (e) {
+			toast.error(String(e));
+		}
+	}
+
+	async function saveBatchJobTimeout() {
+		if (!isTauriRuntime()) return;
+		let n = Math.round(Number(batchJobTimeoutStored));
+		if (!Number.isFinite(n)) {
+			toast.error("Introduce un número válido");
+			return;
+		}
+		n = Math.min(BATCH_JOB_TIMEOUT_MAX, Math.max(BATCH_JOB_TIMEOUT_MIN, n));
+		batchJobTimeoutBusy = true;
+		try {
+			await setBatchJobMaxSecs(n);
+			toast.success("Tiempo máximo de cola guardado");
+			await syncBatchJobTimeout();
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			batchJobTimeoutBusy = false;
+		}
+	}
+
 	async function refresh() {
 		if (!isTauriRuntime()) return;
 		loading = true;
@@ -371,6 +411,7 @@
 		void refreshDiagnostics();
 		if (isTauriRuntime()) {
 			void refresh();
+			void syncBatchJobTimeout();
 			void (async () => {
 				try {
 					await syncPkcsLists();
@@ -390,7 +431,7 @@
 	<div>
 		<h1 class="text-3xl font-semibold tracking-tight">Ajustes</h1>
 		<p class="text-muted-foreground mt-1 text-sm">
-			Tema, PKCS#11, sitios permitidos, caché del servicio local y comprobación del servicio.
+			Tema, tiempo máximo de cola, PKCS#11, sitios permitidos, caché del servicio local y comprobación del servicio.
 		</p>
 	</div>
 
@@ -405,6 +446,55 @@
 			<ThemeToggle />
 		</Card.Content>
 	</Card.Root>
+
+	{#if isTauriRuntime()}
+		<Card.Root>
+			<Card.Header>
+				<Card.Title class="text-base">Cola de firma</Card.Title>
+				<Card.Description>
+					Ventana máxima para intents del portal y trabajos batch encolados en SQLite. Si existe la variable
+					<code class="font-mono text-[11px]">NEXOSIGN_BATCH_JOB_MAX_SECS</code>, tiene prioridad sobre este valor (reinicia tras cambiar el entorno).
+				</Card.Description>
+			</Card.Header>
+			<Card.Content class="space-y-4">
+				<p class="text-muted-foreground text-xs">
+					Vigente ahora:
+					<span class="text-foreground font-mono font-medium">{batchJobTimeoutEffective}</span> s
+				</p>
+				{#if batchJobTimeoutLockedByEnv}
+					<p class="text-sm text-amber-800 dark:text-amber-200">
+						Edición desactivada: el proceso tiene definida
+						<span class="font-mono">NEXOSIGN_BATCH_JOB_MAX_SECS</span>. Elimínala y reinicia la app para usar
+						este ajuste.
+					</p>
+				{:else}
+					<div class="flex flex-col gap-3 sm:flex-row sm:items-end">
+						<div class="grid min-w-0 flex-1 gap-2">
+							<Label for="batch-job-timeout">
+								Segundos ({BATCH_JOB_TIMEOUT_MIN}–{BATCH_JOB_TIMEOUT_MAX})
+							</Label>
+							<Input
+								id="batch-job-timeout"
+								type="number"
+								min={BATCH_JOB_TIMEOUT_MIN}
+								max={BATCH_JOB_TIMEOUT_MAX}
+								step="1"
+								bind:value={batchJobTimeoutStored}
+								disabled={batchJobTimeoutBusy}
+								class="font-mono"
+							/>
+						</div>
+						<Button
+							type="button"
+							variant="secondary"
+							class="h-9 shrink-0"
+							disabled={batchJobTimeoutBusy}
+							onclick={() => void saveBatchJobTimeout()}>Guardar</Button>
+					</div>
+				{/if}
+			</Card.Content>
+		</Card.Root>
+	{/if}
 
 	{#if isTauriRuntime()}
 		<Card.Root>

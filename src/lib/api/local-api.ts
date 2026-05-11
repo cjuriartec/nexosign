@@ -55,7 +55,7 @@ export type BatchJobStatusResponse = {
 	phase: BatchJobPhase;
 	actual: number;
 	total: number;
-	/** Segundos Unix del encolado (expiración máx. 5 min en servidor). */
+	/** Segundos Unix del encolado (el servidor expira el trabajo según `NEXOSIGN_BATCH_JOB_MAX_SECS`, default 300 s). */
 	queued_at_unix?: number | null;
 	current_file_name?: string | null;
 	error?: string | null;

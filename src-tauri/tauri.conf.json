@@ -32,6 +32,8 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "shortDescription": "Firma PDF PAdES con certificado en hardware (PKCS#11)",
+    "copyright": "Copyright © NexoSign contributors",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

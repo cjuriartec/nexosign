@@ -15,12 +15,9 @@ use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::application::sign_batch::{process_batch, SignBatchInput};
 use crate::infrastructure::batch_runtime::BATCH_WATCHDOG_INTERVAL_SECS;
 use crate::ports::{
-    BatchJobPhase, BatchJobSnapshot, ProgressEvent, ProgressNotifier, SignatureGridPlacement,
-    BATCH_JOB_MAX_WALL_CLOCK_SECS, BATCH_JOB_RAM_GC_AFTER_TERMINAL_SECS,
+    batch_job_max_wall_clock_secs_i64, batch_job_timeout_user_message, BatchJobPhase, BatchJobSnapshot,
+    ProgressEvent, ProgressNotifier, SignatureGridPlacement, BATCH_JOB_RAM_GC_AFTER_TERMINAL_SECS,
 };
-
-const BATCH_JOB_TIMEOUT_EMIT_ERROR: &str =
-    "Tiempo máximo del trabajo (5 min) superado.";
 
 pub struct BatchJob {
     pub job_id: String,
@@ -232,7 +229,7 @@ fn gc_terminal_batch_ram(
     }
 }
 
-/// Vigía trabajos en SQLite `batch_job_enqueue`: si el encolado supera [`BATCH_JOB_MAX_WALL_CLOCK_SECS`],
+/// Vigía trabajos en SQLite `batch_job_enqueue`: si el encolado supera [`queue_max_wall_clock_secs`](crate::ports::queue_max_wall_clock_secs),
 /// cancela el token y marca la instantánea como `cancelled`.
 pub fn spawn_batch_job_timeout_watchdog(
     batch_cancel: Arc<Mutex<HashMap<String, CancellationToken>>>,
@@ -253,7 +250,7 @@ pub fn spawn_batch_job_timeout_watchdog(
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            let cutoff = now.saturating_sub(BATCH_JOB_MAX_WALL_CLOCK_SECS);
+            let cutoff = now.saturating_sub(batch_job_max_wall_clock_secs_i64());
 
             let stale_ids = match crate::adapters::persistence::queue_store::list_batch_job_ids_enqueued_before(
                 queue_sqlite_path.as_ref(),
@@ -267,6 +264,7 @@ pub fn spawn_batch_job_timeout_watchdog(
             };
 
             for id in stale_ids {
+                let timeout_msg = batch_job_timeout_user_message();
                 if let Ok(reg) = batch_cancel.lock() {
                     if let Some(t) = reg.get(&id) {
                         t.cancel();
@@ -276,7 +274,7 @@ pub fn spawn_batch_job_timeout_watchdog(
                     if let Some(s) = guard.get_mut(&id) {
                         if matches!(s.phase, BatchJobPhase::Queued | BatchJobPhase::Running) {
                             s.phase = BatchJobPhase::Cancelled;
-                            s.error = Some(BATCH_JOB_TIMEOUT_EMIT_ERROR.into());
+                            s.error = Some(timeout_msg.clone());
                             s.terminal_at_unix = Some(now);
                         }
                     }
@@ -295,7 +293,7 @@ pub fn spawn_batch_job_timeout_watchdog(
                             "nombre_archivo": "",
                             "path": "",
                             "output_path": serde_json::Value::Null,
-                            "error": BATCH_JOB_TIMEOUT_EMIT_ERROR,
+                            "error": timeout_msg,
                         }),
                     );
                 }

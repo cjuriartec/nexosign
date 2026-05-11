@@ -1,5 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 
+export type BatchJobMaxSecsConfig = {
+	effectiveSecs: number;
+	lockedByEnv: boolean;
+	storedSecs: number;
+};
+
+export async function getBatchJobMaxSecsConfig(): Promise<BatchJobMaxSecsConfig> {
+	return invoke<BatchJobMaxSecsConfig>("get_batch_job_max_secs_config");
+}
+
+export async function setBatchJobMaxSecs(secs: number): Promise<void> {
+	return invoke<void>("set_batch_job_max_secs", { secs });
+}
+
 export async function getLocalApiBaseUrl(): Promise<string> {
 	return invoke<string>("get_local_api_base_url");
 }

@@ -175,6 +175,55 @@ pub fn get_local_api_base_url() -> String {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BatchJobMaxSecsConfig {
+    /// Valor que usa el servidor (env > ajustes > default).
+    pub effective_secs: u64,
+    /// Si `NEXOSIGN_BATCH_JOB_MAX_SECS` está definida, el ajuste en UI no aplica hasta quitarla.
+    pub locked_by_env: bool,
+    /// Valor guardado en SQLite (o default si nunca se guardó).
+    pub stored_secs: u64,
+}
+
+#[tauri::command]
+pub fn get_batch_job_max_secs_config() -> BatchJobMaxSecsConfig {
+    use crate::ports::batch_job_snapshot::{
+        env_batch_job_max_secs_override, queue_max_wall_clock_secs, stored_queue_max_wall_clock_secs,
+    };
+    BatchJobMaxSecsConfig {
+        effective_secs: queue_max_wall_clock_secs(),
+        locked_by_env: env_batch_job_max_secs_override().is_some(),
+        stored_secs: stored_queue_max_wall_clock_secs(),
+    }
+}
+
+#[tauri::command]
+pub fn set_batch_job_max_secs(
+    secs: u64,
+    db_path: tauri::State<'_, OriginDbPath>,
+) -> Result<(), String> {
+    use crate::ports::batch_job_snapshot::{
+        env_batch_job_max_secs_override, init_stored_queue_max_secs_from_db, MAX_QUEUE_MAX_SECS,
+        MIN_QUEUE_MAX_SECS,
+    };
+    if env_batch_job_max_secs_override().is_some() {
+        return Err(
+            "NEXOSIGN_BATCH_JOB_MAX_SECS está definida en el entorno; tiene prioridad. "
+                .to_string()
+                + "Quítala para usar el valor de Ajustes.",
+        );
+    }
+    if !(MIN_QUEUE_MAX_SECS..=MAX_QUEUE_MAX_SECS).contains(&secs) {
+        return Err(format!(
+            "el valor debe estar entre {MIN_QUEUE_MAX_SECS} y {MAX_QUEUE_MAX_SECS} segundos"
+        ));
+    }
+    queue_store::set_batch_job_max_secs_stored(db_path.0.as_ref(), secs)?;
+    init_stored_queue_max_secs_from_db(Some(secs));
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClearLocalApiTempCacheResult {
     /// Se borró `{TMP}/nexosign-intent-uploads`.
     pub intent_uploads_removed: bool,
@@ -549,7 +598,7 @@ mod tests {
             inputs: vec![std::path::PathBuf::from("/tmp/a.pdf")],
             output_dir: None,
             staging_dir: Some(staging.clone()),
-            created_unix: now.saturating_sub(crate::ports::QUEUE_MAX_WALL_CLOCK_SECS + 5),
+            created_unix: now.saturating_sub(crate::ports::queue_max_wall_clock_secs() + 5),
         };
         let store = Arc::new(Mutex::new(HashMap::from([(rid.clone(), ent)])));
 

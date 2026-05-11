@@ -18,7 +18,8 @@
     "test:e2e:ui": "playwright test --ui",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test:all": "npm run test && npm run test:e2e && npm run test:rust",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "load-test:gen-pdfs": "node scripts/gen-load-test-pdfs.mjs"
   },
   "license": "MIT",
   "dependencies": {

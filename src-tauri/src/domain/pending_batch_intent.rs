@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::ports::QUEUE_MAX_WALL_CLOCK_SECS;
+use crate::ports::queue_max_wall_clock_secs;
 
 #[derive(Clone)]
 pub struct PendingBatchIntent {
@@ -51,6 +51,6 @@ impl PendingBatchIntent {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        now.saturating_sub(self.created_unix) > QUEUE_MAX_WALL_CLOCK_SECS
+        now.saturating_sub(self.created_unix) > queue_max_wall_clock_secs()
     }
 }
