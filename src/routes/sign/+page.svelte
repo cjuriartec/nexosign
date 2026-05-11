@@ -42,6 +42,7 @@
 	import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
 	import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 	import CheckIcon from "@lucide/svelte/icons/check";
+	import BanIcon from "@lucide/svelte/icons/ban";
 	import { cn } from "$lib/utils.js";
 	import BatchQueuePanel from "$lib/components/batch-queue-panel.svelte";
 	import { cancelActiveBatchJob } from "$lib/batch/cancel-active-batch";
@@ -57,6 +58,7 @@
 		setActiveBatchJobId,
 		upsertBatchQueueItem,
 		type BatchQueueItem,
+		TERMINAL_BATCH_STATUSES,
 	} from "$lib/stores/batch-queue.svelte";
 	import { SIGN_STEPS, TOTAL_STEPS, SIG_GRID_COLS, SIG_GRID_ROWS } from "$lib/sign/constants";
 	import { pdfBasenameFromPath } from "$lib/sign/path-util";
@@ -117,7 +119,28 @@
 		return fileLabel ? `${base} · ${fileLabel}` : base;
 	});
 
-	const executionFinished = $derived(batchQueue.activeBatchJobId !== null && progressPct >= 100);
+	const activeJobItem = $derived(
+		batchQueue.activeBatchJobId
+			? (batchQueue.items.find((q) => q.jobId === batchQueue.activeBatchJobId) ?? null)
+			: null,
+	);
+
+	/** Lote resuelto: progreso completo o estado terminal en cola (cancelado, error, finished). */
+	const jobSettled = $derived(
+		batchQueue.activeBatchJobId !== null &&
+			(progressPct >= 100 ||
+				(activeJobItem !== null && TERMINAL_BATCH_STATUSES.includes(activeJobItem.status))),
+	);
+
+	/** Solo mientras el backend aún admite cancelación explícita. */
+	const canCancelBatchJobStep5 = $derived(
+		Boolean(
+			batchQueue.activeBatchJobId &&
+				!jobSettled &&
+				activeJobItem &&
+				["preparing", "queued", "running"].includes(activeJobItem.status),
+		),
+	);
 
 	function logLineTone(line: string): "muted" | "ok" | "err" {
 		const lower = line.toLowerCase();
@@ -156,10 +179,11 @@
 	/** Tras un lote completado sin errores en el log, persistir middleware preferido si el usuario no definió uno. */
 	$effect(() => {
 		if (!isTauriRuntime()) return;
-		if (!executionFinished) {
+		if (!jobSettled) {
 			preferredLearnedForFinishedBatch = false;
 			return;
 		}
+		if (activeJobItem?.status === "cancelled" || activeJobItem?.status === "error") return;
 		if (jobLogHasErrors) return;
 		if (preferredLearnedForFinishedBatch) return;
 		preferredLearnedForFinishedBatch = true;
@@ -167,7 +191,7 @@
 	});
 
 	const resultStepSigning = $derived(
-		wizardStep === 5 && !executionFinished && (submitInFlight || busy || batchQueue.activeBatchJobId !== null),
+		wizardStep === 5 && !jobSettled && (submitInFlight || busy || batchQueue.activeBatchJobId !== null),
 	);
 
 	const wizardBarPct = $derived(Math.round((wizardStep / TOTAL_STEPS) * 100));
@@ -178,7 +202,7 @@
 		if (stepNum === wizardStep) return true;
 		if (stepHistoryLocked) return true;
 		if (stepNum < wizardStep) return false;
-		if (stepNum === 5 && executionFinished) return false;
+		if (stepNum === 5 && jobSettled) return false;
 		return true;
 	}
 
@@ -415,7 +439,7 @@
 		if (stepHistoryLocked) return;
 		if (step < 1 || step > TOTAL_STEPS) return;
 		if (step === wizardStep) return;
-		if (step > wizardStep && !(step === 5 && executionFinished)) return;
+		if (step > wizardStep && !(step === 5 && jobSettled)) return;
 		wizardStep = step;
 	}
 
@@ -661,13 +685,17 @@
 		{/if}
 		<div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
 			{#if wizardStep === 5}
-				{#if batchQueue.activeBatchJobId && !executionFinished}
+				{#if canCancelBatchJobStep5}
 					<Button type="button" variant="outline" size="sm" onclick={() => cancelJob()}>Cancelar cola</Button>
+				{:else if batchQueue.activeBatchJobId && !jobSettled && activeJobItem?.status === "cancelling"}
+					<p class="text-muted-foreground mr-auto max-w-[min(100%,18rem)] text-[11px] leading-snug">
+						Cancelando…
+					</p>
 				{/if}
 				<Button
 					type="button"
 					size="sm"
-					disabled={!executionFinished}
+					disabled={!jobSettled}
 					onclick={() => startNewSigningRound()}
 				>
 					Nuevo lote
@@ -1056,7 +1084,43 @@
 							{/if}
 						</div>
 					</div>
-				{:else if executionFinished && jobLogHasErrors}
+				{:else if activeJobItem?.status === "cancelled"}
+					<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
+						<div
+							class="border-border bg-muted/40 flex size-14 shrink-0 items-center justify-center rounded-full text-muted-foreground"
+						>
+							<BanIcon class="size-7" aria-hidden="true" />
+						</div>
+						<div class="min-w-0 flex-1 space-y-1">
+							<div class="flex flex-wrap items-center gap-2">
+								<Card.Title class="text-lg font-semibold tracking-tight">Lote cancelado</Card.Title>
+								<Badge variant="outline" class="h-5 text-[10px]">Cancelado</Badge>
+							</div>
+							<Card.Description class="text-xs leading-relaxed">
+								No se firmaron más documentos a partir de la cancelación. Puedes iniciar un nuevo lote cuando quieras.
+							</Card.Description>
+							{#if batchQueue.activeBatchJobId}
+								<p class="text-muted-foreground pt-1 font-mono text-[10px]">
+									ID trabajo: <span title={batchQueue.activeBatchJobId}>{batchQueue.activeBatchJobId}</span>
+								</p>
+							{/if}
+						</div>
+					</div>
+				{:else if activeJobItem?.status === "error"}
+					<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
+						<div
+							class="flex size-12 shrink-0 items-center justify-center rounded-full bg-destructive/15 text-destructive"
+						>
+							<TriangleAlertIcon class="size-7" aria-hidden="true" />
+						</div>
+						<div class="min-w-0 space-y-1">
+							<Card.Title class="text-base font-semibold">No se completó el lote</Card.Title>
+							<Card.Description class="text-xs leading-relaxed">
+								Revisa el registro para el detalle del fallo.
+							</Card.Description>
+						</div>
+					</div>
+				{:else if jobSettled && jobLogHasErrors}
 					<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
 						<div
 							class="flex size-12 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400"
@@ -1070,7 +1134,7 @@
 							</Card.Description>
 						</div>
 					</div>
-				{:else if executionFinished}
+				{:else if jobSettled}
 					<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
 						<div
 							class="flex size-14 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
@@ -1089,7 +1153,7 @@
 						</div>
 					</div>
 				{/if}
-				{#if batchQueue.activeBatchJobId && executionFinished}
+				{#if batchQueue.activeBatchJobId && jobSettled && activeJobItem?.status !== "cancelled"}
 					<p class="text-muted-foreground pt-2 font-mono text-[10px]">
 						ID trabajo: <span title={batchQueue.activeBatchJobId}>{batchQueue.activeBatchJobId}</span>
 					</p>
