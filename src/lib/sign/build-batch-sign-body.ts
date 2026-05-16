@@ -15,9 +15,12 @@ export async function buildBatchSignBodyFromWizard(opts: {
 	const body: BatchSignBody = {
 		cert_id_hex: opts.certIdHex.trim(),
 		inputs: opts.paths,
-		pin: opts.pin.trim(),
 		signature_grid: { col: opts.sigGridCol, row: opts.sigGridRow },
 	};
+	const pinTrim = opts.pin.trim();
+	if (pinTrim) {
+		body.pin = pinTrim;
+	}
 	try {
 		const seal = await renderSignatureSealPngBase64(opts.selectedCert);
 		if (seal) body.signature_seal_png_base64 = seal;

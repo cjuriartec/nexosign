@@ -58,16 +58,16 @@
 	<div>
 		<h1 class="text-3xl font-semibold tracking-tight">Certificados para firma</h1>
 		<p class="text-muted-foreground mt-1 max-w-2xl text-sm">
-			Certificados del token que puedes seleccionar al firmar. El PIN solo lo pedimos en el flujo de firma.
+			Certificados disponibles en tu DNIe o tarjeta. El PIN solo lo pedimos al firmar.
 		</p>
 	</div>
 
 	{#if !isTauriRuntime()}
 		<Card.Root>
 			<Card.Header>
-				<Card.Title>Solo escritorio</Card.Title>
+				<Card.Title>Solo en la app de escritorio</Card.Title>
 				<Card.Description>
-					Esta vista requiere la aplicación Tauri con acceso al controlador PKCS#11.
+					Para leer los certificados del lector necesitas la app de NexoSign instalada.
 				</Card.Description>
 			</Card.Header>
 		</Card.Root>
@@ -77,7 +77,7 @@
 				<div>
 					<Card.Title class="text-base">Certificados</Card.Title>
 					<Card.Description>
-						Listado actual desde tu tarjeta o token; se refresca solo cada pocos segundos y con Recargar.
+						Lista actual desde tu DNIe o tarjeta. Se refresca sola cada pocos segundos; también puedes pulsar «Recargar».
 					</Card.Description>
 				</div>
 				<Button variant="outline" size="sm" class="shrink-0 self-start" disabled={busy} onclick={() => loadCerts()}>

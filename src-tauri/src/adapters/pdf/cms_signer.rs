@@ -27,7 +27,7 @@ pub struct Pkcs11RsaCmsSigner {
 
 impl Pkcs11RsaCmsSigner {
     pub fn new(token: Arc<Pkcs11TokenManager>, cert_id_hex: String, cert_der: &[u8]) -> Result<Self, TokenError> {
-        let cert = Certificate::from_der(cert_der).map_err(|_| TokenError::BadCertId)?;
+        let cert = Certificate::from_der(cert_der).map_err(|_| TokenError::InvalidCertDer)?;
         let spki_der = cert
             .tbs_certificate
             .subject_public_key_info
@@ -74,7 +74,7 @@ impl Signer<pkcs1v15::Signature> for Pkcs11RsaCmsSigner {
 }
 
 /// Algunos controladores PKCS#11 devuelven la firma sin ceros iniciales; el CMS exige exactamente el tamaño del módulo.
-fn pad_rsa_signature_to_modulus(sig: Vec<u8>, modulus_octets: usize) -> Result<Vec<u8>, std::io::Error> {
+pub(crate) fn pad_rsa_signature_to_modulus(sig: Vec<u8>, modulus_octets: usize) -> Result<Vec<u8>, std::io::Error> {
     match sig.len().cmp(&modulus_octets) {
         Ordering::Equal => Ok(sig),
         Ordering::Less => {

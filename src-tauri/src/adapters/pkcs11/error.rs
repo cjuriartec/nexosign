@@ -11,24 +11,29 @@ pub enum TokenError {
     #[error(transparent)]
     Pkcs11(#[from] cryptoki::error::Error),
     /// Prefijo reconocible por la UI (`PKCS11_NO_TOKEN:`); el resto es texto para el usuario.
-    #[error("PKCS11_NO_TOKEN: no hay slots con token (¿tarjeta/DNIe insertado?)")]
+    /// La UI lo intercepta y muestra un mensaje amigable; aquí dejamos un texto sin jerga por si llega al toast.
+    #[error("PKCS11_NO_TOKEN: no se detecta el DNIe ni la tarjeta. Conecta el lector e inserta tu tarjeta.")]
     NoSlot,
-    #[error("índice de slot inválido")]
+    #[error("No se ha podido seleccionar el puerto del lector indicado.")]
     SlotIndex,
-    #[error("sin sesión PKCS#11 iniciada (PIN requerido para firmar)")]
+    #[error("Falta el PIN para firmar.")]
     NotLoggedIn,
-    #[error("PIN vacío")]
+    #[error("Introduce un PIN para firmar.")]
     EmptyPin,
     #[error("PIN incorrecto")]
     PinIncorrect,
     #[error("PIN bloqueado (demasiados intentos fallidos)")]
     PinLocked,
-    #[error("identificador de certificado inválido")]
+    #[error("Identificador de certificado no válido.")]
     BadCertId,
-    #[error("no se encontró clave privada para el certificado indicado")]
+    #[error("certificado del almacén de Windows; no usa el token PKCS#11")]
+    WinMyNotPkcs11,
+    #[error("no se pudo interpretar el certificado X.509")]
+    InvalidCertDer,
+    #[error("No se ha encontrado la clave privada del certificado seleccionado en la tarjeta.")]
     NoPrivateKey,
-    #[error("tipo de clave no soportado para firma PAdES en esta fase (solo RSA)")]
+    #[error("Tipo de clave no compatible para la firma (de momento solo se admite RSA).")]
     UnsupportedKeyType,
-    #[error("estado interno bloqueado")]
+    #[error("Estado interno bloqueado; cierra y vuelve a abrir NexoSign.")]
     MutexPoisoned,
 }

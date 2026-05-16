@@ -14,19 +14,19 @@ export type EmptySigningCertsHelp = {
 	description: string;
 };
 
-/** Mensaje único cuando no hay certificados de firma: distingue “sin token” vs “token sin cert de firma”. */
+/** Mensaje único cuando no hay certificados de firma: distingue “sin tarjeta” vs “tarjeta sin certificado de firma”. */
 export function emptySigningCertsHelp(slotsWithToken: number): EmptySigningCertsHelp {
 	if (slotsWithToken <= 0) {
 		return {
-			title: "No se detecta el token de firma",
+			title: "No se detecta el DNIe ni la tarjeta de firma",
 			description:
-				"Conecte el lector, inserte la tarjeta y espere unos segundos; la lista se actualiza sola mientras este paso está abierto. Si sigue igual, revise el middleware PKCS#11 en Ajustes o la variable NEXOSIGN_PKCS11_MODULE.",
+				"Conecta el lector e inserta el DNIe (o tu tarjeta). Espera unos segundos: la lista se actualiza sola mientras estás en esta pantalla. Si no aparece, revisa que el lector esté bien conectado o abre Ajustes para comprobar el controlador del lector.",
 		};
 	}
 	return {
-		title: "Dispositivo detectado, sin certificado de firma",
+		title: "Lector conectado, pero sin certificado de firma",
 		description:
-			"El lector reconoce un token, pero no aparece un certificado de firma electrónica (solo autenticación u otro perfil). Seleccione el certificado de firma del DNIe o token en el chip.",
+			"El lector reconoce tu DNIe o tarjeta, pero no encontramos ningún certificado de firma electrónica (puede que solo haya certificados de autenticación). Comprueba que has insertado la tarjeta correcta y vuelve a intentarlo.",
 	};
 }
 

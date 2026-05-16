@@ -438,7 +438,7 @@
 	<div>
 		<h1 class="text-3xl font-semibold tracking-tight">Ajustes</h1>
 		<p class="text-muted-foreground mt-1 text-sm">
-			Tema, tiempo máximo de cola, PKCS#11, sitios permitidos, caché del servicio local y comprobación del servicio.
+			Tema, tiempo máximo de cola, lector de tarjetas, sitios permitidos, caché del servicio local y comprobación del servicio.
 		</p>
 	</div>
 
@@ -507,9 +507,13 @@
 		<Card.Root>
 			<Card.Header class="flex flex-row items-start justify-between space-y-0">
 				<div>
-					<Card.Title class="text-base">PKCS#11</Card.Title>
+					<Card.Title class="text-base">Lector de DNIe y tarjetas</Card.Title>
 					<Card.Description>
-						Selector del controlador y orden de rutas en la tabla inferior.
+						Aquí eliges el <strong>controlador del lector</strong> (PKCS#11) para DNIe o tarjeta. Si no estás
+						seguro, deja «Automático». En <strong>Windows</strong>, al listar certificados para firmar también
+						pueden aparecer los del almacén <strong>Personal</strong> (MY) con clave RSA CNG; eso no se
+						configura en esta tabla. Los <code class="bg-muted rounded px-1 font-mono text-[11px]">.pfx</code>
+						solo en disco siguen sin listarse salvo que uses un middleware PKCS#11 o los instales en MY.
 					</Card.Description>
 				</div>
 				<CpuIcon class="text-muted-foreground size-5" />
@@ -517,7 +521,7 @@
 			<Card.Content class="space-y-6">
 				<div class="flex flex-col gap-3 sm:flex-row sm:items-end">
 					<div class="grid min-w-0 flex-1 gap-2">
-						<Label for="p11-preferred">Middleware</Label>
+						<Label for="p11-preferred">Controlador del lector</Label>
 						<Select.Root
 							type="single"
 							bind:value={preferredChoice}
@@ -558,19 +562,21 @@
 				{#if preferredChoice === "__auto__"}
 					<p class="text-muted-foreground text-xs leading-relaxed">
 						{#if autoResolvedModulePath}
-							Seleccionado:
+							Se está usando:
 							<code class="bg-muted ml-1 rounded px-1.5 py-0.5 font-mono text-[11px]">{autoResolvedModulePath}</code>
 						{:else}
-							Aún no hay módulo PKCS#11 activo (inserta el token o revisa las rutas).
+							Todavía no hay ningún controlador activo: conecta el lector con el DNIe o la tarjeta dentro,
+							o añade abajo la ruta del controlador del fabricante.
 						{/if}
 					</p>
 				{/if}
 
 				<div class="space-y-3 border-t pt-4">
 					<div>
-						<p class="text-sm font-medium">Rutas guardadas</p>
+						<p class="text-sm font-medium">Controladores instalados (rutas)</p>
 						<p class="text-muted-foreground mt-1 text-xs leading-relaxed">
-							La primera fila tiene más prioridad cuando eliges «Automático» arriba. Añade rutas absolutas y ordénalas arrastrando las filas por el asa.
+							Rutas en disco del controlador del lector que NexoSign probará en orden. La primera fila se usa
+							primero con «Automático». Añade rutas absolutas y ordénalas arrastrando por el asa.
 						</p>
 					</div>
 
@@ -639,12 +645,12 @@
 							</Table.Root>
 						</div>
 					{:else}
-						<p class="text-muted-foreground text-sm">No hay rutas guardadas (se usarán solo las incorporadas).</p>
+						<p class="text-muted-foreground text-sm">No hay rutas guardadas (se usarán las incluidas por defecto).</p>
 					{/if}
 
 					<div class="flex flex-col gap-2 sm:flex-row sm:items-end">
 						<div class="grid min-w-0 flex-1 gap-2">
-							<Label for="new-p11-path">Añadir ruta absoluta al controlador</Label>
+							<Label for="new-p11-path">Añadir ruta del controlador (archivo del fabricante del lector)</Label>
 							<Input
 								id="new-p11-path"
 								bind:value={newDriverPath}
@@ -659,7 +665,7 @@
 					</div>
 
 					<Button variant="outline" size="sm" disabled={pathsBusy} onclick={() => resetDriverPathsDefaults()}>
-						Restaurar lista incorporada por sistema
+						Restaurar lista por defecto
 					</Button>
 				</div>
 			</Card.Content>
@@ -667,9 +673,10 @@
 
 		<Card.Root>
 			<Card.Header>
-				<Card.Title class="text-base">Diagnóstico de slots</Card.Title>
+				<Card.Title class="text-base">Diagnóstico del lector</Card.Title>
 				<Card.Description>
-					Vista PKCS#11 según el criterio NexoSign (token presente en el slot).
+					Comprueba qué ve NexoSign en el lector: muestra los puertos detectados e indica en cuáles hay un
+					DNIe o tarjeta insertados.
 				</Card.Description>
 			</Card.Header>
 			<Card.Content class="space-y-4">
@@ -678,18 +685,22 @@
 				</Button>
 				{#if pkcsDiag}
 					<div class="text-muted-foreground flex flex-wrap gap-2 text-xs">
-						<Badge variant="outline">estrictos: {pkcsDiag.count_pkcs11_get_slot_list_true}</Badge>
-						<Badge variant="secondary">utilizables: {pkcsDiag.count_effective_for_nexosign}</Badge>
+						<Badge variant="outline" title="Puertos del lector detectados por el controlador.">
+							Puertos detectados: {pkcsDiag.count_pkcs11_get_slot_list_true}
+						</Badge>
+						<Badge variant="secondary" title="Puertos con DNIe o tarjeta insertados listos para firmar.">
+							Con tarjeta lista: {pkcsDiag.count_effective_for_nexosign}
+						</Badge>
 					</div>
 					<ScrollArea.Root class="h-[220px] rounded-md border">
 						<div class="p-4">
 							<ul class="space-y-2 text-sm">
 								{#each pkcsDiag.slots as s}
 									<li class="border-b pb-2 last:border-0">
-										<span class="font-medium">Slot {s.slot_id}</span>
+										<span class="font-medium">Puerto {s.slot_id}</span>
 										· {s.slot_description.trim()}
 										<span class="text-muted-foreground">
-											· token_present={s.token_present_in_slot_info}</span
+											· {s.token_present_in_slot_info ? "con tarjeta" : "vacío"}</span
 										>
 										{#if s.token_label}
 											<div class="text-muted-foreground text-xs">{s.token_label}</div>

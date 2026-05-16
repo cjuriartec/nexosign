@@ -192,6 +192,12 @@ La app de escritorio y otros procesos **locales** pueden usar rutas HTTP adicion
 
 Si el DNIe funciona en el navegador del sistema pero NexoSign muestra **0 slots**, suele ser **middleware PKCS#11 distinto**: prueba el del **proveedor oficial del DNIe** (FNMT/CCN) con `NEXOSIGN_PKCS11_MODULE`. OpenSC a veces no expone la tarjeta aunque el USB sí esté reconocido.
 
+### Almacén de Windows (MY) y .pfx
+
+En **Windows**, además de PKCS#11, NexoSign lista certificados de **firma** del almacén **Personal (MY)** con clave **RSA CNG** (se fusionan en la misma lista que el token). El identificador empieza por `winmy:` + huella SHA-1. La UI distingue si hace falta PIN en la app o si la firma delega en el almacén de credenciales de Windows (ver **[`docs/certificados-pkcs11-y-windows.md`](./docs/certificados-pkcs11-y-windows.md)**).
+
+Un **`.pfx` solo en disco** o **solo importado al almacén sin ser RSA CNG** puede no aparecer o no firmar con este flujo. Sigue siendo válido usar **middleware PKCS#11** o hardware con su `.dll`.
+
 ### Empaquetado (MSI / notarización macOS)
 
 Guías: **[`docs/distribucion-windows.md`](./docs/distribucion-windows.md)** y **[`docs/distribucion-macos.md`](./docs/distribucion-macos.md)**.

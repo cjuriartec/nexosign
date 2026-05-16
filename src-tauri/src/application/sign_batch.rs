@@ -58,7 +58,7 @@ pub fn process_batch<P: ProgressNotifier>(
             file_name: String::new(),
             path: String::new(),
             output_path: None,
-            error: Some(format!("Sesión PKCS#11 en el proceso de firma: {e}")),
+            error: Some(format!("Sesión de firma en el proceso de firma: {e}")),
         });
         signer.end_signed_session();
         return signed_outputs;
@@ -230,7 +230,7 @@ mod tests {
         assert!(out.is_empty());
         assert_eq!(signer.end_calls.load(Ordering::SeqCst), 1);
         let evs = progress.events.lock().unwrap();
-        assert!(evs.iter().any(|e| e.error.as_deref() == Some("Sesión PKCS#11 en el proceso de firma: pin inválido")));
+        assert!(evs.iter().any(|e| e.error.as_deref() == Some("Sesión de firma en el proceso de firma: pin inválido")));
     }
 
     #[test]

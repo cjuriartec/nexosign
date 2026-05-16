@@ -117,7 +117,7 @@ pub fn try_enqueue_batch_sign(
     };
 
     if let Some(ref pin_raw) = body.pin {
-        if pin_raw.trim().is_empty() {
+        if pin_raw.trim().is_empty() && !body.cert_id_hex.trim().starts_with("winmy:") {
             return Err(LocalApiOpError::bad_request("PIN vacío"));
         }
     }
@@ -180,7 +180,7 @@ pub fn try_enqueue_batch_sign(
 
     let job = BatchJob {
         job_id: job_id.clone(),
-        cert_id_hex: body.cert_id_hex,
+        cert_id_hex: body.cert_id_hex.trim().to_owned(),
         inputs: body.inputs,
         cancel,
         output_dir,

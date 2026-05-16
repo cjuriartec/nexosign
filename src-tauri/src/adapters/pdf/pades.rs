@@ -18,15 +18,22 @@ use der::{Any, AnyRef, Decode, Encode};
 use image::GenericImageView;
 use lopdf::{Dictionary, Document, IncrementalDocument, Object, Stream, StringFormat};
 use sha2::{Digest, Sha256};
-use spki::AlgorithmIdentifierOwned;
+use spki::{AlgorithmIdentifierOwned, DynSignatureAlgorithmIdentifier};
 use x509_cert::Certificate;
 use x509_cert::builder::Builder;
 use chrono;
+
+use signature::{Keypair, Signer};
 
 use crate::adapters::pdf::cms_signer::Pkcs11RsaCmsSigner;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::application::errors::SignBatchError;
 use crate::ports::pdf_pades_signer::{PdfPadesSigner, SignatureGridPlacement};
+
+#[cfg(windows)]
+use crate::adapters::pdf::win_my_cms_signer::WinMyRsaCmsSigner;
+#[cfg(windows)]
+use crate::domain::signing_cert::WIN_MY_CERT_ID_PREFIX;
 
 /// Rejilla visible en la primera página (ancho × alto).
 const SIG_GRID_COLS: f64 = 3.0;
@@ -132,7 +139,7 @@ fn patch_pdf_contents_der(buf: &mut Vec<u8>, cms_der: &[u8]) -> Result<(), SignB
 fn map_signer_info_build_error(e: x509_cert::builder::Error) -> String {
     match e {
         x509_cert::builder::Error::Signature(inner) => format!(
-            "Error de firma con el token (PKCS#11 / RSA): {inner} · Comprueba PIN, sesión del lector y que el certificado sea RSA con SHA-256 RSA PKCS#1."
+            "No se ha podido firmar con el DNIe o la tarjeta: {inner} · Revisa el PIN, vuelve a conectar el lector y comprueba que el certificado sea de tipo RSA con SHA-256."
         ),
         x509_cert::builder::Error::Asn1(inner) => format!(
             "Error DER al construir el CMS (SignerInfo): {inner} · Suele ser atributos firmados o codificación de la firma; conserva este texto para soporte."
@@ -149,11 +156,18 @@ fn signed_data_version_nexosign_bes() -> CmsVersion {
     CmsVersion::V1
 }
 
-fn build_cms_signed_data(
-    signer: &Pkcs11RsaCmsSigner,
+use rsa::pkcs1v15::VerifyingKey;
+
+fn build_cms_signed_data<S>(
+    signer: &S,
     cert_der: &[u8],
     pdf_digest: &[u8; 32],
-) -> Result<Vec<u8>, SignBatchError> {
+) -> Result<Vec<u8>, SignBatchError>
+where
+    S: Signer<rsa::pkcs1v15::Signature>
+        + DynSignatureAlgorithmIdentifier
+        + Keypair<VerifyingKey = VerifyingKey<Sha256>>,
+{
     let cert = Certificate::from_der(cert_der).map_err(|e| SignBatchError::Pades(format!("cert DER: {e}")))?;
     let sid = SignerIdentifier::IssuerAndSerialNumber(IssuerAndSerialNumber {
         issuer: cert.tbs_certificate.issuer.clone(),
@@ -826,6 +840,90 @@ pub fn sign_pdf_pades_bes(
     ))
 }
 
+/// Firma con certificado del almacén **MY** (Windows, RSA CNG).
+#[cfg(windows)]
+pub fn sign_pdf_pades_bes_win_my(
+    cert_id_hex: &str,
+    input_path: &Path,
+    output_path: &Path,
+    placement: SignatureGridPlacement,
+    seal_png: Option<&[u8]>,
+) -> Result<(), SignBatchError> {
+    let win = Arc::new(unsafe {
+        WinMyRsaCmsSigner::from_cert_id_hex(cert_id_hex)
+            .map_err(|e| SignBatchError::Signer(e.to_string()))?
+    });
+    let cert_der = win.cert_der.clone();
+    let pdf_bytes = std::fs::read(input_path).map_err(|e| SignBatchError::Io {
+        path: input_path.to_path_buf(),
+        source: e,
+    })?;
+
+    let page_box = read_first_page_box(&pdf_bytes)?;
+    let rect = if let Some(png) = seal_png {
+        match seal_png_dimensions(png) {
+            Ok((iw, ih)) if iw > 0 && ih > 0 => rect_from_grid_with_aspect(
+                page_box,
+                placement,
+                f64::from(iw) / f64::from(ih),
+            ),
+            _ => rect_from_grid(page_box, placement),
+        }
+    } else {
+        rect_from_grid(page_box, placement)
+    };
+
+    let signer_name = get_signer_name_from_der(&cert_der);
+    let mut der_cap = 8192usize;
+
+    for _ in 0..25 {
+        let mut doc: IncrementalDocument = pdf_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|e| SignBatchError::Pades(format!("PDF lectura: {e}")))?;
+
+        append_signature_objects(&mut doc, der_cap, rect, &signer_name, seal_png)?;
+
+        let mut buf = Vec::new();
+        doc.save_to(&mut buf)
+            .map_err(|e| SignBatchError::Pades(format!("save incremental: {e}")))?;
+
+        patch_byte_range(&mut buf)?;
+
+        let digest = digest_pdf_pkcs7_detached(&buf)?;
+
+        let cms_der = build_cms_signed_data(win.as_ref(), &cert_der, &digest)?;
+
+        if cms_der.len() <= der_cap {
+            patch_pdf_contents_der(&mut buf, &cms_der)?;
+            if let Some(parent) = output_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| SignBatchError::Io {
+                    path: parent.to_path_buf(),
+                    source: e,
+                })?;
+            }
+            let mut f = File::create(output_path).map_err(|e| SignBatchError::Io {
+                path: output_path.to_path_buf(),
+                source: e,
+            })?;
+            f.write_all(&buf).map_err(|e| SignBatchError::Io {
+                path: output_path.to_path_buf(),
+                source: e,
+            })?;
+            return Ok(());
+        }
+
+        der_cap = cms_der.len().max(4096);
+        if der_cap != cms_der.len() {
+            der_cap = cms_der.len();
+        }
+    }
+
+    Err(SignBatchError::Pades(
+        "no convergió el tamaño reservado para CMS".into(),
+    ))
+}
+
 /// Adaptador PKCS#11 para el puerto [`PdfPadesSigner`].
 pub struct Pkcs11PdfPadesSigner {
     pub token: Arc<Pkcs11TokenManager>,
@@ -867,6 +965,48 @@ impl PdfPadesSigner for Pkcs11PdfPadesSigner {
 
     fn end_signed_session(&self) {
         let _ = self.token.logout();
+    }
+}
+
+/// Enruta firma entre PKCS#11 y almacén MY de Windows.
+#[cfg(windows)]
+pub struct CompositePdfPadesSigner {
+    pub pkcs11: Pkcs11PdfPadesSigner,
+}
+
+#[cfg(windows)]
+impl PdfPadesSigner for CompositePdfPadesSigner {
+    fn ensure_signed_session(&self, pin: Option<&str>, cert_id_hex: &str) -> Result<(), String> {
+        if cert_id_hex.starts_with(WIN_MY_CERT_ID_PREFIX) {
+            return Ok(());
+        }
+        self.pkcs11.ensure_signed_session(pin, cert_id_hex)
+    }
+
+    fn sign_pdf_pades_bes(
+        &self,
+        cert_id_hex: &str,
+        input_path: &Path,
+        output_path: &Path,
+        placement: SignatureGridPlacement,
+        seal_png: Option<&[u8]>,
+    ) -> Result<(), String> {
+        if cert_id_hex.starts_with(WIN_MY_CERT_ID_PREFIX) {
+            return sign_pdf_pades_bes_win_my(
+                cert_id_hex,
+                input_path,
+                output_path,
+                placement,
+                seal_png,
+            )
+            .map_err(|e| e.to_string());
+        }
+        self.pkcs11
+            .sign_pdf_pades_bes(cert_id_hex, input_path, output_path, placement, seal_png)
+    }
+
+    fn end_signed_session(&self) {
+        self.pkcs11.end_signed_session();
     }
 }
 

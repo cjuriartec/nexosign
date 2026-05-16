@@ -10,6 +10,8 @@ use tauri::Emitter;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(windows)]
+use crate::adapters::pdf::pades::CompositePdfPadesSigner;
 use crate::adapters::pdf::pades::Pkcs11PdfPadesSigner;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::application::sign_batch::{process_batch, SignBatchInput};
@@ -347,7 +349,15 @@ pub fn spawn_batch_worker(
                     pin: job.pin,
                     seal_png: job.seal_png,
                 };
-                let signer = Arc::new(Pkcs11PdfPadesSigner { token: token_c });
+                #[cfg(windows)]
+                let signer: Arc<dyn crate::ports::pdf_pades_signer::PdfPadesSigner> = Arc::new(
+                    CompositePdfPadesSigner {
+                        pkcs11: Pkcs11PdfPadesSigner { token: token_c.clone() },
+                    },
+                );
+                #[cfg(not(windows))]
+                let signer: Arc<dyn crate::ports::pdf_pades_signer::PdfPadesSigner> =
+                    Arc::new(Pkcs11PdfPadesSigner { token: token_c });
                 let mut outputs = process_batch(input, signer, notifier);
                 let cancelled = cancel_token.is_cancelled();
                 let qpath = qdb.as_ref().map(|a| a.as_path());

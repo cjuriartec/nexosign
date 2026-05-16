@@ -199,6 +199,8 @@
 
 	const selectedCert = $derived(certs.find((c) => c.id_hex === certId) ?? null);
 
+	const pinRequired = $derived(pkcs11.pinRequiredInApp(selectedCert));
+
 	function isStepNavDisabled(stepNum: number): boolean {
 		if (stepNum === wizardStep) return true;
 		if (stepHistoryLocked) return true;
@@ -275,7 +277,7 @@
 		}
 	}
 
-	/** Libera el driver del token en memoria y vuelve a enumerar certificados. */
+	/** Cierra la conexión actual con el lector y vuelve a enumerar los certificados disponibles. */
 	async function resetPkcs11ConnectionAndRefresh() {
 		if (!isTauriRuntime()) return;
 		busy = true;
@@ -454,9 +456,9 @@
 			toast.error("No hay PDFs.");
 			return;
 		}
-		if (!pin.trim()) {
-			toast.error("Indica el PIN del token para firmar.");
-			pinError = "Introduce el PIN del token.";
+		if (pinRequired && !pin.trim()) {
+			toast.error("Introduce el PIN de tu DNIe o tarjeta para firmar.");
+			pinError = "Introduce tu PIN.";
 			return;
 		}
 
@@ -472,7 +474,7 @@
 		};
 		prependBatchQueueItem(pendingQueueItem);
 
-		if (isTauriRuntime()) {
+		if (isTauriRuntime() && pinRequired) {
 			try {
 				await pkcs11.pkcs11VerifyPin(pin.trim(), certId.trim());
 				toast.success("PIN correcto");
@@ -485,7 +487,7 @@
 					toast.error("PIN incorrecto.");
 				} else if (msg.includes("PIN bloqueado")) {
 					pinError =
-						"El PIN está bloqueado por demasiados intentos fallidos. Desbloquea el token según las instrucciones del fabricante.";
+						"El PIN está bloqueado por varios intentos fallidos. Sigue las instrucciones de tu DNIe o de tu tarjeta para desbloquearlo (suele requerir el código PUK del emisor).";
 					toast.error(pinError);
 				} else {
 					pinError = msg;
@@ -544,7 +546,7 @@
 					detail.toLowerCase().includes("sesión")
 				) {
 					pinError =
-						"No se pudo desbloquear el token con ese PIN o la sesión del lector está bloqueada.";
+						"No hemos podido firmar con ese PIN. Revisa el PIN o vuelve a conectar el lector con la tarjeta dentro.";
 					toast.error(pinError);
 				} else {
 					toast.error(detail);
@@ -557,7 +559,7 @@
 					);
 				} else if (e.status === 401) {
 					pinError =
-						"No se pudo desbloquear el token con ese PIN o la sesión del lector está bloqueada.";
+						"No hemos podido firmar con ese PIN. Revisa el PIN o vuelve a conectar el lector con la tarjeta dentro.";
 					toast.error(pinError);
 				} else if (e.status === 403 && String(detail).toLowerCase().includes("origin")) {
 					toast.error(
@@ -733,7 +735,11 @@
 				<Button
 					type="button"
 					size="sm"
-					disabled={busy || submitInFlight || paths.length === 0 || !certId.trim() || !pin.trim()}
+					disabled={busy ||
+						submitInFlight ||
+						paths.length === 0 ||
+						!certId.trim() ||
+						(pinRequired && !pin.trim())}
 					onclick={() => void submitBatch()}
 					class="gap-1"
 				>
@@ -783,7 +789,7 @@
 		<Alert class="py-2">
 			<FileStackIcon class="size-4" />
 			<AlertTitle class="text-sm">Solo en la app de escritorio</AlertTitle>
-			<AlertDescription class="text-xs">Archivos, lector y token requieren Tauri.</AlertDescription>
+			<AlertDescription class="text-xs">Para elegir PDF y firmar con el DNIe o la tarjeta necesitas la app de NexoSign instalada.</AlertDescription>
 		</Alert>
 	{/if}
 
@@ -975,7 +981,15 @@
 			<Card.Header class="border-border/50 border-b pb-3">
 				<Card.Title class="text-base font-semibold">Confirmar firma</Card.Title>
 				<Card.Description class="text-xs leading-relaxed">
-					Comprueba el resumen e introduce el PIN del token. El PIN no se almacena.
+					{#if pinRequired}
+						Comprueba el resumen e introduce el PIN de tu DNIe o tarjeta. El PIN no se guarda.
+					{:else if selectedCert?.source === "win_my" && selectedCert.pin_ui === "os_may_prompt"}
+						Comprueba el resumen. Al firmar, Windows o el dispositivo pueden pedir confirmación o PIN.
+					{:else if selectedCert?.source === "win_my"}
+						Comprueba el resumen. Este certificado usa el almacén de Windows: no hace falta PIN en NexoSign.
+					{:else}
+						Comprueba el resumen antes de firmar.
+					{/if}
 				</Card.Description>
 			</Card.Header>
 			<Card.Content class="px-4 pt-4 pb-4 text-sm sm:px-5">
@@ -1027,48 +1041,58 @@
 						</dl>
 						<div class="border-border/50 bg-muted/25 border-t">
 							<div class="px-3 pb-3 pt-3">
-								<Label for="pin-confirm" class="text-xs font-medium">PIN del token</Label>
-								<div class="relative mt-1.5">
-									<Input
-										id="pin-confirm"
-										type={pinVisible ? "text" : "password"}
-										autocomplete="off"
-										bind:value={pin}
-										placeholder="PIN"
-										class={cn(
-											"h-10 w-full pr-10",
-											pinError ? "border-destructive focus-visible:ring-destructive" : "",
-										)}
-										oninput={() => {
-											pinError = null;
-										}}
-										onkeydown={(e) => {
-											if (e.key === "Enter") {
-												e.preventDefault();
-												void submitBatch();
-											}
-										}}
-									/>
-									<Button
-										type="button"
-										variant="ghost"
-										size="icon"
-										class="text-muted-foreground absolute right-0.5 top-1/2 h-9 w-9 -translate-y-1/2"
-										aria-label={pinVisible ? "Ocultar PIN" : "Mostrar PIN"}
-										title={pinVisible ? "Ocultar PIN" : "Mostrar PIN"}
-										onclick={() => {
-											pinVisible = !pinVisible;
-										}}
-									>
-										{#if pinVisible}
-											<EyeOffIcon class="h-4 w-4" />
+								{#if pinRequired}
+									<Label for="pin-confirm" class="text-xs font-medium">PIN del DNIe o de la tarjeta</Label>
+									<div class="relative mt-1.5">
+										<Input
+											id="pin-confirm"
+											type={pinVisible ? "text" : "password"}
+											autocomplete="off"
+											bind:value={pin}
+											placeholder="PIN"
+											class={cn(
+												"h-10 w-full pr-10",
+												pinError ? "border-destructive focus-visible:ring-destructive" : "",
+											)}
+											oninput={() => {
+												pinError = null;
+											}}
+											onkeydown={(e) => {
+												if (e.key === "Enter") {
+													e.preventDefault();
+													void submitBatch();
+												}
+											}}
+										/>
+										<Button
+											type="button"
+											variant="ghost"
+											size="icon"
+											class="text-muted-foreground absolute right-0.5 top-1/2 h-9 w-9 -translate-y-1/2"
+											aria-label={pinVisible ? "Ocultar PIN" : "Mostrar PIN"}
+											title={pinVisible ? "Ocultar PIN" : "Mostrar PIN"}
+											onclick={() => {
+												pinVisible = !pinVisible;
+											}}
+										>
+											{#if pinVisible}
+												<EyeOffIcon class="h-4 w-4" />
+											{:else}
+												<EyeIcon class="h-4 w-4" />
+											{/if}
+										</Button>
+									</div>
+									{#if pinError}
+										<p class="mt-2 text-xs font-medium text-destructive">{pinError}</p>
+									{/if}
+								{:else if selectedCert?.source === "win_my"}
+									<p class="text-muted-foreground text-xs leading-relaxed">
+										{#if selectedCert.pin_ui === "os_may_prompt"}
+											Windows o el dispositivo pueden pedir confirmación o PIN durante la firma.
 										{:else}
-											<EyeIcon class="h-4 w-4" />
+											No hace falta introducir PIN aquí; la firma usa el almacén de credenciales de Windows.
 										{/if}
-									</Button>
-								</div>
-								{#if pinError}
-									<p class="mt-2 text-xs font-medium text-destructive">{pinError}</p>
+									</p>
 								{/if}
 							</div>
 						</div>

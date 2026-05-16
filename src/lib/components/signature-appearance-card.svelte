@@ -471,7 +471,7 @@
 					{/each}
 				</div>
 				{#if !previewCert}
-					<p class="text-muted-foreground text-[9px] leading-tight">Sin token: vista de ejemplo.</p>
+					<p class="text-muted-foreground text-[9px] leading-tight">Sin DNIe ni tarjeta: vista de ejemplo.</p>
 				{/if}
 			</div>
 

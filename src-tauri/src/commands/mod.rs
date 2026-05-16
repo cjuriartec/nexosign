@@ -461,7 +461,17 @@ pub async fn list_signing_certificates(
     state: tauri::State<'_, Pkcs11Store>,
 ) -> Result<Vec<SigningCertSummary>, String> {
     let mgr = Arc::clone(&*state);
-    pkcs11_blocking(move || mgr.list_signing_certificates().map_err(|e| e.to_string())).await
+    pkcs11_blocking(move || {
+        #[allow(unused_mut)]
+        let mut v = mgr.list_signing_certificates().map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        match crate::adapters::windows_cert_store::list_my_store_signing_rsa_certs() {
+            Ok(mut w) => v.append(&mut w),
+            Err(e) => tracing::warn!(error = %e, "listado certificados almacén Windows MY"),
+        }
+        Ok(v)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -477,6 +487,7 @@ pub async fn pkcs11_login(
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
+            Some(hex) if crate::domain::signing_cert::is_win_my_cert_id(hex) => Ok(()),
             Some(hex) => mgr.login_for_certificate(pin, hex),
             None => mgr.login(pin),
         }
@@ -493,7 +504,11 @@ pub async fn pkcs11_verify_pin(
 ) -> Result<(), String> {
     let mgr = Arc::clone(&*state);
     pkcs11_blocking(move || {
-        mgr.verify_pin(pin, &cert_id_hex).map_err(|e| e.to_string())
+        let cert_id = cert_id_hex.trim();
+        if crate::domain::signing_cert::is_win_my_cert_id(cert_id) {
+            return Ok(());
+        }
+        mgr.verify_pin(pin, cert_id).map_err(|e| e.to_string())
     })
     .await
 }

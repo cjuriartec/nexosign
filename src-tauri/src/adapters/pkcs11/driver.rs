@@ -9,12 +9,14 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum DriverPathError {
+    /// Variable de entorno reservada a usuarios avanzados; el mensaje conserva el nombre
+    /// para que pueda diagnosticarse, pero evita jerga adicional.
     #[error(
-        "NEXOSIGN_PKCS11_MODULE apunta a un archivo que no existe: {0}"
+        "La ruta indicada en NEXOSIGN_PKCS11_MODULE no existe: {0}. Corrige la ruta o elimina la variable para usar el controlador detectado automáticamente."
     )]
     EnvPathMissing(PathBuf),
     #[error(
-        "No se encontró ningún módulo PKCS#11. Instala OpenSC/DNIe, define NEXOSIGN_PKCS11_MODULE o configura rutas en la base de datos."
+        "No encontramos el controlador del lector. Instala el software del fabricante (por ejemplo el del DNIe o OpenSC) o añade su ruta en Ajustes → «Lector de DNIe y tarjetas»."
     )]
     NotFound,
 }

@@ -17,7 +17,7 @@ use crate::adapters::persistence::Pkcs11PathsDb;
 use crate::adapters::pkcs11::driver::find_all_pkcs11_modules;
 use crate::adapters::pkcs11::error::TokenError;
 use crate::domain::cert_filter::der_is_signing_certificate;
-use crate::domain::signing_cert::SigningCertSummary;
+use crate::domain::signing_cert::{is_win_my_cert_id, SigningCertSource, SigningCertSummary, SigningPinUi};
 
 /// Lista de slots donde PKCS#11 considera que hay token insertado.
 ///
@@ -122,7 +122,7 @@ fn cert_der_and_id_for_hex(
             Some(ref id) if !id.is_empty() => bytes_to_hex(id),
             _ => bytes_to_hex(&der[..der.len().min(32)]),
         };
-        if id_hex == cert_id_hex {
+        if id_hex.eq_ignore_ascii_case(cert_id_hex.trim()) {
             let raw_id = id_bytes.unwrap_or_else(|| der[..der.len().min(32)].to_vec());
             return Ok((der, raw_id));
         }
@@ -183,6 +183,8 @@ fn collect_signing_certs_from_session(
             id_hex,
             label,
             subject_dn: subject_dn_from_der(&der),
+            source: SigningCertSource::Pkcs11,
+            pin_ui: SigningPinUi::RequiredInApp,
         });
     }
 
@@ -600,6 +602,10 @@ fn ensure_pkcs11_and_session_for_cert(
     inner: &mut Inner,
     cert_id_hex: &str,
 ) -> Result<(), TokenError> {
+    if is_win_my_cert_id(cert_id_hex) {
+        return Err(TokenError::WinMyNotPkcs11);
+    }
+    let cert_id_hex = cert_id_hex.trim();
     if let Some(ref mut sess) = inner.session {
         if cert_der_and_id_for_hex(sess, cert_id_hex).is_ok() {
             return Ok(());

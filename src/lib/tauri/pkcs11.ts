@@ -1,10 +1,23 @@
 import { invoke } from "@tauri-apps/api/core";
 
+export type SigningCertSource = "pkcs11" | "win_my";
+
+export type SigningPinUi = "required_in_app" | "hidden_use_os_crypto" | "os_may_prompt";
+
 export type SigningCertSummary = {
 	id_hex: string;
 	label: string;
 	subject_dn: string;
+	source?: SigningCertSource;
+	pin_ui?: SigningPinUi;
 };
+
+/** PKCS#11 requiere PIN en la app; almacén MY solo si `required_in_app`. */
+export function pinRequiredInApp(cert: SigningCertSummary | null): boolean {
+	if (!cert) return true;
+	if (cert.source === "win_my") return cert.pin_ui === "required_in_app";
+	return true;
+}
 
 export type SessionStatusDto = {
 	logged_in: boolean;
