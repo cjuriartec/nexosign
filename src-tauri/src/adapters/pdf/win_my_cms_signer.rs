@@ -1,7 +1,7 @@
 //! Firmador CMS RSA (SHA-256 PKCS#1 v1.5) vía **CNG** para certificados del almacén MY.
 
 use const_oid::db::rfc5912::SHA_256_WITH_RSA_ENCRYPTION;
-use der::{Any, Encode};
+use der::{Any, Decode, Encode};
 use rsa::pkcs1v15::VerifyingKey;
 use rsa::pkcs8::DecodePublicKey;
 use rsa::traits::PublicKeyParts;

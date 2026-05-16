@@ -3,9 +3,9 @@
 use std::ffi::c_void;
 
 use const_oid::ObjectIdentifier;
+use der::Decode;
 use thiserror::Error;
-use windows::core::w;
-use windows::Win32::Foundation::BOOL;
+use windows::core::{w, BOOL};
 use windows::Win32::Security::Cryptography::{
     CertCloseStore, CertDuplicateCertificateContext, CertFindCertificateInStore,
     CertFreeCertificateContext, CertGetCertificateContextProperty, CertOpenSystemStoreW,
@@ -13,7 +13,7 @@ use windows::Win32::Security::Cryptography::{
     CERT_CONTEXT, CERT_FIND_HAS_PRIVATE_KEY, CERT_FIND_SHA1_HASH, CERT_KEY_PROV_INFO_PROP_ID,
     CERT_KEY_SPEC, CERT_NCRYPT_KEY_SPEC, CERT_QUERY_ENCODING_TYPE, CERT_SHA1_HASH_PROP_ID,
     CRYPT_ACQUIRE_ALLOW_NCRYPT_KEY_FLAG, CRYPT_ACQUIRE_FLAGS, CRYPT_ACQUIRE_SILENT_FLAG,
-    CRYPT_INTEGER_BLOB, CRYPT_KEY_PROV_INFO, HCRYPTPROV_OR_NCRYPT_KEY_HANDLE, HCERTSTORE,
+    CRYPT_INTEGER_BLOB, CRYPT_KEY_PROV_INFO, HCRYPTPROV_OR_NCRYPT_KEY_HANDLE,
     NCryptFreeObject, NCryptSignHash, NCRYPT_HANDLE, NCRYPT_KEY_HANDLE, NCRYPT_PAD_PKCS1_FLAG,
     PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
 };
@@ -23,6 +23,7 @@ use crate::domain::signing_cert::{
     SigningCertSource, SigningCertSummary, SigningPinUi, WIN_MY_CERT_ID_PREFIX,
 };
 use x509_cert::Certificate;
+use x509_parser::prelude::FromDer;
 
 const RSA_OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
 
@@ -226,7 +227,7 @@ pub fn list_my_store_signing_rsa_certs() -> Result<Vec<SigningCertSummary>, WinC
             prev = Some(ctx.cast_const());
         }
 
-        let _ = CertCloseStore(store, 0);
+        let _ = CertCloseStore(Some(store), 0);
         Ok(out)
     }
 }
@@ -260,7 +261,7 @@ pub(crate) unsafe fn ncrypt_sign_sha256_pkcs1(
         f
     };
 
-    let mut acquire = |silent: bool| {
+    let acquire = |silent: bool| {
         let mut hkey = HCRYPTPROV_OR_NCRYPT_KEY_HANDLE::default();
         let mut keyspec = CERT_KEY_SPEC::default();
         let mut caller_free = BOOL::default();
@@ -340,7 +341,7 @@ pub unsafe fn find_my_cert_by_thumbprint(thumb: &[u8; 20]) -> Result<*mut CERT_C
         None,
     );
     let dup = if ctx.is_null() {
-        let _ = CertCloseStore(store, 0);
+        let _ = CertCloseStore(Some(store), 0);
         return Err(WinCertError::Api(
             "certificado no encontrado en MY (¿revocado o desinstalado?)".into(),
         ));
@@ -348,7 +349,7 @@ pub unsafe fn find_my_cert_by_thumbprint(thumb: &[u8; 20]) -> Result<*mut CERT_C
         CertDuplicateCertificateContext(Some(ctx.cast_const()))
     };
     let _ = CertFreeCertificateContext(Some(ctx.cast_const()));
-    let _ = CertCloseStore(store, 0);
+    let _ = CertCloseStore(Some(store), 0);
     if dup.is_null() {
         return Err(WinCertError::Api("CertDuplicateCertificateContext".into()));
     }
