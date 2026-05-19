@@ -675,15 +675,40 @@
 			<Card.Header>
 				<Card.Title class="text-base">Diagnóstico del lector</Card.Title>
 				<Card.Description>
-					Comprueba qué ve NexoSign en el lector: muestra los puertos detectados e indica en cuáles hay un
-					DNIe o tarjeta insertados.
+					Comprueba qué ve NexoSign en el lector. Si en Certificados no aparece tu DNIe, ejecuta el
+					diagnóstico aquí (sin abrir ReFirma) y revisa el controlador PKCS#11 más abajo. En Certificados,
+					la columna «Origen» indica si el certificado viene del chip (Lector) o del almacén de Windows.
 				</Card.Description>
 			</Card.Header>
 			<Card.Content class="space-y-4">
-				<Button variant="outline" size="sm" disabled={pkcsBusy} onclick={() => diagnosePkcs11Slots()}>
-					Ejecutar diagnóstico
-				</Button>
+				<div class="flex flex-wrap gap-2">
+					<Button variant="outline" size="sm" disabled={pkcsBusy} onclick={() => diagnosePkcs11Slots()}>
+						Ejecutar diagnóstico
+					</Button>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={pkcsBusy}
+						onclick={async () => {
+							pkcsBusy = true;
+							try {
+								await pkcs11.pkcs11ResetConnection();
+								pkcsDiag = null;
+								toast.success("Conexión PKCS#11 reiniciada");
+							} catch (e) {
+								toast.error(String(e));
+							} finally {
+								pkcsBusy = false;
+							}
+						}}
+					>
+						Reinicializar lector
+					</Button>
+				</div>
 				{#if pkcsDiag}
+					<p class="text-muted-foreground break-all text-xs" title="Controlador PKCS#11 activo para diagnóstico">
+						Controlador: <code class="bg-muted rounded px-1">{pkcsDiag.module_path}</code>
+					</p>
 					<div class="text-muted-foreground flex flex-wrap gap-2 text-xs">
 						<Badge variant="outline" title="Puertos del lector detectados por el controlador.">
 							Puertos detectados: {pkcsDiag.count_pkcs11_get_slot_list_true}

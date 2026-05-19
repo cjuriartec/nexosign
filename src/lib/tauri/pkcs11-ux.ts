@@ -4,6 +4,7 @@
  */
 
 import * as pkcs11 from "./pkcs11";
+import type { SigningCertSource } from "./pkcs11";
 import { getPkcs11PreferredModule, setPkcs11PreferredModule } from "./settings";
 
 /** Intervalo para refrescar certificados cuando el asistente está activo (plug-and-play ligero). */
@@ -13,6 +14,13 @@ export type EmptySigningCertsHelp = {
 	title: string;
 	description: string;
 };
+
+/** Etiqueta legible del origen del certificado (validación chip vs almacén Windows). */
+export function signingCertSourceLabel(source?: SigningCertSource): string {
+	if (source === "pkcs11") return "Lector (chip)";
+	if (source === "win_my") return "Windows (MY)";
+	return "—";
+}
 
 /** Mensaje único cuando no hay certificados de firma: distingue “sin tarjeta” vs “tarjeta sin certificado de firma”. */
 export function emptySigningCertsHelp(slotsWithToken: number): EmptySigningCertsHelp {
@@ -26,7 +34,7 @@ export function emptySigningCertsHelp(slotsWithToken: number): EmptySigningCerts
 	return {
 		title: "Lector conectado, pero sin certificado de firma",
 		description:
-			"El lector reconoce tu DNIe o tarjeta, pero no encontramos ningún certificado de firma electrónica (puede que solo haya certificados de autenticación). Comprueba que has insertado la tarjeta correcta y vuelve a intentarlo.",
+			"El lector reconoce tu DNIe o tarjeta, pero no encontramos ningún certificado de firma en el chip (puede que solo haya certificados de autenticación). En Ajustes → «Lector de DNIe y tarjetas» comprueba el controlador PKCS#11 del fabricante o pulsa «Reinicializar lector» y vuelve aquí. No hace falta abrir otra aplicación para firmar.",
 	};
 }
 

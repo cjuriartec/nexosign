@@ -10,6 +10,7 @@
 	import {
 		PKCS11_CERT_POLL_MS,
 		emptySigningCertsHelp,
+		signingCertSourceLabel,
 	} from "$lib/tauri/pkcs11-ux";
 	import { isTauriRuntime } from "$lib/tauri/env";
 	import SignatureAppearanceCard from "$lib/components/signature-appearance-card.svelte";
@@ -35,6 +36,19 @@
 			toast.error(String(e));
 		} finally {
 			slotsWithTokenCount = await pkcs11.pkcs11SlotCount().catch(() => 0);
+			busy = false;
+		}
+	}
+
+	async function resetReaderAndReload() {
+		if (!isTauriRuntime()) return;
+		busy = true;
+		try {
+			await pkcs11.pkcs11ResetConnection();
+			await loadCerts();
+			toast.success("Lector reinicializado");
+		} catch (e) {
+			toast.error(String(e));
 			busy = false;
 		}
 	}
@@ -80,9 +94,14 @@
 						Lista actual desde tu DNIe o tarjeta. Se refresca sola cada pocos segundos; también puedes pulsar «Recargar».
 					</Card.Description>
 				</div>
-				<Button variant="outline" size="sm" class="shrink-0 self-start" disabled={busy} onclick={() => loadCerts()}>
-					Recargar
-				</Button>
+				<div class="flex shrink-0 flex-wrap gap-2 self-start">
+					<Button variant="outline" size="sm" disabled={busy} onclick={() => loadCerts()}>
+						Recargar
+					</Button>
+					<Button variant="outline" size="sm" disabled={busy} onclick={() => resetReaderAndReload()}>
+						Reinicializar lector
+					</Button>
+				</div>
 			</Card.Header>
 			<Card.Content>
 				{#if certs.length === 0}
@@ -98,6 +117,7 @@
 							<Table.Row>
 								<Table.Head>Titular</Table.Head>
 								<Table.Head>Documento</Table.Head>
+								<Table.Head>Origen</Table.Head>
 								<Table.Head class="text-right">Uso</Table.Head>
 							</Table.Row>
 						</Table.Header>
@@ -106,6 +126,7 @@
 								<Table.Row>
 									<Table.Cell class="font-medium">{getHumanNameFromDn(c.subject_dn) || c.label || "—"}</Table.Cell>
 									<Table.Cell class="text-muted-foreground text-sm">{extractDniFromDn(c.subject_dn) || "—"}</Table.Cell>
+									<Table.Cell class="text-muted-foreground text-xs">{signingCertSourceLabel(c.source)}</Table.Cell>
 									<Table.Cell class="text-right">
 										<span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80">
 											{extractPurposeFromDn(c.subject_dn)}

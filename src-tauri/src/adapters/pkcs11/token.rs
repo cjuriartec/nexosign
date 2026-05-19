@@ -191,7 +191,20 @@ fn collect_signing_certs_from_session(
     Ok(out)
 }
 
-/// Lista certificados de firma visibles en un único fichero PKCS#11 (cierra sesión al terminar).
+/// Fusiona certificados deduplicando por `id_hex` (misma lógica entre slots y entre DLL).
+fn merge_signing_cert_summaries(
+    merged: &mut Vec<SigningCertSummary>,
+    batch: Vec<SigningCertSummary>,
+    seen: &mut HashSet<String>,
+) {
+    for c in batch {
+        if seen.insert(c.id_hex.clone()) {
+            merged.push(c);
+        }
+    }
+}
+
+/// Lista certificados de firma visibles en un único fichero PKCS#11 (todos los slots con token).
 fn list_signing_certs_for_path(path: &std::path::Path) -> Result<Vec<SigningCertSummary>, TokenError> {
     let pkcs11 = Pkcs11::new(path)?;
     pkcs11.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))?;
@@ -199,9 +212,18 @@ fn list_signing_certs_for_path(path: &std::path::Path) -> Result<Vec<SigningCert
     if slots.is_empty() {
         return Ok(vec![]);
     }
-    let slot = pick_slot_from_slice(&slots)?;
-    let mut session = pkcs11.open_rw_session(slot)?;
-    collect_signing_certs_from_session(&mut session)
+    let mut merged = Vec::new();
+    let mut seen = HashSet::new();
+    for slot in slots {
+        let Ok(mut session) = pkcs11.open_rw_session(slot) else {
+            continue;
+        };
+        let Ok(certs) = collect_signing_certs_from_session(&mut session) else {
+            continue;
+        };
+        merge_signing_cert_summaries(&mut merged, certs, &mut seen);
+    }
+    Ok(merged)
 }
 
 pub struct Pkcs11TokenManager {
@@ -341,13 +363,7 @@ impl Pkcs11TokenManager {
         let mut seen = HashSet::new();
         for path in paths {
             match list_signing_certs_for_path(&path) {
-                Ok(certs) => {
-                    for c in certs {
-                        if seen.insert(c.id_hex.clone()) {
-                            merged.push(c);
-                        }
-                    }
-                }
+                Ok(certs) => merge_signing_cert_summaries(&mut merged, certs, &mut seen),
                 Err(_) => continue,
             }
         }
@@ -710,5 +726,34 @@ fn ensure_session_rw(inner: &mut Inner) -> Result<(), TokenError> {
     let sess = pkcs11.open_rw_session(slot)?;
     inner.session = Some(sess);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::signing_cert::{SigningCertSource, SigningPinUi};
+
+    fn sample_cert(id: &str) -> SigningCertSummary {
+        SigningCertSummary {
+            id_hex: id.to_string(),
+            label: id.to_string(),
+            subject_dn: String::new(),
+            source: SigningCertSource::Pkcs11,
+            pin_ui: SigningPinUi::RequiredInApp,
+        }
+    }
+
+    #[test]
+    fn merge_signing_cert_summaries_dedupes_by_id_hex() {
+        let mut merged = vec![sample_cert("aa")];
+        let mut seen = HashSet::from(["aa".to_string()]);
+        merge_signing_cert_summaries(
+            &mut merged,
+            vec![sample_cert("aa"), sample_cert("bb")],
+            &mut seen,
+        );
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().any(|c| c.id_hex == "bb"));
+    }
 }
 
