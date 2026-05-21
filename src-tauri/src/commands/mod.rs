@@ -13,7 +13,9 @@ use crate::adapters::http::state::PendingBatchIntents;
 use crate::adapters::persistence::queue_store;
 use crate::adapters::persistence::{AllowedOriginsDb, Pkcs11PathsDb};
 use crate::adapters::pkcs11::driver::find_all_pkcs11_modules;
-use crate::adapters::pkcs11::token::{Pkcs11Diagnostics, Pkcs11TokenManager, SessionStatusDto};
+use crate::adapters::pkcs11::token::{
+    Pkcs11Diagnostics, Pkcs11ProbeCertificateListing, Pkcs11TokenManager, SessionStatusDto,
+};
 use crate::domain::allowed_origins::AllowedOrigins;
 use crate::domain::signing_cert::SigningCertSummary;
 use crate::infrastructure::origin_db::OriginDbPath;
@@ -454,6 +456,32 @@ pub async fn pkcs11_diagnose_slots(
 pub async fn pkcs11_slot_count(state: tauri::State<'_, Pkcs11Store>) -> Result<usize, String> {
     let mgr = Arc::clone(&*state);
     pkcs11_blocking(move || mgr.slot_count_with_token().map_err(|e| e.to_string())).await
+}
+
+#[tauri::command]
+pub async fn pkcs11_probe_certificate_listing(
+    state: tauri::State<'_, Pkcs11Store>,
+) -> Result<Pkcs11ProbeCertificateListing, String> {
+    let mgr = Arc::clone(&*state);
+    pkcs11_blocking(move || mgr.probe_certificate_listing().map_err(|e| e.to_string())).await
+}
+
+#[tauri::command]
+pub async fn pkcs11_list_signing_with_pin(
+    state: tauri::State<'_, Pkcs11Store>,
+    pin: String,
+) -> Result<Vec<SigningCertSummary>, String> {
+    let mgr = Arc::clone(&*state);
+    pkcs11_blocking(move || {
+        let mut v = mgr.list_pkcs11_signing_with_pin(pin).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        match crate::adapters::windows_cert_store::list_my_store_signing_rsa_certs() {
+            Ok(mut w) => v.append(&mut w),
+            Err(e) => tracing::warn!(error = %e, "listado MY tras probe PIN"),
+        }
+        Ok(v)
+    })
+    .await
 }
 
 #[tauri::command]

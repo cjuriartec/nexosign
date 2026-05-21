@@ -1,4 +1,4 @@
-//! Firmador CMS RSA (SHA-256 PKCS#1 v1.5) vía **CNG** para certificados del almacén MY.
+//! Firmador CMS RSA (SHA-256 PKCS#1 v1.5) para certificados del almacén MY (CNG o CSP legacy).
 
 use const_oid::db::rfc5912::SHA_256_WITH_RSA_ENCRYPTION;
 use der::{Any, Decode, Encode};
@@ -47,7 +47,7 @@ impl WinMyRsaCmsSigner {
             .to_der()
             .map_err(|e| WinCertError::Api(format!("SPKI: {e}")))?;
         let pk = RsaPublicKey::from_public_key_der(&spki_der)
-            .map_err(|_| WinCertError::Api("solo RSA en almacén MY (CNG)".into()))?;
+            .map_err(|_| WinCertError::Api("solo certificados RSA en almacén MY".into()))?;
         let rsa_signature_octets = pk.size();
         let verifying_key = VerifyingKey::<Sha256>::new_unprefixed(pk);
         Ok(Self {

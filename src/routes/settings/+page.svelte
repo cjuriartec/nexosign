@@ -34,7 +34,7 @@
 	import { ipcFetchHealth, ipcFetchPing } from "$lib/tauri/local-backend";
 	import * as ScrollArea from "$lib/components/ui/scroll-area/index.js";
 	import * as pkcs11 from "$lib/tauri/pkcs11";
-	import type { Pkcs11Diagnostics } from "$lib/tauri/pkcs11";
+	import type { Pkcs11Diagnostics, Pkcs11ProbeCertificateListing } from "$lib/tauri/pkcs11";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 	import GripVerticalIcon from "@lucide/svelte/icons/grip-vertical";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
@@ -48,6 +48,7 @@
 	let pingOk = $state<boolean | null>(null);
 
 	let pkcsDiag = $state<Pkcs11Diagnostics | null>(null);
+	let pkcsCertProbe = $state<Pkcs11ProbeCertificateListing | null>(null);
 	let pkcsBusy = $state(false);
 	let pkcs11Paths = $state<string[]>([]);
 	let newDriverPath = $state("");
@@ -115,7 +116,21 @@
 		pkcsBusy = true;
 		try {
 			pkcsDiag = await pkcs11.pkcs11DiagnoseSlots();
+			pkcsCertProbe = await pkcs11.pkcs11ProbeCertificateListing();
 			toast.success("Diagnóstico PKCS#11 listo");
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			pkcsBusy = false;
+		}
+	}
+
+	async function probeChipCertificates() {
+		if (!isTauriRuntime()) return;
+		pkcsBusy = true;
+		try {
+			pkcsCertProbe = await pkcs11.pkcs11ProbeCertificateListing();
+			toast.success("Exploración del chip completada");
 		} catch (e) {
 			toast.error(String(e));
 		} finally {
@@ -685,6 +700,9 @@
 					<Button variant="outline" size="sm" disabled={pkcsBusy} onclick={() => diagnosePkcs11Slots()}>
 						Ejecutar diagnóstico
 					</Button>
+					<Button variant="outline" size="sm" disabled={pkcsBusy} onclick={() => probeChipCertificates()}>
+						Explorar certificados en chip
+					</Button>
 					<Button
 						variant="outline"
 						size="sm"
@@ -735,6 +753,61 @@
 							</ul>
 						</div>
 					</ScrollArea.Root>
+				{/if}
+				{#if pkcsCertProbe}
+					<div class="space-y-2">
+						<p class="text-muted-foreground text-xs">
+							Por controlador: X.509 en chip (raw) vs certificados de firma (nonRepudiation). Si raw=0 con
+							tarjeta insertada, prueba «Probar con PIN» en Certificados.
+						</p>
+						<ScrollArea.Root class="max-h-[280px] rounded-md border">
+							<div class="p-3">
+								<Table.Root>
+									<Table.Header>
+										<Table.Row>
+											<Table.Head class="text-xs">Controlador / slot</Table.Head>
+											<Table.Head class="text-right text-xs">X.509</Table.Head>
+											<Table.Head class="text-right text-xs">Firma</Table.Head>
+										</Table.Row>
+									</Table.Header>
+									<Table.Body>
+										{#each pkcsCertProbe.modules as mod}
+											<Table.Row>
+												<Table.Cell colspan={3} class="bg-muted/40 py-1.5 font-mono text-[10px]">
+													{mod.path}
+													{#if mod.error}
+														<span class="text-destructive ml-2">— {mod.error}</span>
+													{/if}
+												</Table.Cell>
+											</Table.Row>
+											{#each mod.slots as slot}
+												<Table.Row>
+													<Table.Cell class="text-xs">
+														Slot {slot.slot_id}
+														{#if slot.token_label}
+															<span class="text-muted-foreground"> · {slot.token_label}</span>
+														{/if}
+														{#if slot.session_error}
+															<div class="text-destructive text-[10px]">{slot.session_error}</div>
+														{/if}
+													</Table.Cell>
+													<Table.Cell class="text-right text-xs">{slot.raw_x509_count}</Table.Cell>
+													<Table.Cell class="text-right text-xs">{slot.signing_after_filter_count}</Table.Cell>
+												</Table.Row>
+											{/each}
+											{#if mod.slots.length === 0}
+												<Table.Row>
+													<Table.Cell colspan={3} class="text-muted-foreground text-xs">
+														Sin slots con tarjeta
+													</Table.Cell>
+												</Table.Row>
+											{/if}
+										{/each}
+									</Table.Body>
+								</Table.Root>
+							</div>
+						</ScrollArea.Root>
+					</div>
 				{/if}
 			</Card.Content>
 		</Card.Root>

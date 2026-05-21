@@ -3,31 +3,92 @@
 	import { toast } from "svelte-sonner";
 	import * as Card from "$lib/components/ui/card/index.js";
 	import { Button } from "$lib/components/ui/button/index.js";
+	import { Input } from "$lib/components/ui/input/index.js";
+	import { Label } from "$lib/components/ui/label/index.js";
 	import * as Table from "$lib/components/ui/table/index.js";
 	import * as pkcs11 from "$lib/tauri/pkcs11";
-	import type { SigningCertSummary } from "$lib/tauri/pkcs11";
+	import type { Pkcs11ProbeCertificateListing, SigningCertSummary } from "$lib/tauri/pkcs11";
 	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
 	import {
-		PKCS11_CERT_POLL_MS,
 		emptySigningCertsHelp,
+		hasPkcs11ChipCerts,
+		onlyWinMySigningCerts,
+		probeTotalSlotsWithToken,
 		signingCertSourceLabel,
+		winMyOnlyChipUnreadableMessage,
 	} from "$lib/tauri/pkcs11-ux";
 	import { isTauriRuntime } from "$lib/tauri/env";
+	import { invokeWithTimeout } from "$lib/tauri/invoke-timeout";
 	import SignatureAppearanceCard from "$lib/components/signature-appearance-card.svelte";
 	import { getHumanNameFromDn, extractDniFromDn, extractPurposeFromDn } from "$lib/signature-appearance";
 
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 	import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert/index.js";
 
+	const LIST_TIMEOUT_MS = 45_000;
+	const SLOT_TIMEOUT_MS = 12_000;
+	const PROBE_TIMEOUT_MS = 50_000;
+
 	let certs = $state<SigningCertSummary[]>([]);
 	let slotsWithTokenCount = $state(0);
+	let chipProbe = $state<Pkcs11ProbeCertificateListing | null>(null);
 	let busy = $state(false);
+	let probeBusy = $state(false);
+	let probePin = $state("");
+	let pinProbeBusy = $state(false);
 
-	async function loadCerts() {
+	const winMyOnlyHint = $derived(
+		isTauriRuntime() && onlyWinMySigningCerts(certs)
+			? winMyOnlyChipUnreadableMessage(chipProbe, slotsWithTokenCount)
+			: null,
+	);
+	const showPinProbe = $derived(
+		isTauriRuntime() &&
+			slotsWithTokenCount > 0 &&
+			!hasPkcs11ChipCerts(certs),
+	);
+
+	async function refreshSlotCount() {
+		try {
+			slotsWithTokenCount = await invokeWithTimeout(
+				pkcs11.pkcs11SlotCount(),
+				SLOT_TIMEOUT_MS,
+				"Conteo de lector",
+			);
+		} catch {
+			slotsWithTokenCount = probeTotalSlotsWithToken(chipProbe);
+		}
+	}
+
+	async function runChipProbeBackground() {
+		if (!isTauriRuntime()) return;
+		probeBusy = true;
+		try {
+			chipProbe = await invokeWithTimeout(
+				pkcs11.pkcs11ProbeCertificateListing(),
+				PROBE_TIMEOUT_MS,
+				"Diagnóstico del chip",
+			);
+			const fromProbe = probeTotalSlotsWithToken(chipProbe);
+			if (fromProbe > slotsWithTokenCount) {
+				slotsWithTokenCount = fromProbe;
+			}
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			probeBusy = false;
+		}
+	}
+
+	async function loadCerts(opts?: { runChipProbe?: boolean }) {
 		if (!isTauriRuntime()) return;
 		busy = true;
 		try {
-			certs = await pkcs11.listSigningCertificates();
+			certs = await invokeWithTimeout(
+				pkcs11.listSigningCertificates(),
+				LIST_TIMEOUT_MS,
+				"Carga de certificados",
+			);
 		} catch (e) {
 			certs = [];
 			if (isPkcs11NoTokenError(e)) {
@@ -35,8 +96,39 @@
 			}
 			toast.error(String(e));
 		} finally {
-			slotsWithTokenCount = await pkcs11.pkcs11SlotCount().catch(() => 0);
 			busy = false;
+		}
+		await refreshSlotCount();
+		if (opts?.runChipProbe) {
+			void runChipProbeBackground();
+		}
+	}
+
+	async function tryListWithPin() {
+		if (!isTauriRuntime() || !probePin.trim()) {
+			toast.error("Introduce el PIN del DNIe.");
+			return;
+		}
+		pinProbeBusy = true;
+		try {
+			certs = await invokeWithTimeout(
+				pkcs11.pkcs11ListSigningWithPin(probePin.trim()),
+				LIST_TIMEOUT_MS,
+				"Lectura con PIN",
+			);
+			await refreshSlotCount();
+			if (hasPkcs11ChipCerts(certs)) {
+				toast.success("Certificado del lector detectado");
+			} else {
+				toast.message("PIN aceptado, pero no hay certificado de firma en el chip");
+			}
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			await pkcs11.pkcs11ResetConnection().catch(() => {});
+			probePin = "";
+			pinProbeBusy = false;
+			void runChipProbeBackground();
 		}
 	}
 
@@ -44,23 +136,19 @@
 		if (!isTauriRuntime()) return;
 		busy = true;
 		try {
-			await pkcs11.pkcs11ResetConnection();
-			await loadCerts();
+			await invokeWithTimeout(pkcs11.pkcs11ResetConnection(), SLOT_TIMEOUT_MS, "Reinicializar lector");
+			await loadCerts({ runChipProbe: true });
 			toast.success("Lector reinicializado");
 		} catch (e) {
 			toast.error(String(e));
+		} finally {
 			busy = false;
 		}
 	}
 
 	onMount(() => {
 		if (!isTauriRuntime()) return;
-		void loadCerts();
-		const pollId = window.setInterval(() => {
-			if (document.visibilityState !== "visible") return;
-			void loadCerts();
-		}, PKCS11_CERT_POLL_MS);
-		return () => window.clearInterval(pollId);
+		void loadCerts({ runChipProbe: true });
 	});
 </script>
 
@@ -91,19 +179,53 @@
 				<div>
 					<Card.Title class="text-base">Certificados</Card.Title>
 					<Card.Description>
-						Lista actual desde tu DNIe o tarjeta. Se refresca sola cada pocos segundos; también puedes pulsar «Recargar».
+						Lista actual desde tu DNIe o tarjeta. Pulsa «Recargar» para actualizar tras conectar el lector.
+						{#if probeBusy}
+							<span class="text-muted-foreground block text-xs">Comprobando chip en segundo plano…</span>
+						{/if}
 					</Card.Description>
 				</div>
 				<div class="flex shrink-0 flex-wrap gap-2 self-start">
-					<Button variant="outline" size="sm" disabled={busy} onclick={() => loadCerts()}>
-						Recargar
+					<Button variant="outline" size="sm" disabled={busy} onclick={() => loadCerts({ runChipProbe: true })}>
+						{busy ? "Cargando…" : "Recargar"}
 					</Button>
 					<Button variant="outline" size="sm" disabled={busy} onclick={() => resetReaderAndReload()}>
 						Reinicializar lector
 					</Button>
 				</div>
 			</Card.Header>
-			<Card.Content>
+			<Card.Content class="space-y-4">
+				{#if winMyOnlyHint}
+					<Alert class="text-left">
+						<TriangleAlertIcon class="size-4" />
+						<AlertTitle class="text-sm">Certificado en Windows, no en el lector</AlertTitle>
+						<AlertDescription class="text-xs leading-snug">{winMyOnlyHint}</AlertDescription>
+					</Alert>
+				{/if}
+				{#if showPinProbe}
+					<div class="flex flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-end">
+						<div class="min-w-0 flex-1 space-y-1">
+							<Label for="probe-pin" class="text-xs">Probar lectura del chip con PIN</Label>
+							<Input
+								id="probe-pin"
+								type="password"
+								autocomplete="off"
+								placeholder="PIN del DNIe"
+								bind:value={probePin}
+								disabled={pinProbeBusy || busy}
+							/>
+						</div>
+						<Button
+							variant="secondary"
+							size="sm"
+							class="shrink-0"
+							disabled={pinProbeBusy || busy || !probePin.trim()}
+							onclick={() => tryListWithPin()}
+						>
+							{pinProbeBusy ? "Leyendo…" : "Probar con PIN"}
+						</Button>
+					</div>
+				{/if}
 				{#if certs.length === 0}
 					{@const help = emptySigningCertsHelp(slotsWithTokenCount)}
 					<Alert variant={slotsWithTokenCount <= 0 ? "destructive" : "default"} class="text-left">

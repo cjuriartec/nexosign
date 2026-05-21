@@ -41,12 +41,39 @@ export type Pkcs11Diagnostics = {
 	slots: Pkcs11SlotDetail[];
 };
 
+export type Pkcs11ProbeSlotListing = {
+	slot_id: number;
+	token_label: string | null;
+	raw_x509_count: number;
+	signing_after_filter_count: number;
+	session_error: string | null;
+};
+
+export type Pkcs11ProbeModuleListing = {
+	path: string;
+	slots_with_token: number;
+	slots: Pkcs11ProbeSlotListing[];
+	error: string | null;
+};
+
+export type Pkcs11ProbeCertificateListing = {
+	modules: Pkcs11ProbeModuleListing[];
+};
+
 export async function probePkcs11ModulePath(): Promise<string> {
 	return invoke<string>("probe_pkcs11_module_path");
 }
 
 export async function pkcs11DiagnoseSlots(): Promise<Pkcs11Diagnostics> {
 	return invoke<Pkcs11Diagnostics>("pkcs11_diagnose_slots");
+}
+
+export async function pkcs11ProbeCertificateListing(): Promise<Pkcs11ProbeCertificateListing> {
+	return invoke<Pkcs11ProbeCertificateListing>("pkcs11_probe_certificate_listing");
+}
+
+export async function pkcs11ListSigningWithPin(pin: string): Promise<SigningCertSummary[]> {
+	return invoke<SigningCertSummary[]>("pkcs11_list_signing_with_pin", { pin });
 }
 
 export async function pkcs11SlotCount(): Promise<number> {

@@ -840,7 +840,7 @@ pub fn sign_pdf_pades_bes(
     ))
 }
 
-/// Firma con certificado del almacén **MY** (Windows, RSA CNG).
+/// Firma con certificado del almacén **MY** (Windows, RSA CNG o CSP legacy).
 #[cfg(windows)]
 pub fn sign_pdf_pades_bes_win_my(
     cert_id_hex: &str,

@@ -1,8 +1,9 @@
 //! PKCS#11 token manager (initialize, list signing certs, PIN solo durante operaciones de firma).
 
 use std::collections::HashSet;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use cryptoki::context::{CInitializeArgs, CInitializeFlags, Pkcs11};
 use cryptoki::mechanism::Mechanism;
@@ -14,10 +15,19 @@ use cryptoki::types::AuthPin;
 use x509_parser::prelude::*;
 
 use crate::adapters::persistence::Pkcs11PathsDb;
+use crate::adapters::pcsc_wake;
 use crate::adapters::pkcs11::driver::find_all_pkcs11_modules;
 use crate::adapters::pkcs11::error::TokenError;
 use crate::domain::cert_filter::der_is_signing_certificate;
 use crate::domain::signing_cert::{is_win_my_cert_id, SigningCertSource, SigningCertSummary, SigningPinUi};
+
+/// Una sola exploración PKCS#11 (varias DLL) a la vez; evita conflictos PC/SC entre controladores.
+fn pkcs11_scan_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
 
 /// Lista de slots donde PKCS#11 considera que hay token insertado.
 ///
@@ -138,6 +148,33 @@ fn subject_dn_from_der(der: &[u8]) -> String {
     cert.subject().to_string()
 }
 
+/// Cuenta certificados X.509 en sesión: (total DER, con KeyUsage de firma).
+fn count_x509_in_session(session: &cryptoki::session::Session) -> Result<(usize, usize), TokenError> {
+    let search = vec![
+        Attribute::Class(ObjectClass::CERTIFICATE),
+        Attribute::CertificateType(CertificateType::X_509),
+    ];
+    let handles = session.find_objects(&search)?;
+    let raw = handles.len();
+    let mut signing = 0usize;
+    for h in handles {
+        let attrs = session.get_attributes(h, &[AttributeType::Value])?;
+        let mut der: Option<Vec<u8>> = None;
+        for a in attrs {
+            if let Attribute::Value(v) = a {
+                der = Some(v);
+            }
+        }
+        let Some(der) = der else {
+            continue;
+        };
+        if der_is_signing_certificate(&der) {
+            signing += 1;
+        }
+    }
+    Ok((raw, signing))
+}
+
 /// Enumera certificados de firma en una sesión RW ya abierta.
 fn collect_signing_certs_from_session(
     session: &mut cryptoki::session::Session,
@@ -204,27 +241,149 @@ fn merge_signing_cert_summaries(
     }
 }
 
-/// Lista certificados de firma visibles en un único fichero PKCS#11 (todos los slots con token).
-fn list_signing_certs_for_path(path: &std::path::Path) -> Result<Vec<SigningCertSummary>, TokenError> {
-    let pkcs11 = Pkcs11::new(path)?;
-    pkcs11.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))?;
-    let slots = slots_with_token_effective(&pkcs11)?;
-    if slots.is_empty() {
-        return Ok(vec![]);
-    }
-    let mut merged = Vec::new();
-    let mut seen = HashSet::new();
-    for slot in slots {
-        let Ok(mut session) = pkcs11.open_rw_session(slot) else {
-            continue;
-        };
-        let Ok(certs) = collect_signing_certs_from_session(&mut session) else {
-            continue;
-        };
-        merge_signing_cert_summaries(&mut merged, certs, &mut seen);
-    }
-    Ok(merged)
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Pkcs11ProbeSlotListing {
+    pub slot_id: u64,
+    pub token_label: Option<String>,
+    pub raw_x509_count: usize,
+    pub signing_after_filter_count: usize,
+    pub session_error: Option<String>,
 }
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Pkcs11ProbeModuleListing {
+    pub path: String,
+    pub slots_with_token: usize,
+    pub slots: Vec<Pkcs11ProbeSlotListing>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Pkcs11ProbeCertificateListing {
+    pub modules: Vec<Pkcs11ProbeModuleListing>,
+}
+
+struct PathScanOutcome {
+    certs: Vec<SigningCertSummary>,
+    slot_probes: Vec<Pkcs11ProbeSlotListing>,
+    slots_with_token: usize,
+    error: Option<String>,
+}
+
+const PKCS11_SCAN_TIMEOUT: Duration = Duration::from_secs(12);
+/// En listado rutinario no recorrer todos los `.dll` del SO (evita bloqueos y minutos de espera).
+const MAX_MODULES_ROUTINE_LIST: usize = 2;
+
+/// Explora un módulo PKCS#11 (todos los slots); opcionalmente hace `C_Login` antes de listar.
+fn scan_pkcs11_path(path: &Path, pin: Option<&str>) -> PathScanOutcome {
+    let mut outcome = PathScanOutcome {
+        certs: Vec::new(),
+        slot_probes: Vec::new(),
+        slots_with_token: 0,
+        error: None,
+    };
+
+    let pkcs11 = match Pkcs11::new(path) {
+        Ok(p) => p,
+        Err(e) => {
+            outcome.error = Some(format!("Cargar módulo: {e}"));
+            return outcome;
+        }
+    };
+    if let Err(e) = pkcs11.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK)) {
+        outcome.error = Some(format!("C_Initialize: {e}"));
+        return outcome;
+    }
+
+    let slots = match slots_with_token_effective(&pkcs11) {
+        Ok(s) => s,
+        Err(e) => {
+            outcome.error = Some(format!("Slots: {e}"));
+            let _ = pkcs11.finalize();
+            return outcome;
+        }
+    };
+    outcome.slots_with_token = slots.len();
+
+    let mut seen = HashSet::new();
+    let needs_rw = pin.is_some();
+    let auth_pin = pin.map(|p| AuthPin::new(Box::from(p)));
+
+    for slot in slots {
+        let slot_id = slot.id();
+        let token_label = pkcs11.get_token_info(slot).ok().map(|t| t.label().to_string());
+
+        let mut session = match open_session_for_slot_with_retry(&pkcs11, slot, needs_rw) {
+            Ok(s) => s,
+            Err(err) => {
+                outcome.slot_probes.push(Pkcs11ProbeSlotListing {
+                    slot_id,
+                    token_label,
+                    raw_x509_count: 0,
+                    signing_after_filter_count: 0,
+                    session_error: Some(err),
+                });
+                continue;
+            }
+        };
+
+        let mut session_error = None;
+        if let Some(ref auth) = auth_pin {
+            match session.login(UserType::User, Some(auth)) {
+                Ok(()) => {}
+                Err(CryptokiError::Pkcs11(RvError::UserAlreadyLoggedIn, _)) => {}
+                Err(e) => {
+                    session_error = Some(format!("C_Login: {e}"));
+                }
+            }
+        }
+
+        let (raw, signing) = count_x509_in_session(&session).unwrap_or((0, 0));
+        if session_error.is_none() {
+            if let Ok(certs) = collect_signing_certs_from_session(&mut session) {
+                merge_signing_cert_summaries(&mut outcome.certs, certs, &mut seen);
+            }
+        }
+        if auth_pin.is_some() {
+            let _ = session.logout();
+        }
+
+        outcome.slot_probes.push(Pkcs11ProbeSlotListing {
+            slot_id,
+            token_label,
+            raw_x509_count: raw,
+            signing_after_filter_count: signing,
+            session_error,
+        });
+    }
+
+    let _ = pkcs11.finalize();
+    outcome
+}
+
+fn scan_pkcs11_path_timed(path: &Path, pin: Option<&str>, timeout: Duration) -> PathScanOutcome {
+    let path = path.to_path_buf();
+    let path_label = path.display().to_string();
+    let pin_owned = pin.map(|s| s.to_string());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let pin_ref = pin_owned.as_deref();
+        let _ = tx.send(scan_pkcs11_path(&path, pin_ref));
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(outcome) => outcome,
+        Err(_) => PathScanOutcome {
+            certs: Vec::new(),
+            slot_probes: Vec::new(),
+            slots_with_token: 0,
+            error: Some(format!(
+                "Tiempo de espera agotado ({:.0}s) al usar {path_label}",
+                timeout.as_secs_f64(),
+            )),
+        },
+    }
+}
+
 
 pub struct Pkcs11TokenManager {
     inner: Mutex<Inner>,
@@ -241,15 +400,100 @@ struct Inner {
     app_database_path: Arc<Mutex<Option<PathBuf>>>,
 }
 
-/// Cierra sesión RW y descarga el módulo PKCS#11 en memoria (libera drivers tras PIN incorrecto o sesión colgada).
+/// Cierra sesión y hace `C_Finalize` del módulo PKCS#11 en memoria (libera el driver para otro escaneo).
 fn reset_pkcs11_inner_state(inner: &mut Inner) {
     if let Some(sess) = inner.session.take() {
         let _ = sess.logout();
     }
-    inner.pkcs11 = None;
+    if let Some(pkcs11) = inner.pkcs11.take() {
+        let _ = pkcs11.finalize();
+    }
     inner.active_module_path = None;
     inner.logged_in = false;
     inner.pin = None;
+}
+
+fn session_error_token_not_recognized(err: &str) -> bool {
+    let e = err.to_lowercase();
+    e.contains("not recognize") || e.contains("token not recognized")
+}
+
+/// Abre sesión en el slot: RO para listar sin PIN; RW si hace falta login o RO falla.
+fn open_session_for_slot(
+    pkcs11: &Pkcs11,
+    slot: Slot,
+    needs_rw: bool,
+) -> Result<cryptoki::session::Session, String> {
+    if needs_rw {
+        return pkcs11
+            .open_rw_session(slot)
+            .map_err(|e| format!("Sesión RW: {e}"));
+    }
+    match pkcs11.open_ro_session(slot) {
+        Ok(s) => Ok(s),
+        Err(e_ro) => pkcs11
+            .open_rw_session(slot)
+            .map_err(|e_rw| format!("Sesión RO: {e_ro}; RW: {e_rw}")),
+    }
+}
+
+/// Reintenta apertura de sesión si el driver aún no reconoce el token (sin PC/SC: evita bloqueo con PKCS#11 activo).
+fn open_session_for_slot_with_retry(
+    pkcs11: &Pkcs11,
+    slot: Slot,
+    needs_rw: bool,
+) -> Result<cryptoki::session::Session, String> {
+    let mut last_err = String::new();
+    for attempt in 0..2u32 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(350));
+        }
+        match open_session_for_slot(pkcs11, slot, needs_rw) {
+            Ok(s) => return Ok(s),
+            Err(e) => {
+                let retry = session_error_token_not_recognized(&e);
+                last_err = e;
+                if !retry {
+                    break;
+                }
+                tracing::debug!(attempt, "PKCS#11: reintento apertura de sesión (token no reconocido aún)");
+            }
+        }
+    }
+    Err(last_err)
+}
+
+fn merge_paths_scan(
+    paths: &[PathBuf],
+    pin: Option<&str>,
+) -> (Vec<SigningCertSummary>, bool) {
+    let mut merged = Vec::new();
+    let mut seen = HashSet::new();
+    let mut saw_token_not_recognized = false;
+
+    for (i, path) in paths.iter().enumerate() {
+        if i >= MAX_MODULES_ROUTINE_LIST {
+            break;
+        }
+        let scan = scan_pkcs11_path_timed(path, pin, PKCS11_SCAN_TIMEOUT);
+        if let Some(err) = &scan.error {
+            tracing::info!(path = %path.display(), error = %err, "PKCS#11 listado sin certificados");
+        }
+        for slot in &scan.slot_probes {
+            if let Some(e) = &slot.session_error {
+                if session_error_token_not_recognized(e) {
+                    saw_token_not_recognized = true;
+                }
+            }
+        }
+        merge_signing_cert_summaries(&mut merged, scan.certs, &mut seen);
+
+        let found_chip = merged.iter().any(|c| c.source == SigningCertSource::Pkcs11);
+        if found_chip {
+            break;
+        }
+    }
+    (merged, saw_token_not_recognized)
 }
 
 impl Pkcs11TokenManager {
@@ -271,6 +515,8 @@ impl Pkcs11TokenManager {
     pub fn reset_pkcs11_driver_state(&self) -> Result<(), TokenError> {
         let mut inner = self.lock_inner()?;
         reset_pkcs11_inner_state(&mut inner);
+        drop(inner);
+        pcsc_wake::wake_smart_card_readers();
         Ok(())
     }
 
@@ -302,14 +548,18 @@ impl Pkcs11TokenManager {
     }
 
     pub fn slot_count_with_token(&self) -> Result<usize, TokenError> {
+        let _scan = pkcs11_scan_lock();
         let mut inner = self.lock_inner()?;
         ensure_pkcs11(&mut inner)?;
         let pkcs11 = inner.pkcs11.as_ref().expect("initialized");
-        Ok(slots_with_token_effective(pkcs11)?.len())
+        let n = slots_with_token_effective(pkcs11)?.len();
+        reset_pkcs11_inner_state(&mut inner);
+        Ok(n)
     }
 
     /// Lectores y tokens según el mismo PKCS#11 que usa la app (para depuración en UI).
     pub fn diagnose_slots(&self) -> Result<Pkcs11Diagnostics, TokenError> {
+        let _scan = pkcs11_scan_lock();
         let mut inner = self.lock_inner()?;
         ensure_pkcs11(&mut inner)?;
         let pkcs11 = inner.pkcs11.as_ref().expect("initialized");
@@ -336,38 +586,95 @@ impl Pkcs11TokenManager {
             });
         }
 
-        Ok(Pkcs11Diagnostics {
+        let diag = Pkcs11Diagnostics {
             module_path,
             count_pkcs11_get_slot_list_true: count_slot_list_true,
             count_effective_for_nexosign: count_effective,
             slots,
-        })
+        };
+        reset_pkcs11_inner_state(&mut inner);
+        Ok(diag)
     }
 
     pub fn list_signing_certificates(&self) -> Result<Vec<SigningCertSummary>, TokenError> {
+        let _scan = pkcs11_scan_lock();
+        pcsc_wake::wake_smart_card_readers();
         let paths = {
             let mut inner = self.lock_inner()?;
-            // Si ya hay login PKCS#11 válido, no abrimos otro handle al middleware (evita conflicto con el driver).
             if inner.logged_in {
                 if let Some(ref mut sess) = inner.session {
                     return collect_signing_certs_from_session(sess);
                 }
             }
-            // Sin login (o estado inconsistente): libera sesión/módulo internos antes de sondear rutas.
-            // Tras PIN incorrecto algunos drivers dejan una RW sesión colgada y bloquean nuevas aperturas.
             reset_pkcs11_inner_state(&mut inner);
             merged_pkcs11_module_paths(&inner)?
         };
 
-        let mut merged = Vec::new();
-        let mut seen = HashSet::new();
-        for path in paths {
-            match list_signing_certs_for_path(&path) {
-                Ok(certs) => merge_signing_cert_summaries(&mut merged, certs, &mut seen),
-                Err(_) => continue,
+        let (mut merged, saw_token_not_recognized) = merge_paths_scan(&paths, None);
+        if merged.is_empty() && saw_token_not_recognized {
+            if let Some(first) = paths.first() {
+                tracing::info!("PKCS#11: segundo intento en controlador preferido tras PC/SC wake");
+                pcsc_wake::wake_smart_card_readers();
+                std::thread::sleep(Duration::from_millis(400));
+                let scan = scan_pkcs11_path_timed(first, None, PKCS11_SCAN_TIMEOUT);
+                let mut seen = HashSet::new();
+                merge_signing_cert_summaries(&mut merged, scan.certs, &mut seen);
             }
         }
         Ok(merged)
+    }
+
+    /// Lista certificados PKCS#11 en todos los slots (con PIN), sin dejar sesión abierta en el manager.
+    pub fn list_pkcs11_signing_with_pin(&self, pin: String) -> Result<Vec<SigningCertSummary>, TokenError> {
+        if pin.is_empty() {
+            return Err(TokenError::EmptyPin);
+        }
+        let _scan = pkcs11_scan_lock();
+        pcsc_wake::wake_smart_card_readers();
+        let paths = {
+            let mut inner = self.lock_inner()?;
+            reset_pkcs11_inner_state(&mut inner);
+            merged_pkcs11_module_paths(&inner)?
+        };
+
+        let (merged, _) = merge_paths_scan(&paths, Some(&pin));
+        Ok(merged)
+    }
+
+    /// Diagnóstico por DLL/slot: objetos X.509 en chip vs filtro KeyUsage de firma.
+    pub fn probe_certificate_listing(&self) -> Result<Pkcs11ProbeCertificateListing, TokenError> {
+        let _scan = pkcs11_scan_lock();
+        pcsc_wake::wake_smart_card_readers();
+        let paths = {
+            let mut inner = self.lock_inner()?;
+            reset_pkcs11_inner_state(&mut inner);
+            merged_pkcs11_module_paths(&inner)?
+        };
+
+        let mut modules = Vec::with_capacity(paths.len());
+        for path in paths.iter().take(4) {
+            let scan = scan_pkcs11_path_timed(path, None, PKCS11_SCAN_TIMEOUT);
+            for slot in &scan.slot_probes {
+                tracing::info!(
+                    path = %path.display(),
+                    slot_id = slot.slot_id,
+                    raw_x509 = slot.raw_x509_count,
+                    signing = slot.signing_after_filter_count,
+                    session_error = ?slot.session_error,
+                    "PKCS#11 probe slot"
+                );
+            }
+            if let Some(err) = &scan.error {
+                tracing::info!(path = %path.display(), error = %err, "PKCS#11 probe módulo");
+            }
+            modules.push(Pkcs11ProbeModuleListing {
+                path: path.display().to_string(),
+                slots_with_token: scan.slots_with_token,
+                slots: scan.slot_probes,
+                error: scan.error,
+            });
+        }
+        Ok(Pkcs11ProbeCertificateListing { modules })
     }
 
     pub fn certificate_der_by_id_hex(&self, cert_id_hex: &str) -> Result<Vec<u8>, TokenError> {
@@ -684,7 +991,7 @@ fn ensure_pkcs11(inner: &mut Inner) -> Result<(), TokenError> {
 
     let paths = merged_pkcs11_module_paths(inner)?;
 
-    for path in &paths {
+    for path in paths.iter().take(MAX_MODULES_ROUTINE_LIST) {
         if let Ok(pkcs11) = Pkcs11::new(path) {
             if pkcs11.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK)).is_ok() {
                 if let Ok(slots) = slots_with_token_effective(&pkcs11) {
@@ -694,17 +1001,19 @@ fn ensure_pkcs11(inner: &mut Inner) -> Result<(), TokenError> {
                         return Ok(());
                     }
                 }
+                let _ = pkcs11.finalize();
             }
         }
     }
 
     // Si ninguno tiene token, nos quedamos con el primero que funcione (no crash) para que la UI muestre 0 slots
-    for path in &paths {
+    for path in paths.iter().take(1) {
         if let Ok(pkcs11) = Pkcs11::new(path) {
-            let _ = pkcs11.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK));
-            inner.pkcs11 = Some(pkcs11);
-            inner.active_module_path = Some(path.clone());
-            return Ok(());
+            if pkcs11.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK)).is_ok() {
+                inner.pkcs11 = Some(pkcs11);
+                inner.active_module_path = Some(path.clone());
+                return Ok(());
+            }
         }
     }
 

@@ -24,7 +24,6 @@
 	import { getBatchSignIntent } from "$lib/tauri/batch-sign-intent";
 	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
 	import {
-		PKCS11_CERT_POLL_MS,
 		emptySigningCertsHelp,
 		maybePersistPreferredModuleAfterSuccessfulBatch,
 	} from "$lib/tauri/pkcs11-ux";
@@ -164,18 +163,6 @@
 
 	/** Evita llamar varias veces a persistir middleware preferido por el mismo lote terminado. */
 	let preferredLearnedForFinishedBatch = $state(false);
-
-	/** Polling ligero: refrescar certificados en pasos 1–4 si la pestaña está visible (lector recién conectado). */
-	$effect(() => {
-		if (!isTauriRuntime()) return;
-		const poll = wizardStep >= 1 && wizardStep <= 4;
-		if (!poll) return;
-		const id = window.setInterval(() => {
-			if (document.visibilityState !== "visible") return;
-			void refreshCerts();
-		}, PKCS11_CERT_POLL_MS);
-		return () => window.clearInterval(id);
-	});
 
 	/** Tras un lote completado sin errores en el log, persistir middleware preferido si el usuario no definió uno. */
 	$effect(() => {
@@ -900,7 +887,7 @@
 			<Card.Header class="pb-2">
 				<Card.Title class="text-sm font-medium">Certificado</Card.Title>
 				<Card.Description class="text-xs">
-					La lista se actualiza sola cada pocos segundos en este paso; también puede usar Actualizar.
+					Conecte el lector y pulse Actualizar para cargar los certificados.
 				</Card.Description>
 			</Card.Header>
 			<Card.Content class="space-y-3 pt-0">
