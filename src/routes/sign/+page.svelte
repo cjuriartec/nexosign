@@ -12,7 +12,7 @@
 	import SignJobResults from "$lib/components/sign-job-results.svelte";
 	import { Progress } from "$lib/components/ui/progress/index.js";
 	import * as ScrollArea from "$lib/components/ui/scroll-area/index.js";
-	import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert/index.js";
+	import { Alert, AlertTitle } from "$lib/components/ui/alert/index.js";
 	import { Badge } from "$lib/components/ui/badge/index.js";
 	import { page } from "$app/state";
 	import { postBatchSign, LocalApiHttpError, extractJsonErrorMessage } from "$lib/api/local-api";
@@ -698,22 +698,15 @@
 	</nav>
 
 	<div
-		class="border-border/60 bg-background/92 supports-backdrop-filter:bg-background/85 sticky top-0 z-30 -mx-5 mb-4 flex flex-wrap items-center justify-end gap-2 border-y px-5 py-2 backdrop-blur-sm md:-mx-6 md:px-6"
+		class="border-border/60 bg-background/92 supports-backdrop-filter:bg-background/85 sticky top-0 z-30 -mx-5 mb-3 flex flex-wrap items-center justify-end gap-2 border-y px-5 py-1.5 backdrop-blur-sm md:-mx-6 md:px-6"
 		aria-label="Acciones del paso actual"
 	>
-		{#if wizardStep === 1 && paths.length === 0}
-			<p class="text-muted-foreground mr-auto max-w-[min(100%,18rem)] text-[11px] leading-snug">
-				Selecciona PDF o carpeta.
-			</p>
-		{/if}
-		<div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
+		<div class="flex w-full shrink-0 flex-wrap items-center justify-end gap-2">
 			{#if wizardStep === 5}
 				{#if canCancelBatchJobStep5}
-					<Button type="button" variant="outline" size="sm" onclick={() => cancelJob()}>Cancelar cola</Button>
+					<Button type="button" variant="outline" size="sm" onclick={() => cancelJob()}>Cancelar</Button>
 				{:else if batchQueue.activeBatchJobId && !jobSettled && activeJobItem?.status === "cancelling"}
-					<p class="text-muted-foreground mr-auto max-w-[min(100%,18rem)] text-[11px] leading-snug">
-						Cancelando…
-					</p>
+					<Badge variant="secondary" class="mr-auto h-6 text-[10px]">Cancelando…</Badge>
 				{/if}
 				<Button
 					type="button"
@@ -724,17 +717,49 @@
 					Nuevo lote
 				</Button>
 			{:else if wizardStep === 4}
-				<p class="text-muted-foreground mr-auto max-w-[min(100%,20rem)] text-[11px] leading-snug">
-					Confirma el resumen y firma desde el panel inferior.
-				</p>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					class="mr-auto"
+					disabled={busy || !batchQueue.activeBatchJobId}
+					onclick={() => cancelJob()}
+				>
+					Cancelar
+				</Button>
 			{:else if wizardStep === 3}
-				<p class="text-muted-foreground mr-auto max-w-[min(100%,20rem)] text-[11px] leading-snug">
-					Elige un certificado y continúa desde el panel inferior.
-				</p>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					class="mr-auto h-8 text-xs"
+					disabled={busy}
+					onclick={() => confirmResetReader()}
+				>
+					Reconectar lector
+				</Button>
+				<Button
+					type="button"
+					size="sm"
+					class="gap-1"
+					disabled={busy || !certId.trim() || certs.length === 0}
+					onclick={() => step3CertContinue()}
+					aria-label={`Siguiente paso: ${SIGN_STEPS[3].title}`}
+				>
+					Continuar
+					<ChevronRightIcon class="size-4 opacity-90" aria-hidden="true" />
+				</Button>
 			{:else if wizardStep === 2}
-				<p class="text-muted-foreground mr-auto max-w-[min(100%,20rem)] text-[11px] leading-snug">
-					Elige la casilla del sello y continúa desde el panel inferior.
-				</p>
+				<Button
+					type="button"
+					size="sm"
+					class="gap-1"
+					onclick={() => step2PlacementContinue()}
+					aria-label={`Siguiente paso: ${SIGN_STEPS[2].title}`}
+				>
+					Continuar
+					<ChevronRightIcon class="size-4 opacity-90" aria-hidden="true" />
+				</Button>
 			{:else if wizardStep === 1}
 				<Button
 					type="button"
@@ -753,21 +778,16 @@
 
 	{#if !isTauriRuntime()}
 		<Alert class="py-2">
-			<FileStackIcon class="size-4" />
-			<AlertTitle class="text-sm">Solo en la app de escritorio</AlertTitle>
-			<AlertDescription class="text-xs">Para elegir PDF y firmar con el DNIe o la tarjeta necesitas la app de NexoSign instalada.</AlertDescription>
+			<AlertTitle class="text-sm">Requiere la app de escritorio</AlertTitle>
 		</Alert>
 	{/if}
 
 	{#if wizardStep === 1}
 		<Card.Root size="sm">
-			<Card.Header class="pb-2">
+			<Card.Header class="pb-1">
 				<Card.Title class="text-sm font-medium">Archivos</Card.Title>
-				<Card.Description class="text-xs">
-					Incluye subcarpetas al elegir carpeta. Salida: carpeta hermana <code class="bg-muted rounded px-1 font-mono text-[11px]">…_firmados</code>.
-				</Card.Description>
 			</Card.Header>
-			<Card.Content class="space-y-3 pt-0">
+			<Card.Content class="space-y-2 pt-0 pb-3">
 				<div class="flex flex-wrap gap-2">
 					<Button type="button" size="sm" onclick={() => pickPdfs()} disabled={busy}>
 						<FileStackIcon class="mr-1.5 size-4" />
@@ -784,9 +804,7 @@
 				{#if outputDirForJob && sourceMode === "folder"}
 					<p class="text-muted-foreground truncate font-mono text-[11px]" title={outputDirForJob}>{outputDirForJob}</p>
 				{/if}
-				{#if paths.length === 0}
-					<p class="text-muted-foreground text-xs">Sin archivos.</p>
-				{:else}
+				{#if paths.length > 0}
 					<Table.Root>
 						<Table.Header>
 							<Table.Row>
@@ -824,11 +842,13 @@
 
 	{#if wizardStep === 2}
 		<Card.Root size="sm">
-			<Card.Header class="pb-2">
-				<Card.Title class="text-sm font-medium">Ubicación del sello</Card.Title>
-				<Card.Description class="text-xs">1.ª página, rejilla 3×5 (fila 1 = cabecera del PDF).</Card.Description>
+			<Card.Header class="flex flex-row items-center justify-between gap-2 space-y-0 pb-1">
+				<Card.Title class="text-sm font-medium">Sello</Card.Title>
+				<Badge variant="outline" class="h-5 font-mono text-[10px] tabular-nums">
+					{sigGridCol + 1}·{sigGridRow + 1}
+				</Badge>
 			</Card.Header>
-			<Card.Content class="flex flex-col items-center gap-2 pt-0 sm:flex-row sm:items-start sm:justify-center sm:gap-6">
+			<Card.Content class="flex justify-center pt-0 pb-3">
 				<div class="w-fit overflow-hidden rounded-md border border-border bg-muted/25">
 					{#each [0, 1, 2, 3, 4] as row}
 						<div class="flex border-b border-border/70 last:border-b-0">
@@ -854,96 +874,41 @@
 						</div>
 					{/each}
 				</div>
-				<p class="text-muted-foreground text-center text-[11px] sm:min-w-32 sm:text-left">
-					Columna {sigGridCol + 1}, fila {sigGridRow + 1}
-				</p>
 			</Card.Content>
-			<Card.Footer class="border-t pt-3">
-				<Button
-					type="button"
-					size="sm"
-					class="h-10 w-full gap-1 sm:ml-auto sm:w-auto"
-					onclick={() => step2PlacementContinue()}
-					aria-label={`Siguiente paso: ${SIGN_STEPS[2].title}`}
-				>
-					Continuar
-					<ChevronRightIcon class="size-4 opacity-90" aria-hidden="true" />
-				</Button>
-			</Card.Footer>
 		</Card.Root>
 	{/if}
 
 	{#if wizardStep === 3}
 		<Card.Root size="sm">
-			<Card.Header class="pb-2">
+			<Card.Header class="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-1">
 				<Card.Title class="text-sm font-medium">Certificado</Card.Title>
-				<Card.Description class="text-xs">
-					Conecta el lector y elige el certificado de firma de tu DNIe o tarjeta.
-				</Card.Description>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					class="h-8 shrink-0 gap-1 text-xs"
+					disabled={busy}
+					onclick={() => refreshCerts()}
+				>
+					Actualizar
+				</Button>
 			</Card.Header>
-			<Card.Content class="space-y-3 pt-0">
+			<Card.Content class="pt-0 pb-3">
 				<SigningCertPicker
 					{certs}
 					bind:certId
 					{busy}
 					slotsWithToken={slotsWithTokenCount}
-					onRefresh={async () => {
-						await refreshCerts();
-					}}
+					helpVariant="brief"
+					showDedupeNote={false}
+					compact
 				/>
-				<details
-					class="group rounded border border-dashed border-border/40 bg-muted/15 text-[11px] text-muted-foreground open:bg-muted/25"
-				>
-					<summary
-						class="cursor-pointer list-none px-2 py-1.5 outline-none marker:content-none [&::-webkit-details-marker]:hidden"
-					>
-						Problemas con el lector
-					</summary>
-					<div class="space-y-2 border-t border-border/40 px-2 pb-2 pt-2 leading-snug">
-						<p>Solo si no aparece ningún certificado tras comprobar la tarjeta.</p>
-						<Button
-							type="button"
-							variant="outline"
-							size="sm"
-							class="h-8 text-xs"
-							disabled={busy}
-							onclick={() => confirmResetReader()}
-						>
-							Reconectar lector
-						</Button>
-					</div>
-				</details>
 			</Card.Content>
-			<Card.Footer class="border-t pt-3">
-				<Button
-					type="button"
-					size="sm"
-					class="h-10 w-full gap-1 sm:ml-auto sm:w-auto"
-					disabled={busy || !certId.trim() || certs.length === 0}
-					onclick={() => step3CertContinue()}
-					aria-label={`Siguiente paso: ${SIGN_STEPS[3].title}`}
-				>
-					Continuar
-					<ChevronRightIcon class="size-4 opacity-90" aria-hidden="true" />
-				</Button>
-			</Card.Footer>
 		</Card.Root>
 	{/if}
 
 	{#if wizardStep === 4}
-		<div class="space-y-3">
-			<div class="flex flex-wrap justify-end gap-2">
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					disabled={busy || !batchQueue.activeBatchJobId}
-					onclick={() => cancelJob()}
-				>
-					Cancelar cola
-				</Button>
-			</div>
-			<SignConfirmPanel
+		<SignConfirmPanel
 				pathCount={paths.length}
 				{selectedCert}
 				{sigGridCol}
@@ -956,107 +921,62 @@
 				{submitInFlight}
 				onSubmit={() => submitBatch()}
 			/>
-		</div>
 	{/if}
 
 	{#if wizardStep === 5}
 		<Card.Root size="sm" class="overflow-hidden">
-			<Card.Header class="pb-3">
+			<Card.Header class="pb-2">
 				{#if resultStepSigning}
-					<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
+					<div class="flex items-center gap-3">
 						<div
-							class="flex size-14 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary"
+							class="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary"
 						>
-							<Loader2Icon class="size-7 animate-spin" aria-hidden="true" />
+							<Loader2Icon class="size-5 animate-spin" aria-hidden="true" />
 						</div>
-						<div class="min-w-0 flex-1 space-y-1">
-							<div class="flex flex-wrap items-center gap-2">
-								<Card.Title class="text-lg font-semibold tracking-tight">Firma en curso</Card.Title>
-								<Badge variant="secondary" class="h-5 text-[10px]">En progreso</Badge>
-							</div>
-							<Card.Description class="text-xs leading-relaxed">
-								Encolando y firmando los PDF; el registro se actualiza al avanzar cada archivo.
-							</Card.Description>
-							{#if batchQueue.activeBatchJobId}
-								<p class="text-muted-foreground pt-1 font-mono text-[10px]">
-									ID trabajo: <span title={batchQueue.activeBatchJobId}>{batchQueue.activeBatchJobId}</span>
-								</p>
-							{/if}
-						</div>
+						<Card.Title class="text-base font-semibold">Firmando</Card.Title>
+						<Badge variant="secondary" class="h-5 text-[10px]">{progressPct}%</Badge>
 					</div>
 				{:else if activeJobItem?.status === "cancelled"}
-					<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
+					<div class="flex items-center gap-3">
 						<div
-							class="border-border bg-muted/40 flex size-14 shrink-0 items-center justify-center rounded-full text-muted-foreground"
+							class="bg-muted/40 flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground"
 						>
-							<BanIcon class="size-7" aria-hidden="true" />
+							<BanIcon class="size-5" aria-hidden="true" />
 						</div>
-						<div class="min-w-0 flex-1 space-y-1">
-							<div class="flex flex-wrap items-center gap-2">
-								<Card.Title class="text-lg font-semibold tracking-tight">Lote cancelado</Card.Title>
-								<Badge variant="outline" class="h-5 text-[10px]">Cancelado</Badge>
-							</div>
-							<Card.Description class="text-xs leading-relaxed">
-								No se firmaron más documentos a partir de la cancelación. Puedes iniciar un nuevo lote cuando quieras.
-							</Card.Description>
-							{#if batchQueue.activeBatchJobId}
-								<p class="text-muted-foreground pt-1 font-mono text-[10px]">
-									ID trabajo: <span title={batchQueue.activeBatchJobId}>{batchQueue.activeBatchJobId}</span>
-								</p>
-							{/if}
-						</div>
+						<Card.Title class="text-base font-semibold">Cancelado</Card.Title>
 					</div>
 				{:else if activeJobItem?.status === "error"}
-					<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
+					<div class="flex items-center gap-3">
 						<div
-							class="flex size-12 shrink-0 items-center justify-center rounded-full bg-destructive/15 text-destructive"
+							class="flex size-10 shrink-0 items-center justify-center rounded-full bg-destructive/15 text-destructive"
 						>
-							<TriangleAlertIcon class="size-7" aria-hidden="true" />
+							<TriangleAlertIcon class="size-5" aria-hidden="true" />
 						</div>
-						<div class="min-w-0 space-y-1">
-							<Card.Title class="text-base font-semibold">No se completó el lote</Card.Title>
-							<Card.Description class="text-xs leading-relaxed">
-								Revisa el registro para el detalle del fallo.
-							</Card.Description>
-						</div>
+						<Card.Title class="text-base font-semibold">Error</Card.Title>
 					</div>
 				{:else if jobSettled && jobLogHasErrors}
-					<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
+					<div class="flex items-center gap-3">
 						<div
-							class="flex size-12 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400"
+							class="flex size-10 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400"
 						>
-							<TriangleAlertIcon class="size-7" aria-hidden="true" />
+							<TriangleAlertIcon class="size-5" aria-hidden="true" />
 						</div>
-						<div class="min-w-0 space-y-1">
-							<Card.Title class="text-base font-semibold">Proceso terminado con incidencias</Card.Title>
-							<Card.Description class="text-xs leading-relaxed">
-								Revisa el registro: algunos archivos pueden haber fallado o mostrar avisos.
-							</Card.Description>
-						</div>
+						<Card.Title class="text-base font-semibold">Con avisos</Card.Title>
 					</div>
 				{:else if jobSettled}
-					<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+					<div class="flex items-center gap-3">
 						<div
-							class="flex size-14 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+							class="flex size-10 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
 						>
-							<CircleCheckIcon class="size-8" aria-hidden="true" />
+							<CircleCheckIcon class="size-5" aria-hidden="true" />
 						</div>
-						<div class="min-w-0 space-y-0.5">
-							<Card.Title class="text-lg font-semibold tracking-tight">Firma completada</Card.Title>
-							<Card.Description class="text-xs">
-								{#if progressSnapshot}
-									{progressSnapshot.total} documento(s) procesado(s).
-								{:else}
-									Lote finalizado correctamente.
-								{/if}
-							</Card.Description>
-						</div>
+						<Card.Title class="text-base font-semibold">Listo</Card.Title>
+						{#if progressSnapshot}
+							<Badge variant="outline" class="h-5 text-[10px] tabular-nums">
+								{progressSnapshot.actual}/{progressSnapshot.total}
+							</Badge>
+						{/if}
 					</div>
-				{/if}
-				{#if batchQueue.activeBatchJobId && jobSettled && activeJobItem?.status !== "cancelled"}
-					<p class="text-muted-foreground pt-2 font-mono text-[10px]">
-						ID trabajo: <span title={batchQueue.activeBatchJobId}>{batchQueue.activeBatchJobId}</span>
-					</p>
 				{/if}
 			</Card.Header>
 			<Card.Content class="space-y-3 pt-0">
@@ -1066,40 +986,25 @@
 					jobSettled={jobSettled}
 				/>
 				{#if resultStepSigning}
-					<div class="border-border/50 bg-muted/20 space-y-2 rounded-lg border px-3 py-3">
+					<div class="space-y-2">
 						{#if progressSubtitle}
-							<p class="text-muted-foreground truncate text-xs">{progressSubtitle}</p>
-						{:else}
-							<p class="text-muted-foreground text-xs">Preparando petición…</p>
+							<p class="text-muted-foreground truncate text-xs" title={progressSubtitle}>{progressSubtitle}</p>
 						{/if}
-						<div class="flex items-end justify-between gap-2">
-							<div class="flex items-baseline gap-1">
-								<span class="text-foreground tabular-nums text-2xl font-semibold">{progressPct}</span>
-								<span class="text-muted-foreground text-xs">%</span>
-							</div>
-							{#if progressSnapshot}
-								<span class="text-muted-foreground text-xs tabular-nums"
-									>{progressSnapshot.actual}/{progressSnapshot.total}</span
-								>
-							{/if}
-						</div>
 						<Progress value={progressPct} max={100} class="h-2 rounded-full" />
+						{#if progressSnapshot}
+							<p class="text-muted-foreground text-right text-[11px] tabular-nums">
+								{progressSnapshot.actual}/{progressSnapshot.total}
+							</p>
+						{/if}
 					</div>
 				{/if}
-				<p class="text-muted-foreground text-[11px] font-medium uppercase tracking-wide">Registro del proceso</p>
 				<ScrollArea.Root
 					bind:viewportRef={logViewportEl}
 					class="bg-muted/25 dark:bg-muted/15 h-52 rounded-lg border shadow-inner sm:h-60"
 				>
 					<div class="space-y-0 p-3 font-mono text-[11px] leading-relaxed">
 						{#if logLines.length === 0}
-							<p class="text-muted-foreground py-8 text-center text-xs">
-								{#if resultStepSigning}
-									Esperando eventos del firmador…
-								{:else}
-									No hay líneas de registro.
-								{/if}
-							</p>
+							<p class="text-muted-foreground py-6 text-center text-xs">—</p>
 						{:else}
 							{#each logLines as line, i}
 								{@const tone = logLineTone(line)}

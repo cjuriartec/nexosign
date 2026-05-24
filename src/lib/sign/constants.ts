@@ -1,6 +1,6 @@
 export const SIGN_STEPS = [
 	{ step: 1, title: "Archivos" },
-	{ step: 2, title: "Ubicación" },
+	{ step: 2, title: "Sello" },
 	{ step: 3, title: "Certificado" },
 	{ step: 4, title: "Confirmar" },
 	{ step: 5, title: "Resultado" },

@@ -51,16 +51,12 @@
 
 {#if showCard}
 	<Card.Root size="sm">
-		<Card.Header class="pb-2">
+		<Card.Header class="flex flex-row items-center gap-2 space-y-0 pb-2">
 			<Card.Title class="text-sm font-medium">Colas</Card.Title>
 			{#if batchQueueHasActiveWork}
-				<Card.Description class="text-xs">
-					{#if showWizardLockHint}
-						Lote activo — atrás bloqueado hasta terminar o cancelar.
-					{:else}
-						Firma en curso.
-					{/if}
-				</Card.Description>
+				<Badge variant="secondary" class="h-5 text-[10px]">
+					{showWizardLockHint ? "Activo" : "En curso"}
+				</Badge>
 			{/if}
 		</Card.Header>
 		<Card.Content class="space-y-1.5 pt-0">

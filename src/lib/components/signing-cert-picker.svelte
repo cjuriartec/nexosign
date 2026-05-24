@@ -25,6 +25,8 @@
 		helpVariant?: "full" | "brief";
 		showDedupeNote?: boolean;
 		onRefresh?: () => void | Promise<void>;
+		/** Asistente Firmar: menos padding y sin fila extra de acciones. */
+		compact?: boolean;
 	}
 
 	let {
@@ -35,6 +37,7 @@
 		helpVariant = "full",
 		showDedupeNote = true,
 		onRefresh,
+		compact = false,
 	}: Props = $props();
 
 	const emptyHelp = $derived(
@@ -44,13 +47,9 @@
 	);
 </script>
 
-<div class="space-y-3">
-	{#if showDedupeNote || onRefresh}
-	<div class="flex flex-wrap items-start justify-between gap-2">
-		{#if showDedupeNote}
-			<p class="text-muted-foreground max-w-prose text-xs leading-snug">{DEDUPED_WIN_MY_FOOTNOTE}</p>
-		{/if}
-		{#if onRefresh}
+<div class={cn(compact ? "space-y-2" : "space-y-3")}>
+	{#if onRefresh}
+		<div class="flex justify-end">
 			<Button
 				type="button"
 				variant="outline"
@@ -62,18 +61,26 @@
 				<RefreshCwIcon class="size-4 opacity-80" aria-hidden="true" />
 				Actualizar
 			</Button>
-		{/if}
-	</div>
+		</div>
+	{:else if showDedupeNote}
+		<p class="text-muted-foreground max-w-prose text-xs leading-snug">{DEDUPED_WIN_MY_FOOTNOTE}</p>
 	{/if}
 
 	{#if certs.length === 0}
-		<Alert variant={slotsWithToken <= 0 ? "destructive" : "default"} class="text-left">
+		<Alert
+			variant={slotsWithToken <= 0 ? "destructive" : "default"}
+			class={cn("text-left", compact && "py-2")}
+		>
 			<TriangleAlertIcon class="size-4" />
 			<AlertTitle class="text-sm">{emptyHelp.title}</AlertTitle>
-			<AlertDescription class="text-xs leading-snug">{emptyHelp.description}</AlertDescription>
+			{#if helpVariant === "full"}
+				<AlertDescription class="text-xs leading-snug">{emptyHelp.description}</AlertDescription>
+			{:else}
+				<AlertDescription class="text-xs">{emptyHelp.description}</AlertDescription>
+			{/if}
 		</Alert>
 	{:else}
-		<div class="space-y-2" role="radiogroup" aria-label="Certificado de firma">
+		<div class={cn(compact ? "space-y-1.5" : "space-y-2")} role="radiogroup" aria-label="Certificado de firma">
 			{#each certs as c (c.id_hex)}
 				{@const selected = certId === c.id_hex}
 				{@const name = getHumanNameFromDn(c.subject_dn) || c.label || "(sin etiqueta)"}
@@ -83,7 +90,8 @@
 					role="radio"
 					aria-checked={selected}
 					class={cn(
-						"flex w-full items-start gap-3 rounded-lg border px-3 py-3 text-left transition-colors",
+						"flex w-full items-center gap-2.5 rounded-lg border text-left transition-colors",
+						compact ? "px-2.5 py-2" : "items-start gap-3 px-3 py-3",
 						selected
 							? "border-primary bg-primary/5 ring-primary/30 ring-2"
 							: "border-border/80 bg-card hover:bg-muted/40",
@@ -94,26 +102,32 @@
 				>
 					<span
 						class={cn(
-							"mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full",
+							"flex shrink-0 items-center justify-center rounded-full",
+							compact ? "size-8" : "mt-0.5 size-9",
 							selected ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground",
 						)}
 						aria-hidden="true"
 					>
-						<IdCardIcon class="size-4" />
+						<IdCardIcon class={compact ? "size-3.5" : "size-4"} />
 					</span>
-					<span class="min-w-0 flex-1 space-y-1">
-						<span class="flex flex-wrap items-center gap-2">
-							<span class="text-sm font-semibold leading-tight">{name}</span>
+					<span class="min-w-0 flex-1">
+						<span class="flex flex-wrap items-center gap-1.5">
+							<span class="text-sm font-semibold leading-tight">
+								{name}
+							</span>
 							<Badge variant="secondary" class="h-5 px-1.5 text-[10px] font-normal">
 								{signingCertSourceLabel(c.source)}
 							</Badge>
 						</span>
 						{#if dni}
-							<span class="text-muted-foreground block text-xs tabular-nums">{dni}</span>
+							<span class="text-muted-foreground block text-[11px] tabular-nums leading-tight">{dni}</span>
 						{/if}
 					</span>
 					{#if selected}
-						<CircleCheckIcon class="text-primary mt-1 size-5 shrink-0" aria-hidden="true" />
+						<CircleCheckIcon
+							class={cn("text-primary shrink-0", compact ? "size-4" : "mt-1 size-5")}
+							aria-hidden="true"
+						/>
 					{/if}
 				</button>
 			{/each}
