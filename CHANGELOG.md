@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-05-24
+
+### Changed
+
+- **Windows (NSIS):** explicit `installMode: currentUser` so the setup installer targets `%LOCALAPPDATA%` without requiring administrator (app runtime never needed admin).
+- **Docs:** clarify `*_x64-setup.exe` vs `.msi` install privileges in README and [docs/distribucion-windows.md](./docs/distribucion-windows.md).
+
 ## [1.0.0] - 2026-05-23
 
 ### Added
@@ -23,4 +30,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Local loopback surface only; do not log PINs or token secrets.
 
+[1.0.1]: https://github.com/cjuriartec/nexosign/releases/tag/v1.0.1
 [1.0.0]: https://github.com/cjuriartec/nexosign/releases/tag/v1.0.0

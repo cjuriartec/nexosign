@@ -37,7 +37,7 @@
 
 ## Installation
 
-Download the latest **Windows** installer (`.msi`) from **[Releases](https://github.com/cjuriartec/nexosign/releases)**.
+Download the latest **Windows** installer from **[Releases](https://github.com/cjuriartec/nexosign/releases)**. Prefer **`NexoSign_*_x64-setup.exe`** (per-user, no admin required). The **`.msi`** is for system-wide / IT installs and typically asks for administrator rights.
 
 - **macOS** bundles from CI are **not notarized**; see [`docs/distribucion-macos.md`](./docs/distribucion-macos.md).
 - **Development** setup: [CONTRIBUTING.md](./CONTRIBUTING.md).
