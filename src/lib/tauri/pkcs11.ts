@@ -10,6 +10,8 @@ export type SigningCertSummary = {
 	subject_dn: string;
 	source?: SigningCertSource;
 	pin_ui?: SigningPinUi;
+	/** Huella SHA-1 del DER; el backend oculta MY duplicado cuando coincide con chip. */
+	cert_thumbprint_sha1_hex?: string;
 };
 
 /** PKCS#11 requiere PIN en la app; almacén MY solo si `required_in_app`. */

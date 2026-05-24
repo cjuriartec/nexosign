@@ -19,7 +19,9 @@ use crate::adapters::pcsc_wake;
 use crate::adapters::pkcs11::driver::find_all_pkcs11_modules;
 use crate::adapters::pkcs11::error::TokenError;
 use crate::domain::cert_filter::der_is_signing_certificate;
-use crate::domain::signing_cert::{is_win_my_cert_id, SigningCertSource, SigningCertSummary, SigningPinUi};
+use crate::domain::signing_cert::{
+    is_win_my_cert_id, sha1_thumbprint_hex, SigningCertSource, SigningCertSummary, SigningPinUi,
+};
 
 /// Una sola exploración PKCS#11 (varias DLL) a la vez; evita conflictos PC/SC entre controladores.
 fn pkcs11_scan_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -222,6 +224,7 @@ fn collect_signing_certs_from_session(
             subject_dn: subject_dn_from_der(&der),
             source: SigningCertSource::Pkcs11,
             pin_ui: SigningPinUi::RequiredInApp,
+            cert_thumbprint_sha1_hex: sha1_thumbprint_hex(&der),
         });
     }
 
@@ -1049,6 +1052,7 @@ mod tests {
             subject_dn: String::new(),
             source: SigningCertSource::Pkcs11,
             pin_ui: SigningPinUi::RequiredInApp,
+            cert_thumbprint_sha1_hex: String::new(),
         }
     }
 

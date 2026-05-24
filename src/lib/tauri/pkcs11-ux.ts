@@ -22,6 +22,17 @@ export function signingCertSourceLabel(source?: SigningCertSource): string {
 	return "—";
 }
 
+/** Subtítulo corto para selectores (origen del certificado). */
+export function signingCertSourceSubtitle(source?: SigningCertSource): string | null {
+	if (source === "pkcs11") return "Tarjeta / lector";
+	if (source === "win_my") return "Almacén Personal de Windows";
+	return null;
+}
+
+/** Texto cuando el listado ya no muestra duplicados MY+chip (Windows). */
+export const DEDUPED_WIN_MY_FOOTNOTE =
+	"Si el mismo certificado está en la tarjeta y en el almacén Personal de Windows, mostramos solo la entrada del lector (chip).";
+
 /** Mensaje único cuando no hay certificados de firma: distingue “sin tarjeta” vs “tarjeta sin certificado de firma”. */
 export function emptySigningCertsHelp(slotsWithToken: number): EmptySigningCertsHelp {
 	if (slotsWithToken <= 0) {

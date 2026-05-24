@@ -16,6 +16,10 @@ En **Windows**, la misma lista **añade** certificados del almacén **Current Us
 
 El identificador en la UI es `winmy:` seguido de la huella **SHA-1** del certificado (hex). La firma PAdES-BES usa **NCrypt** con el mismo perfil CMS que PKCS#11.
 
+### Deduplicación chip + MY
+
+Si el mismo certificado (misma huella SHA-1 del DER) aparece en **PKCS#11** y en **MY**, `list_signing_certificates` devuelve **solo la entrada del lector (chip)**. Así la UI no duplica el mismo DNIe. Los certificados que solo existen en MY (sin lectura en chip) siguen listándose.
+
 ### PIN en la interfaz (`pin_ui`)
 
 Para no mostrar un PIN «opcional» confuso, cada certificado de MY lleva un campo **`pin_ui`**:

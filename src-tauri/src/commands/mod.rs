@@ -17,7 +17,7 @@ use crate::adapters::pkcs11::token::{
     Pkcs11Diagnostics, Pkcs11ProbeCertificateListing, Pkcs11TokenManager, SessionStatusDto,
 };
 use crate::domain::allowed_origins::AllowedOrigins;
-use crate::domain::signing_cert::SigningCertSummary;
+use crate::domain::signing_cert::{dedupe_signing_certs_prefer_pkcs11, SigningCertSummary};
 use crate::infrastructure::origin_db::OriginDbPath;
 
 pub mod batch_queue_history;
@@ -466,6 +466,20 @@ pub async fn pkcs11_probe_certificate_listing(
     pkcs11_blocking(move || mgr.probe_certificate_listing().map_err(|e| e.to_string())).await
 }
 
+#[cfg(windows)]
+fn append_windows_my_signing_certs(mut v: Vec<SigningCertSummary>) -> Vec<SigningCertSummary> {
+    match crate::adapters::windows_cert_store::list_my_store_signing_rsa_certs() {
+        Ok(mut w) => v.append(&mut w),
+        Err(e) => tracing::warn!(error = %e, "listado certificados almacén Windows MY"),
+    }
+    dedupe_signing_certs_prefer_pkcs11(v)
+}
+
+#[cfg(not(windows))]
+fn append_windows_my_signing_certs(v: Vec<SigningCertSummary>) -> Vec<SigningCertSummary> {
+    v
+}
+
 #[tauri::command]
 pub async fn pkcs11_list_signing_with_pin(
     state: tauri::State<'_, Pkcs11Store>,
@@ -473,13 +487,10 @@ pub async fn pkcs11_list_signing_with_pin(
 ) -> Result<Vec<SigningCertSummary>, String> {
     let mgr = Arc::clone(&*state);
     pkcs11_blocking(move || {
-        let mut v = mgr.list_pkcs11_signing_with_pin(pin).map_err(|e| e.to_string())?;
-        #[cfg(windows)]
-        match crate::adapters::windows_cert_store::list_my_store_signing_rsa_certs() {
-            Ok(mut w) => v.append(&mut w),
-            Err(e) => tracing::warn!(error = %e, "listado MY tras probe PIN"),
-        }
-        Ok(v)
+        let v = mgr
+            .list_pkcs11_signing_with_pin(pin)
+            .map_err(|e| e.to_string())?;
+        Ok(append_windows_my_signing_certs(v))
     })
     .await
 }
@@ -490,14 +501,8 @@ pub async fn list_signing_certificates(
 ) -> Result<Vec<SigningCertSummary>, String> {
     let mgr = Arc::clone(&*state);
     pkcs11_blocking(move || {
-        #[allow(unused_mut)]
-        let mut v = mgr.list_signing_certificates().map_err(|e| e.to_string())?;
-        #[cfg(windows)]
-        match crate::adapters::windows_cert_store::list_my_store_signing_rsa_certs() {
-            Ok(mut w) => v.append(&mut w),
-            Err(e) => tracing::warn!(error = %e, "listado certificados almacén Windows MY"),
-        }
-        Ok(v)
+        let v = mgr.list_signing_certificates().map_err(|e| e.to_string())?;
+        Ok(append_windows_my_signing_certs(v))
     })
     .await
 }

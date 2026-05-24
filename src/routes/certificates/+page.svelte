@@ -10,6 +10,7 @@
 	import type { Pkcs11ProbeCertificateListing, SigningCertSummary } from "$lib/tauri/pkcs11";
 	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
 	import {
+		DEDUPED_WIN_MY_FOOTNOTE,
 		emptySigningCertsHelp,
 		hasPkcs11ChipCerts,
 		onlyWinMySigningCerts,
@@ -180,6 +181,7 @@
 					<Card.Title class="text-base">Certificados</Card.Title>
 					<Card.Description>
 						Lista actual desde tu DNIe o tarjeta. Pulsa «Recargar» para actualizar tras conectar el lector.
+						<span class="text-muted-foreground mt-1 block text-xs leading-snug">{DEDUPED_WIN_MY_FOOTNOTE}</span>
 						{#if probeBusy}
 							<span class="text-muted-foreground block text-xs">Comprobando chip en segundo plano…</span>
 						{/if}
@@ -248,7 +250,12 @@
 								<Table.Row>
 									<Table.Cell class="font-medium">{getHumanNameFromDn(c.subject_dn) || c.label || "—"}</Table.Cell>
 									<Table.Cell class="text-muted-foreground text-sm">{extractDniFromDn(c.subject_dn) || "—"}</Table.Cell>
-									<Table.Cell class="text-muted-foreground text-xs">{signingCertSourceLabel(c.source)}</Table.Cell>
+									<Table.Cell class="text-muted-foreground text-xs">
+										{signingCertSourceLabel(c.source)}
+										{#if c.source === "pkcs11"}
+											<span class="text-foreground/70 block text-[10px]">Recomendado con tarjeta insertada</span>
+										{/if}
+									</Table.Cell>
 									<Table.Cell class="text-right">
 										<span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80">
 											{extractPurposeFromDn(c.subject_dn)}

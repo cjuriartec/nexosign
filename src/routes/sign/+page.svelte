@@ -24,8 +24,10 @@
 	import { getBatchSignIntent } from "$lib/tauri/batch-sign-intent";
 	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
 	import {
+		DEDUPED_WIN_MY_FOOTNOTE,
 		emptySigningCertsHelp,
 		maybePersistPreferredModuleAfterSuccessfulBatch,
+		signingCertSourceSubtitle,
 	} from "$lib/tauri/pkcs11-ux";
 	import { getLocalApiBaseUrl } from "$lib/tauri/settings";
 	import { isTauriRuntime } from "$lib/tauri/env";
@@ -888,6 +890,7 @@
 				<Card.Title class="text-sm font-medium">Certificado</Card.Title>
 				<Card.Description class="text-xs">
 					Conecte el lector y pulse Actualizar para cargar los certificados.
+					<span class="text-muted-foreground mt-1 block leading-snug">{DEDUPED_WIN_MY_FOOTNOTE}</span>
 				</Card.Description>
 			</Card.Header>
 			<Card.Content class="space-y-3 pt-0">
@@ -906,7 +909,13 @@
 								{@const selected = certs.find((c) => c.id_hex === certId)}
 								{#if selected}
 									<span class="truncate text-sm font-medium">
-										{getHumanNameFromDn(selected.subject_dn) || selected.label} <span class="text-muted-foreground font-normal">({extractDniFromDn(selected.subject_dn) || "—"})</span>
+										{getHumanNameFromDn(selected.subject_dn) || selected.label}
+										<span class="text-muted-foreground font-normal">({extractDniFromDn(selected.subject_dn) || "—"})</span>
+										{#if signingCertSourceSubtitle(selected.source)}
+											<span class="text-muted-foreground block truncate text-[10px] font-normal">
+												{signingCertSourceSubtitle(selected.source)}
+											</span>
+										{/if}
 									</span>
 								{:else}
 									<span class="text-muted-foreground text-sm">Elegir…</span>
@@ -918,6 +927,9 @@
 										<div class="flex flex-col py-0.5 text-left">
 											<span class="text-sm font-medium">{getHumanNameFromDn(c.subject_dn) || c.label || "(sin etiqueta)"}</span>
 											<span class="text-muted-foreground text-[11px]">{extractDniFromDn(c.subject_dn) || "—"}</span>
+											{#if signingCertSourceSubtitle(c.source)}
+												<span class="text-muted-foreground text-[10px]">{signingCertSourceSubtitle(c.source)}</span>
+											{/if}
 										</div>
 									</Select.Item>
 								{/each}

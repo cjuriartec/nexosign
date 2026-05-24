@@ -23,7 +23,8 @@ use windows::Win32::Security::Cryptography::{
 
 use crate::domain::cert_filter::der_is_signing_certificate;
 use crate::domain::signing_cert::{
-    SigningCertSource, SigningCertSummary, SigningPinUi, WIN_MY_CERT_ID_PREFIX,
+    sha1_thumbprint_hex, SigningCertSource, SigningCertSummary, SigningPinUi,
+    WIN_MY_CERT_ID_PREFIX,
 };
 use x509_cert::Certificate;
 use x509_parser::prelude::FromDer;
@@ -252,6 +253,7 @@ pub fn list_my_store_signing_rsa_certs() -> Result<Vec<SigningCertSummary>, WinC
                     subject_dn,
                     source: SigningCertSource::WinMy,
                     pin_ui,
+                    cert_thumbprint_sha1_hex: sha1_thumbprint_hex(der),
                 });
             }
             prev = Some(ctx.cast_const());

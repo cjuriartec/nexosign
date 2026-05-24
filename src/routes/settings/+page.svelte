@@ -692,7 +692,7 @@
 				<Card.Description>
 					Comprueba qué ve NexoSign en el lector. Si en Certificados no aparece tu DNIe, ejecuta el
 					diagnóstico aquí (sin abrir ReFirma) y revisa el controlador PKCS#11 más abajo. En Certificados,
-					la columna «Origen» indica si el certificado viene del chip (Lector) o del almacén de Windows.
+					«Origen» indica chip o Windows; si es el mismo certificado en ambos sitios, solo se muestra el del lector.
 				</Card.Description>
 			</Card.Header>
 			<Card.Content class="space-y-4">
