@@ -11,12 +11,16 @@
 	import SignConfirmPanel from "$lib/components/sign-confirm-panel.svelte";
 	import SignJobResults from "$lib/components/sign-job-results.svelte";
 	import { Progress } from "$lib/components/ui/progress/index.js";
-	import * as ScrollArea from "$lib/components/ui/scroll-area/index.js";
-	import { Alert, AlertTitle } from "$lib/components/ui/alert/index.js";
+	import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert/index.js";
 	import { Badge } from "$lib/components/ui/badge/index.js";
 	import { page } from "$app/state";
-	import { postBatchSign, LocalApiHttpError, extractJsonErrorMessage } from "$lib/api/local-api";
-	import { ipcPostBatchSign, LocalBackendInvokeError } from "$lib/tauri/local-backend";
+	import {
+		fetchBatchJobStatus,
+		postBatchSign,
+		LocalApiHttpError,
+		extractJsonErrorMessage,
+	} from "$lib/api/local-api";
+	import { ipcFetchBatchJobStatus, ipcPostBatchSign, LocalBackendInvokeError } from "$lib/tauri/local-backend";
 	import { subscribeProgress, type ProgressPayload } from "$lib/events/progress";
 	import * as pkcs11 from "$lib/tauri/pkcs11";
 	import type { SigningCertSummary } from "$lib/tauri/pkcs11";
@@ -98,8 +102,9 @@
 	/** Tras pulsar "Firmar", no se vuelve a pasos anteriores hasta "Nuevo lote". */
 	let stepHistoryLocked = $state(false);
 	let progressPct = $state(0);
-	let logLines = $state<string[]>([]);
 	let jobFileResults = $state<SignJobFileResult[]>([]);
+	/** Error de lote completo (API / cola), no de un PDF concreto. */
+	let batchFlowError = $state<string | null>(null);
 	/** Último tick de progreso (para título y subtítulo del panel). */
 	let progressSnapshot = $state<{
 		actual: number;
@@ -107,7 +112,6 @@
 		fileLabel: string;
 	} | null>(null);
 
-	let logViewportEl = $state<HTMLElement | null>(null);
 	/** Evita enviar dos veces POST /batch/sign antes de que termine la petición. */
 	let submitInFlight = $state(false);
 
@@ -143,24 +147,7 @@
 		),
 	);
 
-	function logLineTone(line: string): "muted" | "ok" | "err" {
-		const lower = line.toLowerCase();
-		if (
-			/\berror\b/.test(lower) ||
-			/\bfallo\b/.test(lower) ||
-			/\bfalló\b/.test(lower) ||
-			/\bincorrecto\b/.test(lower) ||
-			(line.includes(" · ") && line.split(" · ").length >= 3)
-		) {
-			return "err";
-		}
-		if (/\bok\b|\bcompletad|\bfirmad/i.test(lower)) {
-			return "ok";
-		}
-		return "muted";
-	}
-
-	const jobLogHasErrors = $derived(logLines.some((l) => logLineTone(l) === "err"));
+	const jobHasFileErrors = $derived(jobFileDisplayList.some((i) => i.status === "error"));
 
 	/** Evita llamar varias veces a persistir middleware preferido por el mismo lote terminado. */
 	let preferredLearnedForFinishedBatch = $state(false);
@@ -173,7 +160,7 @@
 			return;
 		}
 		if (activeJobItem?.status === "cancelled" || activeJobItem?.status === "error") return;
-		if (jobLogHasErrors) return;
+		if (jobHasFileErrors) return;
 		if (preferredLearnedForFinishedBatch) return;
 		preferredLearnedForFinishedBatch = true;
 		void maybePersistPreferredModuleAfterSuccessfulBatch();
@@ -208,7 +195,7 @@
 		activeJobRef.current = null;
 		progressPct = 0;
 		progressSnapshot = null;
-		logLines = [];
+		batchFlowError = null;
 		jobFileResults = [];
 		pin = "";
 		pinError = null;
@@ -216,23 +203,6 @@
 		stepHistoryLocked = false;
 		clearPaths();
 	}
-
-	function pushLog(line: string) {
-		logLines = [...logLines, line].slice(-120);
-	}
-
-	$effect(() => {
-		const n = logLines.length;
-		if (n === 0) return;
-		queueMicrotask(() => {
-			const el = logViewportEl;
-			if (!el) return;
-			el.scrollTo({
-				top: el.scrollHeight,
-				behavior: n <= 2 ? "auto" : "smooth",
-			});
-		});
-	});
 
 	async function partitionPaths(list: string[]): Promise<string[]> {
 		if (!isTauriRuntime()) return list;
@@ -492,7 +462,7 @@
 
 		busy = true;
 		pinError = null;
-		logLines = [];
+		batchFlowError = null;
 		jobFileResults = [];
 		progressPct = 0;
 		progressSnapshot = null;
@@ -613,8 +583,6 @@
 						total: p.total,
 						fileLabel: baseLabel,
 					};
-					const err = p.error ? ` · ${p.error}` : "";
-					pushLog(`${p.actual}/${p.total} · ${tail}${err}`);
 					jobFileResults = upsertJobFileResult(jobFileResults, {
 						index: p.actual,
 						label: labelFromProgressPayload(p),
@@ -633,6 +601,33 @@
 
 	$effect(() => {
 		activeJobRef.current = batchQueue.activeBatchJobId;
+	});
+
+	$effect(() => {
+		if (!jobSettled || activeJobItem?.status !== "error") {
+			if (activeJobItem?.status !== "error") batchFlowError = null;
+			return;
+		}
+		const jid = batchQueue.activeBatchJobId;
+		if (!jid || jid.startsWith("pending-")) {
+			batchFlowError = "No se pudo completar el lote.";
+			return;
+		}
+		let cancelled = false;
+		void (async () => {
+			try {
+				const snap = isTauriRuntime()
+					? await ipcFetchBatchJobStatus(jid)
+					: await fetchBatchJobStatus(jid, apiBase);
+				if (cancelled) return;
+				batchFlowError = snap.error?.trim() || "No se pudo completar el lote.";
+			} catch {
+				if (!cancelled) batchFlowError = "No se pudo completar el lote.";
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
 	});
 </script>
 
@@ -954,7 +949,7 @@
 						</div>
 						<Card.Title class="text-base font-semibold">Error</Card.Title>
 					</div>
-				{:else if jobSettled && jobLogHasErrors}
+				{:else if jobSettled && jobHasFileErrors}
 					<div class="flex items-center gap-3">
 						<div
 							class="flex size-10 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400"
@@ -980,49 +975,38 @@
 				{/if}
 			</Card.Header>
 			<Card.Content class="space-y-3 pt-0">
-				<SignJobResults
-					items={jobFileDisplayList}
-					{outputDirForJob}
-					jobSettled={jobSettled}
-				/>
+				{#if activeJobItem?.status === "cancelled" && jobSettled}
+					<Alert>
+						<BanIcon class="size-4" />
+						<AlertTitle>Cancelado</AlertTitle>
+						<AlertDescription>Se detuvo la firma del lote. Los PDF no modificados siguen igual.</AlertDescription>
+					</Alert>
+				{/if}
+
+				{#if batchFlowError && activeJobItem?.status === "error"}
+					<Alert variant="destructive">
+						<TriangleAlertIcon class="size-4" />
+						<AlertTitle>No se pudo completar el lote</AlertTitle>
+						<AlertDescription>{batchFlowError}</AlertDescription>
+					</Alert>
+				{/if}
+
 				{#if resultStepSigning}
 					<div class="space-y-2">
 						{#if progressSubtitle}
 							<p class="text-muted-foreground truncate text-xs" title={progressSubtitle}>{progressSubtitle}</p>
 						{/if}
 						<Progress value={progressPct} max={100} class="h-2 rounded-full" />
-						{#if progressSnapshot}
-							<p class="text-muted-foreground text-right text-[11px] tabular-nums">
-								{progressSnapshot.actual}/{progressSnapshot.total}
-							</p>
-						{/if}
 					</div>
 				{/if}
-				<ScrollArea.Root
-					bind:viewportRef={logViewportEl}
-					class="bg-muted/25 dark:bg-muted/15 h-52 rounded-lg border shadow-inner sm:h-60"
-				>
-					<div class="space-y-0 p-3 font-mono text-[11px] leading-relaxed">
-						{#if logLines.length === 0}
-							<p class="text-muted-foreground py-6 text-center text-xs">—</p>
-						{:else}
-							{#each logLines as line, i}
-								{@const tone = logLineTone(line)}
-								<div
-									class={cn(
-										"border-border/30 rounded-md border-l-2 py-1.5 pl-2 pr-1",
-										i === logLines.length - 1 ? "border-primary bg-primary/6" : "border-transparent",
-										tone === "err" && "text-destructive",
-										tone === "ok" && "text-emerald-700 dark:text-emerald-400",
-										tone === "muted" && "text-foreground/90",
-									)}
-								>
-									{line}
-								</div>
-							{/each}
-						{/if}
-					</div>
-				</ScrollArea.Root>
+
+				<SignJobResults
+					items={jobFileDisplayList}
+					{outputDirForJob}
+					{jobSettled}
+					signing={resultStepSigning}
+					activeFileIndex={progressSnapshot?.actual ?? null}
+				/>
 			</Card.Content>
 		</Card.Root>
 	{/if}
