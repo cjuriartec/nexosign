@@ -17,7 +17,9 @@ use crate::adapters::pkcs11::token::{
     Pkcs11Diagnostics, Pkcs11ProbeCertificateListing, Pkcs11TokenManager, SessionStatusDto,
 };
 use crate::domain::allowed_origins::AllowedOrigins;
-use crate::domain::signing_cert::{dedupe_signing_certs_prefer_pkcs11, SigningCertSummary};
+use crate::domain::signing_cert::SigningCertSummary;
+#[cfg(windows)]
+use crate::domain::signing_cert::dedupe_signing_certs_prefer_pkcs11;
 use crate::infrastructure::origin_db::OriginDbPath;
 
 pub mod batch_queue_history;
