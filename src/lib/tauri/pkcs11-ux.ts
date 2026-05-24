@@ -33,6 +33,20 @@ export function signingCertSourceSubtitle(source?: SigningCertSource): string | 
 export const DEDUPED_WIN_MY_FOOTNOTE =
 	"Si el mismo certificado está en la tarjeta y en el almacén Personal de Windows, mostramos solo la entrada del lector (chip).";
 
+/** Versión corta para listados (p. ej. página Certificados). */
+export function emptySigningCertsHelpBrief(slotsWithToken: number): EmptySigningCertsHelp {
+	if (slotsWithToken <= 0) {
+		return {
+			title: "Sin tarjeta en el lector",
+			description: "Conecta el DNIe y pulsa Recargar.",
+		};
+	}
+	return {
+		title: "Sin certificado de firma",
+		description: "Prueba con PIN o revisa el lector en Ajustes.",
+	};
+}
+
 /** Mensaje único cuando no hay certificados de firma: distingue “sin tarjeta” vs “tarjeta sin certificado de firma”. */
 export function emptySigningCertsHelp(slotsWithToken: number): EmptySigningCertsHelp {
 	if (slotsWithToken <= 0) {
@@ -98,6 +112,24 @@ export function winMyOnlyChipUnreadableMessage(
 	}
 	if (raw > 0 && signing === 0) {
 		return "Hay certificados en la tarjeta, pero ninguno tiene uso de firma electrónica (nonRepudiation) según nuestro criterio. Puede que solo haya certificados de autenticación en el chip.";
+	}
+	return null;
+}
+
+/** Aviso corto: solo certificado Windows visible. */
+export function winMyOnlyHintBrief(
+	probe: Pkcs11ProbeCertificateListing | null,
+	slotsWithTokenCount: number,
+): string | null {
+	const full = winMyOnlyChipUnreadableMessage(probe, slotsWithTokenCount);
+	if (!full) return null;
+	const raw = probeTotalRawOnChip(probe);
+	const signing = probeTotalSigningOnChip(probe);
+	if (raw === 0) {
+		return "Solo aparece en Windows. Prueba con PIN o revisa Ajustes.";
+	}
+	if (raw > 0 && signing === 0) {
+		return "En la tarjeta no hay certificado de firma (solo autenticación).";
 	}
 	return null;
 }

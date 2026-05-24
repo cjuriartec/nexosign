@@ -5,10 +5,11 @@
 	import { toast } from "svelte-sonner";
 	import * as Card from "$lib/components/ui/card/index.js";
 	import { Button } from "$lib/components/ui/button/index.js";
-	import { Input } from "$lib/components/ui/input/index.js";
-	import { Label } from "$lib/components/ui/label/index.js";
 	import * as Table from "$lib/components/ui/table/index.js";
-	import * as Select from "$lib/components/ui/select/index.js";
+
+	import SigningCertPicker from "$lib/components/signing-cert-picker.svelte";
+	import SignConfirmPanel from "$lib/components/sign-confirm-panel.svelte";
+	import SignJobResults from "$lib/components/sign-job-results.svelte";
 	import { Progress } from "$lib/components/ui/progress/index.js";
 	import * as ScrollArea from "$lib/components/ui/scroll-area/index.js";
 	import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert/index.js";
@@ -23,21 +24,18 @@
 	import { enumeratePdfsUnderFolder } from "$lib/tauri/batch";
 	import { getBatchSignIntent } from "$lib/tauri/batch-sign-intent";
 	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
+	import { maybePersistPreferredModuleAfterSuccessfulBatch } from "$lib/tauri/pkcs11-ux";
 	import {
-		DEDUPED_WIN_MY_FOOTNOTE,
-		emptySigningCertsHelp,
-		maybePersistPreferredModuleAfterSuccessfulBatch,
-		signingCertSourceSubtitle,
-	} from "$lib/tauri/pkcs11-ux";
+		buildSignJobFileDisplayList,
+		labelFromProgressPayload,
+		upsertJobFileResult,
+		type SignJobFileResult,
+	} from "$lib/sign/job-results";
 	import { getLocalApiBaseUrl } from "$lib/tauri/settings";
 	import { isTauriRuntime } from "$lib/tauri/env";
-	import { getHumanNameFromDn, extractDniFromDn } from "$lib/signature-appearance";
-	import EyeIcon from "@lucide/svelte/icons/eye";
-	import EyeOffIcon from "@lucide/svelte/icons/eye-off";
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import CircleCheckIcon from "@lucide/svelte/icons/circle-check";
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
-	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import FileStackIcon from "@lucide/svelte/icons/files";
 	import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
@@ -101,6 +99,7 @@
 	let stepHistoryLocked = $state(false);
 	let progressPct = $state(0);
 	let logLines = $state<string[]>([]);
+	let jobFileResults = $state<SignJobFileResult[]>([]);
 	/** Último tick de progreso (para título y subtítulo del panel). */
 	let progressSnapshot = $state<{
 		actual: number;
@@ -190,6 +189,10 @@
 
 	const pinRequired = $derived(pkcs11.pinRequiredInApp(selectedCert));
 
+	const jobFileDisplayList = $derived(
+		buildSignJobFileDisplayList(paths, jobFileResults, { signing: resultStepSigning }),
+	);
+
 	function isStepNavDisabled(stepNum: number): boolean {
 		if (stepNum === wizardStep) return true;
 		if (stepHistoryLocked) return true;
@@ -206,6 +209,7 @@
 		progressPct = 0;
 		progressSnapshot = null;
 		logLines = [];
+		jobFileResults = [];
 		pin = "";
 		pinError = null;
 		submitInFlight = false;
@@ -489,6 +493,7 @@
 		busy = true;
 		pinError = null;
 		logLines = [];
+		jobFileResults = [];
 		progressPct = 0;
 		progressSnapshot = null;
 		setActiveBatchJobId(null);
@@ -610,6 +615,13 @@
 					};
 					const err = p.error ? ` · ${p.error}` : "";
 					pushLog(`${p.actual}/${p.total} · ${tail}${err}`);
+					jobFileResults = upsertJobFileResult(jobFileResults, {
+						index: p.actual,
+						label: labelFromProgressPayload(p),
+						inputPath: p.path,
+						outputPath: p.output_path,
+						error: p.error,
+					});
 				});
 			} catch {
 				/* sin Tauri event */
@@ -712,52 +724,17 @@
 					Nuevo lote
 				</Button>
 			{:else if wizardStep === 4}
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					disabled={busy || !batchQueue.activeBatchJobId}
-					onclick={() => cancelJob()}
-				>
-					Cancelar cola
-				</Button>
-				<Button
-					type="button"
-					size="sm"
-					disabled={busy ||
-						submitInFlight ||
-						paths.length === 0 ||
-						!certId.trim() ||
-						(pinRequired && !pin.trim())}
-					onclick={() => void submitBatch()}
-					class="gap-1"
-				>
-					Firmar
-					<ChevronRightIcon class="size-4 opacity-90" aria-hidden="true" />
-				</Button>
+				<p class="text-muted-foreground mr-auto max-w-[min(100%,20rem)] text-[11px] leading-snug">
+					Confirma el resumen y firma desde el panel inferior.
+				</p>
 			{:else if wizardStep === 3}
-				<Button
-					type="button"
-					size="sm"
-					disabled={busy || !certId.trim() || certs.length === 0}
-					onclick={() => step3CertContinue()}
-					class="gap-1"
-					aria-label={`Siguiente paso: ${SIGN_STEPS[3].title}`}
-				>
-					Continuar
-					<ChevronRightIcon class="size-4 opacity-90" aria-hidden="true" />
-				</Button>
+				<p class="text-muted-foreground mr-auto max-w-[min(100%,20rem)] text-[11px] leading-snug">
+					Elige un certificado y continúa desde el panel inferior.
+				</p>
 			{:else if wizardStep === 2}
-				<Button
-					type="button"
-					size="sm"
-					onclick={() => step2PlacementContinue()}
-					class="gap-1"
-					aria-label={`Siguiente paso: ${SIGN_STEPS[2].title}`}
-				>
-					Continuar
-					<ChevronRightIcon class="size-4 opacity-90" aria-hidden="true" />
-				</Button>
+				<p class="text-muted-foreground mr-auto max-w-[min(100%,20rem)] text-[11px] leading-snug">
+					Elige la casilla del sello y continúa desde el panel inferior.
+				</p>
 			{:else if wizardStep === 1}
 				<Button
 					type="button"
@@ -881,6 +858,18 @@
 					Columna {sigGridCol + 1}, fila {sigGridRow + 1}
 				</p>
 			</Card.Content>
+			<Card.Footer class="border-t pt-3">
+				<Button
+					type="button"
+					size="sm"
+					class="h-10 w-full gap-1 sm:ml-auto sm:w-auto"
+					onclick={() => step2PlacementContinue()}
+					aria-label={`Siguiente paso: ${SIGN_STEPS[2].title}`}
+				>
+					Continuar
+					<ChevronRightIcon class="size-4 opacity-90" aria-hidden="true" />
+				</Button>
+			</Card.Footer>
 		</Card.Root>
 	{/if}
 
@@ -889,66 +878,19 @@
 			<Card.Header class="pb-2">
 				<Card.Title class="text-sm font-medium">Certificado</Card.Title>
 				<Card.Description class="text-xs">
-					Conecte el lector y pulse Actualizar para cargar los certificados.
-					<span class="text-muted-foreground mt-1 block leading-snug">{DEDUPED_WIN_MY_FOOTNOTE}</span>
+					Conecta el lector y elige el certificado de firma de tu DNIe o tarjeta.
 				</Card.Description>
 			</Card.Header>
 			<Card.Content class="space-y-3 pt-0">
-				{#if certs.length === 0}
-					{@const help = emptySigningCertsHelp(slotsWithTokenCount)}
-					<Alert variant={slotsWithTokenCount <= 0 ? "destructive" : "default"} class="text-left">
-						<TriangleAlertIcon class="size-4" />
-						<AlertTitle class="text-sm">{help.title}</AlertTitle>
-						<AlertDescription class="text-xs leading-snug">{help.description}</AlertDescription>
-					</Alert>
-				{:else}
-					<div class="grid gap-1.5">
-						<Label class="text-xs">Certificado</Label>
-						<Select.Root type="single" bind:value={certId}>
-							<Select.Trigger class="h-9 w-full justify-between">
-								{@const selected = certs.find((c) => c.id_hex === certId)}
-								{#if selected}
-									<span class="truncate text-sm font-medium">
-										{getHumanNameFromDn(selected.subject_dn) || selected.label}
-										<span class="text-muted-foreground font-normal">({extractDniFromDn(selected.subject_dn) || "—"})</span>
-										{#if signingCertSourceSubtitle(selected.source)}
-											<span class="text-muted-foreground block truncate text-[10px] font-normal">
-												{signingCertSourceSubtitle(selected.source)}
-											</span>
-										{/if}
-									</span>
-								{:else}
-									<span class="text-muted-foreground text-sm">Elegir…</span>
-								{/if}
-							</Select.Trigger>
-							<Select.Content class="max-h-[280px]">
-								{#each certs as c}
-									<Select.Item value={c.id_hex} label={getHumanNameFromDn(c.subject_dn) || c.label || ""}>
-										<div class="flex flex-col py-0.5 text-left">
-											<span class="text-sm font-medium">{getHumanNameFromDn(c.subject_dn) || c.label || "(sin etiqueta)"}</span>
-											<span class="text-muted-foreground text-[11px]">{extractDniFromDn(c.subject_dn) || "—"}</span>
-											{#if signingCertSourceSubtitle(c.source)}
-												<span class="text-muted-foreground text-[10px]">{signingCertSourceSubtitle(c.source)}</span>
-											{/if}
-										</div>
-									</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-				{/if}
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					class="gap-1.5"
-					onclick={() => void refreshCerts()}
-					disabled={busy}
-				>
-					<RefreshCwIcon class="size-4 opacity-80" aria-hidden="true" />
-					Actualizar
-				</Button>
-
+				<SigningCertPicker
+					{certs}
+					bind:certId
+					{busy}
+					slotsWithToken={slotsWithTokenCount}
+					onRefresh={async () => {
+						await refreshCerts();
+					}}
+				/>
 				<details
 					class="group rounded border border-dashed border-border/40 bg-muted/15 text-[11px] text-muted-foreground open:bg-muted/25"
 				>
@@ -972,134 +914,49 @@
 					</div>
 				</details>
 			</Card.Content>
+			<Card.Footer class="border-t pt-3">
+				<Button
+					type="button"
+					size="sm"
+					class="h-10 w-full gap-1 sm:ml-auto sm:w-auto"
+					disabled={busy || !certId.trim() || certs.length === 0}
+					onclick={() => step3CertContinue()}
+					aria-label={`Siguiente paso: ${SIGN_STEPS[3].title}`}
+				>
+					Continuar
+					<ChevronRightIcon class="size-4 opacity-90" aria-hidden="true" />
+				</Button>
+			</Card.Footer>
 		</Card.Root>
 	{/if}
 
 	{#if wizardStep === 4}
-		<Card.Root size="sm" class="w-full overflow-hidden">
-			<Card.Header class="border-border/50 border-b pb-3">
-				<Card.Title class="text-base font-semibold">Confirmar firma</Card.Title>
-				<Card.Description class="text-xs leading-relaxed">
-					{#if pinRequired}
-						Comprueba el resumen e introduce el PIN de tu DNIe o tarjeta. El PIN no se guarda.
-					{:else if selectedCert?.source === "win_my" && selectedCert.pin_ui === "os_may_prompt"}
-						Comprueba el resumen. Al firmar, Windows o el dispositivo pueden pedir confirmación o PIN.
-					{:else if selectedCert?.source === "win_my"}
-						Comprueba el resumen. Este certificado usa el almacén de Windows: no hace falta PIN en NexoSign.
-					{:else}
-						Comprueba el resumen antes de firmar.
-					{/if}
-				</Card.Description>
-			</Card.Header>
-			<Card.Content class="px-4 pt-4 pb-4 text-sm sm:px-5">
-				<div class="mx-auto w-full max-w-xl space-y-0">
-					<div
-						class="border-border/60 bg-card w-full overflow-hidden rounded-lg border shadow-sm"
-					>
-						<p class="text-muted-foreground border-border/50 bg-muted/30 border-b px-3 py-2 text-[11px] font-medium tracking-wide uppercase">
-							Resumen
-						</p>
-						<dl class="divide-border/40 divide-y text-xs">
-							<div class="flex items-start justify-between gap-4 px-3 py-2.5">
-								<dt class="text-muted-foreground shrink-0">PDF</dt>
-								<dd class="text-foreground font-semibold tabular-nums">{paths.length}</dd>
-							</div>
-							<div class="flex items-start justify-between gap-4 px-3 py-2.5">
-								<dt class="text-muted-foreground shrink-0">Firma</dt>
-								<dd class="min-w-0 flex-1 text-right leading-tight">
-									{#if selectedCert}
-										<span class="text-foreground font-medium">
-											{getHumanNameFromDn(selectedCert.subject_dn) || "Titular"}
-										</span>
-										{#if extractDniFromDn(selectedCert.subject_dn)}
-											<span class="text-muted-foreground mt-0.5 block text-[11px]"
-												>{extractDniFromDn(selectedCert.subject_dn)}</span
-											>
-										{/if}
-									{:else}
-										<span class="text-muted-foreground">—</span>
-									{/if}
-								</dd>
-							</div>
-							<div class="flex items-start justify-between gap-4 px-3 py-2.5">
-								<dt class="text-muted-foreground shrink-0">Sello</dt>
-								<dd class="text-foreground text-right font-medium">
-									Col. {sigGridCol + 1}, fila {sigGridRow + 1}
-								</dd>
-							</div>
-							<div class="flex items-start justify-between gap-4 px-3 py-2.5">
-								<dt class="text-muted-foreground shrink-0">Salida</dt>
-								<dd class="min-w-0 flex-1 text-right leading-tight">
-									{#if outputDirForJob}
-										<span class="font-medium" title={outputDirForJob}>«{pdfBasenameFromPath(outputDirForJob)}»</span>
-									{:else}
-										<code class="bg-muted rounded px-1.5 py-0.5 font-mono text-[11px]">*_firmado.pdf</code>
-									{/if}
-								</dd>
-							</div>
-						</dl>
-						<div class="border-border/50 bg-muted/25 border-t">
-							<div class="px-3 pb-3 pt-3">
-								{#if pinRequired}
-									<Label for="pin-confirm" class="text-xs font-medium">PIN del DNIe o de la tarjeta</Label>
-									<div class="relative mt-1.5">
-										<Input
-											id="pin-confirm"
-											type={pinVisible ? "text" : "password"}
-											autocomplete="off"
-											bind:value={pin}
-											placeholder="PIN"
-											class={cn(
-												"h-10 w-full pr-10",
-												pinError ? "border-destructive focus-visible:ring-destructive" : "",
-											)}
-											oninput={() => {
-												pinError = null;
-											}}
-											onkeydown={(e) => {
-												if (e.key === "Enter") {
-													e.preventDefault();
-													void submitBatch();
-												}
-											}}
-										/>
-										<Button
-											type="button"
-											variant="ghost"
-											size="icon"
-											class="text-muted-foreground absolute right-0.5 top-1/2 h-9 w-9 -translate-y-1/2"
-											aria-label={pinVisible ? "Ocultar PIN" : "Mostrar PIN"}
-											title={pinVisible ? "Ocultar PIN" : "Mostrar PIN"}
-											onclick={() => {
-												pinVisible = !pinVisible;
-											}}
-										>
-											{#if pinVisible}
-												<EyeOffIcon class="h-4 w-4" />
-											{:else}
-												<EyeIcon class="h-4 w-4" />
-											{/if}
-										</Button>
-									</div>
-									{#if pinError}
-										<p class="mt-2 text-xs font-medium text-destructive">{pinError}</p>
-									{/if}
-								{:else if selectedCert?.source === "win_my"}
-									<p class="text-muted-foreground text-xs leading-relaxed">
-										{#if selectedCert.pin_ui === "os_may_prompt"}
-											Windows o el dispositivo pueden pedir confirmación o PIN durante la firma.
-										{:else}
-											No hace falta introducir PIN aquí; la firma usa el almacén de credenciales de Windows.
-										{/if}
-									</p>
-								{/if}
-							</div>
-						</div>
-					</div>
-
-				</div>
-			</Card.Content>
-		</Card.Root>
+		<div class="space-y-3">
+			<div class="flex flex-wrap justify-end gap-2">
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					disabled={busy || !batchQueue.activeBatchJobId}
+					onclick={() => cancelJob()}
+				>
+					Cancelar cola
+				</Button>
+			</div>
+			<SignConfirmPanel
+				pathCount={paths.length}
+				{selectedCert}
+				{sigGridCol}
+				{sigGridRow}
+				{outputDirForJob}
+				bind:pin
+				bind:pinError
+				bind:pinVisible
+				{busy}
+				{submitInFlight}
+				onSubmit={() => submitBatch()}
+			/>
+		</div>
 	{/if}
 
 	{#if wizardStep === 5}
@@ -1203,6 +1060,11 @@
 				{/if}
 			</Card.Header>
 			<Card.Content class="space-y-3 pt-0">
+				<SignJobResults
+					items={jobFileDisplayList}
+					{outputDirForJob}
+					jobSettled={jobSettled}
+				/>
 				{#if resultStepSigning}
 					<div class="border-border/50 bg-muted/20 space-y-2 rounded-lg border px-3 py-3">
 						{#if progressSubtitle}

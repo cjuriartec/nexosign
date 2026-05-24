@@ -80,6 +80,9 @@ export async function renderSignatureSealPngBase64(
 	const imgMaxH = 72;
 	const textSize = 9;
 	const lineLeading = 10.5;
+	/** Espacio libre arriba y abajo del sello (coordenadas de diseño, antes del ×8). */
+	const sealPaddingY = 8;
+	const gapImageText = 4;
 
 	let imgEl: HTMLImageElement;
 	try {
@@ -123,7 +126,7 @@ export async function renderSignatureSealPngBase64(
 	const displayLines = wrapped.length ? wrapped : [{ text: "—", justify: false }];
 
 	const textBlockH = displayLines.length * lineLeading;
-	const layoutH = drawH + 4 + textBlockH;
+	const layoutH = sealPaddingY + drawH + gapImageText + textBlockH + sealPaddingY;
 
 	canvas.width = Math.ceil(layoutW * renderScale);
 	canvas.height = Math.ceil(layoutH * renderScale);
@@ -133,13 +136,13 @@ export async function renderSignatureSealPngBase64(
 	ctx.clearRect(0, 0, layoutW, layoutH);
 
 	const imgX = (layoutW - drawW) / 2;
-	const imgY = 0;
+	const imgY = sealPaddingY;
 	ctx.drawImage(imgEl, imgX, imgY, drawW, drawH);
 
 	ctx.fillStyle = "#0f172a";
 	ctx.font = `${textSize}px ui-sans-serif, system-ui, sans-serif`;
 	ctx.textBaseline = "top";
-	let ty = imgY + drawH + 4;
+	let ty = imgY + drawH + gapImageText;
 	for (const ln of displayLines) {
 		if (ln.justify && ln.text.includes(" ")) {
 			ctx.textAlign = "left";

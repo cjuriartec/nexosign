@@ -15,7 +15,9 @@
         "label": "main",
         "title": "NexoSign",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "minWidth": 580,
+        "minHeight": 580
       }
     ],
     "security": {

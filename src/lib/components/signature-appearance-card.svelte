@@ -23,7 +23,7 @@
 		tokenLabel,
 	} from "$lib/signature-appearance";
 
-	let { certs = [] }: { certs: SigningCertSummary[] } = $props();
+	let { certs = [], compact = false }: { certs: SigningCertSummary[]; compact?: boolean } = $props();
 
 	let appearance = $state<SignatureAppearanceState>(defaultSignatureAppearance());
 	let fileInput = $state<HTMLInputElement | null>(null);
@@ -287,9 +287,11 @@
 <div class="@container w-full min-w-0 space-y-3">
 	<header class="space-y-0.5">
 		<h2 class="text-base font-semibold tracking-tight">Diseño del sello</h2>
-		<p class="text-muted-foreground text-sm leading-snug">
-			Tres columnas cuando este bloque alcanza ~640px de ancho (con menú lateral, haz la ventana más ancha). Si no, se apilan: campos → orden → vista previa.
-		</p>
+		{#if !compact}
+			<p class="text-muted-foreground text-sm leading-snug">
+				Tres columnas cuando este bloque alcanza ~640px de ancho (con menú lateral, haz la ventana más ancha). Si no, se apilan: campos → orden → vista previa.
+			</p>
+		{/if}
 	</header>
 
 	<div
@@ -301,9 +303,11 @@
 		>
 			<div>
 				<h3 class="text-sm font-medium">Campos</h3>
-				<p class="text-muted-foreground mt-0.5 text-xs leading-snug">
-					Pulsa para añadir al final, o arrastra hacia «Orden».
-				</p>
+				{#if !compact}
+					<p class="text-muted-foreground mt-0.5 text-xs leading-snug">
+						Pulsa para añadir al final, o arrastra hacia «Orden».
+					</p>
+				{/if}
 			</div>
 			<div class="flex flex-col gap-1.5">
 				{#each PALETTE_ITEMS as item}
@@ -323,9 +327,11 @@
 		<div class="border-border/50 flex min-h-0 min-w-0 select-none flex-col gap-2 rounded-lg border p-3 @min-[640px]:max-h-[min(85vh,520px)]">
 			<div class="shrink-0">
 				<h3 class="text-sm font-medium">Orden del sello</h3>
-				<p class="text-muted-foreground mt-0.5 text-xs leading-snug">
-					Arrastra desde el control izquierdo (n.º + ⋮⋮) o usa la rueda del ratón sobre él.
-				</p>
+				{#if !compact}
+					<p class="text-muted-foreground mt-0.5 text-xs leading-snug">
+						Arrastra desde el control izquierdo (n.º + ⋮⋮) o usa la rueda del ratón sobre él.
+					</p>
+				{/if}
 			</div>
 
 			<div class="min-h-0 flex-1 overflow-y-auto pr-0.5" bind:this={listEl}>
@@ -340,7 +346,9 @@
 						data-row
 					>
 						<p class="text-muted-foreground text-sm">Sin campos</p>
-						<p class="text-muted-foreground text-xs">Pulsa o arrastra desde la izquierda.</p>
+						{#if !compact}
+							<p class="text-muted-foreground text-xs">Pulsa o arrastra desde la izquierda.</p>
+						{/if}
 					</div>
 				{:else}
 					<div class="flex flex-col gap-0">
@@ -440,7 +448,9 @@
 		>
 			<div>
 				<h3 class="text-sm font-medium">Vista previa</h3>
-				<p class="text-muted-foreground mt-0.5 text-xs leading-snug">Imagen y texto.</p>
+				{#if !compact}
+					<p class="text-muted-foreground mt-0.5 text-xs leading-snug">Imagen y texto.</p>
+				{/if}
 			</div>
 
 			<div class="flex flex-wrap gap-1.5">

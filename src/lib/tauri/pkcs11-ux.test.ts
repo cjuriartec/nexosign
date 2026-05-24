@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emptySigningCertsHelp } from "./pkcs11-ux";
+import { emptySigningCertsHelp, emptySigningCertsHelpBrief } from "./pkcs11-ux";
 
 describe("emptySigningCertsHelp", () => {
 	it("sin tarjeta indica ausencia de DNIe o tarjeta y no expone jerga PKCS#11", () => {
@@ -14,5 +14,13 @@ describe("emptySigningCertsHelp", () => {
 		const h = emptySigningCertsHelp(1);
 		expect(h.title.toLowerCase()).toContain("sin certificado");
 		expect(h.title.toLowerCase()).not.toContain("token");
+	});
+});
+
+describe("emptySigningCertsHelpBrief", () => {
+	it("es más corto que la versión completa", () => {
+		const brief = emptySigningCertsHelpBrief(0);
+		const full = emptySigningCertsHelp(0);
+		expect(brief.description.length).toBeLessThan(full.description.length);
 	});
 });
