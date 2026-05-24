@@ -13,6 +13,7 @@ use adapters::persistence::{AllowedOriginsDb, Pkcs11PathsDb};
 use adapters::pkcs11::token::Pkcs11TokenManager;
 use domain::allowed_origins::AllowedOrigins;
 use infrastructure::origin_db::OriginDbPath;
+use infrastructure::window::{self, MAIN_WINDOW_LABEL};
 use tauri::{Emitter, Manager, WindowEvent};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -23,17 +24,7 @@ use crate::domain::pending_batch_intent::PendingBatchIntent;
 use crate::adapters::http::state::PendingBatchIntents;
 use crate::commands::{BatchCancelRegistry, BatchSignedOutputsStore};
 
-/// Etiqueta de la ventana principal ([`tauri.conf.json`](../../tauri.conf.json), [`capabilities/default.json`](../../capabilities/default.json)).
-const MAIN_WINDOW_LABEL: &str = "main";
-
 static INIT_TRACING: Once = Once::new();
-
-fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    if let Some(w) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        let _ = w.show();
-        let _ = w.set_focus();
-    }
-}
 
 #[cfg(desktop)]
 fn try_install_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
@@ -66,7 +57,7 @@ fn try_install_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             if event.id == "tray_quit" {
                 app.exit(0);
             } else if event.id == "tray_show" {
-                show_main_window(app);
+                window::show_main_window(app);
             }
         });
 
@@ -222,7 +213,7 @@ pub fn run() {
 
             let emit_for_deep_link = app.handle().clone();
             app.handle().deep_link().on_open_url(move |event| {
-                show_main_window(&emit_for_deep_link);
+                window::show_main_window(&emit_for_deep_link);
                 let urls: Vec<String> =
                     event.urls().into_iter().map(|u| u.to_string()).collect();
                 let _ = emit_for_deep_link.emit(

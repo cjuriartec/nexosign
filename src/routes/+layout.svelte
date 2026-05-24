@@ -68,9 +68,13 @@
 					}, POLL_MS);
 					unsubs.push(() => clearInterval(poll));
 					unsubs.push(
-						await listen("pending_batch_intents_changed", () => {
-							void syncIntentQueueFromBackend();
-						}),
+						await listen<{ requestId?: string }>(
+							"pending_batch_intents_changed",
+							async () => {
+								await syncIntentQueueFromBackend();
+								await goto("/queue?filter=intents");
+							},
+						),
 					);
 				}
 			} catch {

@@ -160,9 +160,13 @@ fn gate_batch_origin(state: &SharedState, headers: &HeaderMap, uri: &Uri) -> Res
     Err(gate_batch_origin_missing_origin_response())
 }
 
-fn emit_pending_batch_intents_changed(state: &SharedState) {
+fn emit_pending_batch_intents_changed(state: &SharedState, request_id: &str) {
     if let Some(ref h) = state.app_handle {
-        let _ = h.emit("pending_batch_intents_changed", serde_json::json!({}));
+        crate::infrastructure::window::show_main_window_if_background(h);
+        let _ = h.emit(
+            "pending_batch_intents_changed",
+            serde_json::json!({ "requestId": request_id }),
+        );
     }
 }
 
@@ -385,7 +389,7 @@ async fn post_batch_sign_intent_json(
         g.insert(request_id.clone(), intent);
     }
 
-    emit_pending_batch_intents_changed(&state);
+    emit_pending_batch_intents_changed(&state, &request_id);
 
     let deep_link = format!("nexosign://sign?intent={}", request_id);
 
@@ -665,7 +669,7 @@ async fn post_batch_sign_intent_multipart(
         g.insert(request_id.clone(), intent);
     }
 
-    emit_pending_batch_intents_changed(&state);
+    emit_pending_batch_intents_changed(&state, &request_id);
 
     let deep_link = format!("nexosign://sign?intent={}", request_id);
 

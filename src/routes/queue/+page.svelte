@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from "$app/navigation";
+	import { page } from "$app/state";
 	import { Button } from "$lib/components/ui/button/index.js";
 	import * as Card from "$lib/components/ui/card/index.js";
 	import { Badge } from "$lib/components/ui/badge/index.js";
@@ -34,7 +35,24 @@
 
 	type QueueFilter = "all" | "intents" | "active" | "finished" | "cancelled" | "error";
 
-	let filter = $state<QueueFilter>("all");
+	function parseQueueFilter(value: string | null): QueueFilter {
+		if (
+			value === "intents" ||
+			value === "active" ||
+			value === "finished" ||
+			value === "cancelled" ||
+			value === "error"
+		) {
+			return value;
+		}
+		return "all";
+	}
+
+	let filter = $state<QueueFilter>(parseQueueFilter(page.url.searchParams.get("filter")));
+
+	$effect(() => {
+		filter = parseQueueFilter(page.url.searchParams.get("filter"));
+	});
 
 	const activeQueueRow = $derived(
 		batchQueue.items.find((q) => q.jobId === batchQueue.activeBatchJobId),
