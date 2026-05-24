@@ -5,12 +5,13 @@
 <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-202124?style=for-the-badge&logo=rust&logoColor=white" alt="Rust"/></a>
 <a href="https://kit.svelte.dev/"><img src="https://img.shields.io/badge/SvelteKit-FF3E00?style=for-the-badge&logo=svelte&logoColor=white" alt="SvelteKit"/></a>
 <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript"/></a>
-<a href="./package.json"><img src="https://img.shields.io/badge/licencia-MIT-6366f1?style=for-the-badge" alt="Licencia MIT"/></a>
+<a href="https://github.com/cjuriartec/nexosign/releases"><img src="https://img.shields.io/github/v/release/cjuriartec/nexosign?style=for-the-badge" alt="Release"/></a>
+<a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-6366f1?style=for-the-badge" alt="MIT License"/></a>
 </div>
 
 <br/>
 
-<img src="docs/assets/readme-hero.svg" alt="NexoSign — firma PDF en escritorio con certificado electrónico" width="92%"/>
+<img src="docs/assets/readme-hero.svg" alt="NexoSign — desktop PDF signing with a qualified certificate" width="92%"/>
 
 <br/>
 
@@ -23,118 +24,138 @@
 </div>
 
 <div align="center" style="display:flex; flex-wrap:wrap; gap:10px 20px; justify-content:center; align-items:center;">
-<a href="#-api-local--referencia-rápida">Ficha técnica</a>
+<a href="#local-api--quick-reference">API</a>
 <span aria-hidden="true">·</span>
-<a href="#-integración-externa--portal-y-escritorio">Integración</a>
+<a href="#external-integration--portal-and-desktop">Integration</a>
 <span aria-hidden="true">·</span>
-<a href="./CONTRIBUTING.md">Contribuir</a>
+<a href="./CONTRIBUTING.md">Contributing</a>
 </div>
 
 </div>
 
 ---
 
-## ✨ Por qué NexoSign
+## Installation
+
+Download the latest **Windows** installer (`.msi`) from **[Releases](https://github.com/cjuriartec/nexosign/releases)**.
+
+- **macOS** bundles from CI are **not notarized**; see [`docs/distribucion-macos.md`](./docs/distribucion-macos.md).
+- **Development** setup: [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+## Project governance
+
+| Document | Purpose |
+| -------- | ------- |
+| [LICENSE](./LICENSE) | MIT |
+| [SECURITY.md](./SECURITY.md) | Vulnerability reporting |
+| [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) | Community standards |
+| [CHANGELOG.md](./CHANGELOG.md) | Release history |
+
+Internal planning notes: [`docs/internal/PLAN.md`](./docs/internal/PLAN.md).
+
+---
+
+## Why NexoSign
 
 | | |
 |:---|:---|
-| 🔒 **Privacidad por diseño** | La firma y el PIN ocurren **en el equipo del usuario**. La API solo escucha en **loopback** — no es un SaaS que centralice tus PDF ni tus claves. |
-| 🖲️ **Hardware real** | PKCS#11: mismo modelo que **DNIe**, tarjetas y HSM. **Una cola, un firmador**: el paralelismo no rompe lo que el chip no permite. |
-| 🧩 **Tu web, el escritorio** | Desde el navegador puedes registrar una **intención** (`POST …/intent`), recibir un **`deep_link`** y abrir la app con **`nexosign://`** para que el usuario **complete el asistente** (certificado, PIN, casilla). |
-| ⚙️ **Automatización local** | La **app de escritorio** y herramientas en la misma máquina pueden seguir rutas HTTP internas no descritas en OpenAPI; integradores remotos usan **intent → estado → descargas**. |
+| 🔒 **Privacy by design** | Signing and the PIN happen **on the user’s machine**. The API listens on **loopback only** — not a SaaS that stores your PDFs or keys. |
+| 🖲️ **Real hardware** | PKCS#11: same model as **smart cards**, Spanish DNIe, and HSMs. **One queue, one signer**: parallelism must not break what the chip cannot do. |
+| 🧩 **Your web, the desktop** | From the browser you can register an **intent** (`POST …/intent`), get a **`deep_link`**, and open the app via **`nexosign://`** so the user **completes the wizard** (certificate, PIN, stamp cell). |
+| ⚙️ **Local automation** | The **desktop app** and tools on the same machine may use internal HTTP routes not in OpenAPI; remote integrators use **intent → status → downloads**. |
 
 ---
 
-## 🎯 Experiencia en la app
+## App workflow
 
-1. **Origen** — PDF sueltos o **carpeta completa** (todos los `.pdf`, también en subcarpetas). Carpeta → salida en **`NombreCarpeta_firmados`** junto a la carpeta elegida.
-2. **Certificado** — Eliges entre certificados de **firma** detectados vía PKCS#11.
-3. **PIN** — Solo para desbloquear el token en esa operación; **sin** sesión PKCS#11 prolongada por tiempo.
-4. **Ubicación y confirmar** — Rejilla en primera página, cola local y seguimiento del lote.
+1. **Source** — Individual PDFs or an entire **folder** (all `.pdf` files, including subfolders). Folder signing writes output to **`FolderName_signed`** next to the chosen folder.
+2. **Certificate** — Pick from **signing** certificates discovered via PKCS#11 (and Windows MY on Windows).
+3. **PIN** — Only to unlock the token for that operation; **no** long-lived PKCS#11 session.
+4. **Placement and confirm** — Grid on the first page, local queue, and batch progress.
 
-📁 **Salida:** `{nombre}_firmado.pdf` junto al original o dentro de `…_firmados` si firmaste por carpeta.
+📁 **Output:** `{name}_signed.pdf` next to the original, or inside `…_signed` when signing by folder.
 
-**Segundo plano:** al cerrar la ventana, la app **sigue en ejecución** (API local y deep links activos). Vuelve a mostrar la ventana con el icono en la **bandeja del sistema** (menú **Abrir NexoSign**) o al abrir un **`nexosign://…`**. Para terminar el proceso por completo, usa **Salir** en esa bandeja o **Salir** / **Quit** en el menú de la aplicación (p. ej. Cmd+Q en macOS).
-
----
-
-## 🛰️ API local — referencia rápida
-
-La API está en **`http://127.0.0.1:14500`** **solo con la aplicación en ejecución** (`npm run tauri dev` o binario instalado).
-
-**App de escritorio:** la interfaz usa **`invoke`** (comandos `local_api_*` en Rust) para health, ping, encolar firma y consultar estado de trabajo — misma lógica que los endpoints HTTP, sin `fetch` al loopback (evita CORS y problemas de contenido mixto en release). **`127.0.0.1:14500`** sigue siendo el canal pensado para **integradores**, portales y herramientas externas.
-
-| Requisito | Detalle |
-|-----------|---------|
-| 🌍 **Origen** | Los **`POST` y `GET`** de batch en navegador necesitan cabecera **`Origin`** permitida por CORS (p. ej. `http://localhost:1420`). Incluye sondeo de estado del intent y descargas. |
-| 💻 **`curl`** | Añade `-H "Origin: http://localhost:1420"` como en los ejemplos. |
-| 📘 **OpenAPI** | Con la app en marcha: **`GET /openapi.json`** — incluye intent, estado del intent, descargas del lote, **`GET /health`** y **`POST /api/v1/ping`**. **`GET /docs`** abre **Swagger UI**. Importación en [Scalar](https://scalar.com), Postman, etc. |
-| 📂 **Multipart vs firma** | **`multipart/form-data`** solo en **`POST …/batch/sign/intent`** (subir PDF desde el navegador). La firma la ejecuta la **app** tras el deep link; ese paso **no** está en **`openapi.json`** (contrato para integradores web). |
-
-| Endpoint | Rol |
-|----------|-----|
-| **`GET /api/v1/batch/jobs/{job_id}/signed-files`** | Cuando el lote **ha terminado**: JSON con `files[]` (`index`, `filename`, `href`) para descargar cada PDF firmado **desde el navegador** (cabecera **Origin** igual que en los POST). |
-| **`GET /api/v1/batch/jobs/{job_id}/files/{i}`** | Respuesta **`application/pdf`** del firmado *i*-ésimo (mismo orden que `inputs` / solo los firmados con éxito). |
-| **`GET /api/v1/batch/sign/intent/{request_id}/status`** | **Sondeo** tras el intent: `phase` = `awaiting_confirmation` \| `processing` \| `completed`, `job_id`, `manifest_href`, `signed_file_count`. Sin servidor propio: tu página hace polling a `127.0.0.1:14500` con el mismo **Origin**. |
-| **`POST /api/v1/batch/sign/intent`** | **No firma aún.** **`application/json`** (`inputs`: rutas absolutas) **o** **`multipart/form-data`** con el campo repetible **`files`** (un PDF por parte). Los PDF subidos van a staging temporal; responde **`request_id`** + **`deep_link`**. Si no se confirma a tiempo, caduca (misma ventana que el tiempo máximo del trabajo batch; por defecto ~5 min, configurable con `NEXOSIGN_BATCH_JOB_MAX_SECS`). |
-| **`GET /health`** | Estado del servicio (sin `Origin`). |
-| **`POST /api/v1/ping`** | Eco para pruebas. |
-| **`NEXOSIGN_BATCH_OUTPUT_DIR`** | Variable de entorno: fuerza carpeta de salida global `{stem}_firmado.pdf`. |
-| **`NEXOSIGN_BATCH_JOB_MAX_SECS`** | Ventana máxima (segundos) para intents pendientes y trabajos batch encolados (por defecto **300**). Lot grandes o pruebas de carga: aumentar (p. ej. **7200**). |
+**Background:** closing the window does **not** quit the app (local API and deep links stay active). Restore the window from the **system tray** (**Open NexoSign**) or by opening a **`nexosign://…`** link. To exit completely, use **Quit** in the tray or the application menu (e.g. Cmd+Q on macOS).
 
 ---
 
-## 🔗 Integración externa — portal y escritorio
+## Local API — quick reference
 
-Cuando el usuario **debe** elegir certificado y PIN **en la app** (no en un POST invisible desde tu servidor).
+The API listens at **`http://127.0.0.1:14500`** **only while the app is running** (`npm run tauri dev` or an installed build).
+
+**Desktop app:** the UI uses Tauri **`invoke`** (`local_api_*` Rust commands) for health, ping, enqueue signing, and job status — same logic as the HTTP endpoints, without `fetch` to loopback (avoids CORS and mixed-content issues in release). **`127.0.0.1:14500`** remains the channel for **integrators**, portals, and external tools.
+
+| Requirement | Details |
+|-------------|---------|
+| 🌍 **Origin** | Browser **`POST` and `GET`** for batch routes need an **`Origin`** header allowed by CORS (e.g. `http://localhost:1420`). Includes intent status polling and downloads. |
+| 💻 **`curl`** | Add `-H "Origin: http://localhost:1420"` as in the examples. |
+| 📘 **OpenAPI** | With the app running: **`GET /openapi.json`** — intent, intent status, batch downloads, **`GET /health`**, **`POST /api/v1/ping`**. **`GET /docs`** serves **Swagger UI**. Import into [Scalar](https://scalar.com), Postman, etc. |
+| 📂 **Multipart vs signing** | **`multipart/form-data`** only on **`POST …/batch/sign/intent`** (upload PDFs from the browser). Signing runs in the **app** after the deep link; that step is **not** in **`openapi.json`** (web integrator contract). |
+
+| Endpoint | Role |
+|----------|------|
+| **`GET /api/v1/batch/jobs/{job_id}/signed-files`** | When the batch **has finished**: JSON with `files[]` (`index`, `filename`, `href`) to download each signed PDF **from the browser** (same **Origin** as POST). |
+| **`GET /api/v1/batch/jobs/{job_id}/files/{i}`** | **`application/pdf`** for signed file *i* (same order as `inputs` / successful items only). |
+| **`GET /api/v1/batch/sign/intent/{request_id}/status`** | **Poll** after intent: `phase` = `awaiting_confirmation` \| `processing` \| `completed`, `job_id`, `manifest_href`, `signed_file_count`. No backend required: your page polls `127.0.0.1:14500` with the same **Origin**. |
+| **`POST /api/v1/batch/sign/intent`** | **Does not sign yet.** **`application/json`** (`inputs`: absolute paths) **or** **`multipart/form-data`** with repeatable **`files`** (one PDF per part). Uploads go to temporary staging; returns **`request_id`** + **`deep_link`**. Expires if not confirmed in time (same window as max batch job time; default ~5 min, set via `NEXOSIGN_BATCH_JOB_MAX_SECS`). |
+| **`GET /health`** | Service status (no `Origin`). |
+| **`POST /api/v1/ping`** | Echo for smoke tests. |
+| **`NEXOSIGN_BATCH_OUTPUT_DIR`** | Env var: force global output folder `{stem}_signed.pdf`. |
+| **`NEXOSIGN_BATCH_JOB_MAX_SECS`** | Max window (seconds) for pending intents and queued batch jobs (default **300**). Large batches or load tests: increase (e.g. **7200**). |
+
+---
+
+## External integration — portal and desktop
+
+Use this when the user **must** pick certificate and PIN **in the app** (not via a hidden POST from your server).
 
 ```mermaid
 flowchart LR
-  subgraph Web["Tu integración"]
-    A[Página o agente local]
+  subgraph Web["Your integration"]
+    A[Web page or local agent]
   end
-  subgraph NexoSign["Equipo del usuario"]
+  subgraph NexoSign["User machine"]
     B["API 127.0.0.1:14500"]
     C["nexosign:// deep link"]
-    D["App NexoSign — asistente"]
+    D["NexoSign app — wizard"]
   end
   A -->|"POST /api/v1/batch/sign/intent"| B
   B -->|"request_id + deep_link"| A
-  A -->|"Abrir enlace"| C
+  A -->|"Open link"| C
   C --> D
-  D -->|"Confirma y encola (uso interno)"| B
+  D -->|"Confirm and enqueue (internal)"| B
 ```
 
-**Pasos**
+**Steps**
 
-1. **JSON:** los PDF ya están **en disco** (rutas absolutas) en ese PC.
-2. **Multipart:** el navegador envía los PDF en el campo repetible **`files`** (hasta 20 PDF, 50 MiB c/u, techo de suma 20×50 MiB); la API materializa temporales y el asistente los trata como entradas del lote.
-3. Tu cliente llama **`POST /api/v1/batch/sign/intent`** (JSON o multipart).
-4. Recibes **`request_id`** y **`deep_link`** — úsalos en un botón del tipo **«Abrir en NexoSign»**.
-5. El sistema operativo abre la app registrada para **`nexosign://`** (en desarrollo a veces conviene lanzar la app manualmente).
-6. El usuario completa el asistente; al confirmar, **NexoSign** encola la firma **localmente** y relaciona el **`request_id`** del intent con el trabajo (`job_id`) para el sondeo y las descargas; al terminar el lote se **borra** el staging.
+1. **JSON:** PDFs are already **on disk** (absolute paths) on that PC.
+2. **Multipart:** the browser sends PDFs in repeatable **`files`** (up to 20 PDFs, 50 MiB each, total cap 20×50 MiB); the API stages temporaries and the wizard treats them as batch inputs.
+3. Your client calls **`POST /api/v1/batch/sign/intent`** (JSON or multipart).
+4. You receive **`request_id`** and **`deep_link`** — use them in an **“Open in NexoSign”** button.
+5. The OS opens the app registered for **`nexosign://`** (in dev you may need to start the app manually).
+6. The user completes the wizard; on confirm, **NexoSign** enqueues signing **locally** and links the intent **`request_id`** to the job (`job_id`) for polling and downloads; staging is **removed** when the batch finishes.
 
-### Portal sin backend propio (solo HTML/JS en tu dominio)
+### Portal without your own backend (HTML/JS on your domain only)
 
-No hace falta un callback HTTP a tu servidor. Con el **`request_id`** del intent:
+No HTTP callback to your server is required. With the intent **`request_id`**:
 
-1. Abres el **`deep_link`** (o equivalente) para lanzar NexoSign.
-2. Desde la misma pestaña (origen ya autorizado en Ajustes), **sondea** cada pocos segundos:  
+1. Open the **`deep_link`** to launch NexoSign.
+2. From the same tab (origin already allowed in Settings), **poll** every few seconds:  
    `GET http://127.0.0.1:14500/api/v1/batch/sign/intent/{request_id}/status`  
-   con cabecera **`Origin`** (la de tu portal).
-3. Cuando **`phase`** sea **`completed`**, usa **`manifest_href`** (o el **`job_id`**) para  
-   `GET …/batch/jobs/{job_id}/signed-files` y luego cada **`GET …/files/{i}`** y guardar los blobs en el cliente.
+   with **`Origin`** (your portal’s origin).
+3. When **`phase`** is **`completed`**, use **`manifest_href`** (or **`job_id`**) for  
+   `GET …/batch/jobs/{job_id}/signed-files`, then each **`GET …/files/{i}`**, and save blobs in the client.
 
-Mientras tanto verás **`awaiting_confirmation`** (intención abierta) o **`processing`** (trabajo encolado, firma en curso).
+Until then you will see **`awaiting_confirmation`** (intent open) or **`processing`** (job queued, signing in progress).
 
-> **Nota:** si no añades un backend intermedio, el sondeo es siempre contra **loopback** desde el navegador del usuario (misma máquina que NexoSign).
+> **Note:** without an intermediate backend, polling is always to **loopback** from the user’s browser (same machine as NexoSign).
 
-> **Producto (histórico):** antes el portal no tenía forma de saber el `job_id`; el endpoint de **status** cierra ese flujo.
+> **Product note:** portals previously could not learn `job_id`; the **status** endpoint completes that flow.
 
-> **`GET /openapi.json`** incluye intent, estado del intent, descargas del lote, **`GET /health`** y **`POST /api/v1/ping`** (contrato para integradores). Rutas como **`POST /api/v1/batch/sign`** (encolado directo con PIN) son uso interno de la app en la misma máquina y **no** aparecen en ese JSON.
+> **`GET /openapi.json`** covers intent, intent status, batch downloads, **`GET /health`**, and **`POST /api/v1/ping`** (integrator contract). Routes like **`POST /api/v1/batch/sign`** (direct enqueue with PIN) are for same-machine app use and **do not** appear in that JSON.
 
 <details>
-<summary><strong>📋 Ejemplo — intención subiendo PDF (multipart)</strong></summary>
+<summary><strong>📋 Example — intent uploading PDF (multipart)</strong></summary>
 
 ```bash
 curl -sS -X POST "http://127.0.0.1:14500/api/v1/batch/sign/intent" \
@@ -145,7 +166,7 @@ curl -sS -X POST "http://127.0.0.1:14500/api/v1/batch/sign/intent" \
 </details>
 
 <details>
-<summary><strong>📋 Ejemplo — intención con rutas locales (JSON)</strong></summary>
+<summary><strong>📋 Example — intent with local paths (JSON)</strong></summary>
 
 ```bash
 curl -sS -X POST "http://127.0.0.1:14500/api/v1/batch/sign/intent" \
@@ -164,56 +185,56 @@ curl -sS -X POST "http://127.0.0.1:14500/api/v1/batch/sign/intent" \
 ```
 
 
-### Fuera del OpenAPI público
+### Outside the public OpenAPI surface
 
-La app de escritorio y otros procesos **locales** pueden usar rutas HTTP adicionales en loopback; **no** forman parte de **`openapi.json`**. Para una integración desde tu dominio, ceñirse a **intent → sondeo de estado → descargas**.
+The desktop app and other **local** processes may use additional loopback HTTP routes; they are **not** in **`openapi.json`**. For integration from your domain, stick to **intent → status polling → downloads**.
 
 ---
 
-## 🧱 Capacidades técnicas
+## Technical capabilities
 
 | | |
 |:---|:---|
-| 📜 **PAdES-BES** | CMS detached + RSA en token. |
-| 🛡️ **CORS** | Lista de orígenes alineada con la política en app / SQLite. |
-| 📊 **`progreso`** | Eventos IPC por documento para barras y logs. |
-| 🔑 **PKCS#11** | Descubrimiento de módulos, certificados de firma, sesión acotada. |
-| 🔐 **PIN** | En batch por loopback o comandos `pkcs11_login` / `pkcs11_logout` según flujo. |
+| 📜 **PAdES-BES** | Detached CMS + RSA on token. |
+| 🛡️ **CORS** | Allowed origins aligned with in-app policy / SQLite. |
+| 📊 **`progreso`** | IPC events per document for progress bars and logs. |
+| 🔑 **PKCS#11** | Module discovery, signing certificates, bounded session. |
+| 🔐 **PIN** | Batch via loopback or `pkcs11_login` / `pkcs11_logout` commands depending on flow. |
 
 ---
 
-## 💳 PKCS#11 / DNIe
+## PKCS#11 / smart cards
 
-| Variable | Uso |
-|----------|-----|
-| `NEXOSIGN_PKCS11_MODULE` | Ruta absoluta al `.dll` / `.so` / `.dylib` (prioridad sobre rutas por defecto). |
-| `NEXOSIGN_PKCS11_SLOT` | Índice del slot (`0` por defecto). |
-| `NEXOSIGN_BATCH_JOB_MAX_SECS` | Tiempo máximo (segundos) para intents pendientes y cola batch en SQLite (default **300**). |
+| Variable | Purpose |
+|----------|---------|
+| `NEXOSIGN_PKCS11_MODULE` | Absolute path to `.dll` / `.so` / `.dylib` (overrides default paths). |
+| `NEXOSIGN_PKCS11_SLOT` | Slot index (default `0`). |
+| `NEXOSIGN_BATCH_JOB_MAX_SECS` | Max time (seconds) for pending intents and batch queue in SQLite (default **300**). |
 
-Si el DNIe funciona en el navegador del sistema pero NexoSign muestra **0 slots**, suele ser **middleware PKCS#11 distinto**: prueba el del **proveedor oficial del DNIe** (FNMT/CCN) con `NEXOSIGN_PKCS11_MODULE`. OpenSC a veces no expone la tarjeta aunque el USB sí esté reconocido.
+If DNIe works in the system browser but NexoSign shows **0 slots**, you often need **different PKCS#11 middleware**: try the **official DNIe provider** (FNMT/CCN) with `NEXOSIGN_PKCS11_MODULE`. OpenSC sometimes does not expose the card even when USB is recognized.
 
-### Almacén de Windows (MY) y .pfx
+### Windows store (MY) and .pfx
 
-En **Windows**, además de PKCS#11, NexoSign lista certificados de **firma** del almacén **Personal (MY)** con clave **RSA CNG** (se fusionan en la misma lista que el token). El identificador empieza por `winmy:` + huella SHA-1. La UI distingue si hace falta PIN en la app o si la firma delega en el almacén de credenciales de Windows (ver **[`docs/certificados-pkcs11-y-windows.md`](./docs/certificados-pkcs11-y-windows.md)**).
+On **Windows**, besides PKCS#11, NexoSign lists **signing** certificates from the **Personal (MY)** store with **RSA CNG** keys (merged into the same list as the token). IDs start with `winmy:` + SHA-1 thumbprint. The UI indicates whether a PIN is required in-app or signing delegates to Windows Credential Manager (see **[`docs/certificados-pkcs11-y-windows.md`](./docs/certificados-pkcs11-y-windows.md)**).
 
-Un **`.pfx` solo en disco** o **solo importado al almacén sin ser RSA CNG** puede no aparecer o no firmar con este flujo. Sigue siendo válido usar **middleware PKCS#11** o hardware con su `.dll`.
+A **`.pfx` on disk only** or **imported to the store without RSA CNG** may not appear or may not sign in this flow. **PKCS#11 middleware** or hardware with its `.dll` remains the supported path.
 
-### Empaquetado (MSI / notarización macOS)
+### Packaging (MSI / macOS notarization)
 
-Guías: **[`docs/distribucion-windows.md`](./docs/distribucion-windows.md)** y **[`docs/distribucion-macos.md`](./docs/distribucion-macos.md)**.
+Guides: **[`docs/distribucion-windows.md`](./docs/distribucion-windows.md)** and **[`docs/distribucion-macos.md`](./docs/distribucion-macos.md)**.
 
-### Prueba de carga (PDFs de test)
+### Load testing (sample PDFs)
 
-Ver **[`scripts/load-test/README.md`](./scripts/load-test/README.md)** y **`scripts/gen-load-test-pdfs.mjs`**.
+See **[`scripts/load-test/README.md`](./scripts/load-test/README.md)** and **`scripts/gen-load-test-pdfs.mjs`**.
 
 ---
 
-## 📦 Prerrequisitos
+## Prerequisites
 
 - [Node.js](https://nodejs.org/) (LTS)
-- [Rust](https://www.rust-lang.org/tools/install) y [prerrequisitos Tauri](https://v2.tauri.app/start/prerequisites/)
+- [Rust](https://www.rust-lang.org/tools/install) and [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
 
-## 🚀 Desarrollo
+## Development
 
 ```bash
 npm install
@@ -225,31 +246,31 @@ npm run tauri dev
 | Frontend | **`http://localhost:1420`** |
 | API | **`http://127.0.0.1:14500`** |
 
-### Orígenes extra (CORS)
+### Extra origins (CORS)
 
 ```bash
-export NEXOSIGN_ALLOWED_ORIGINS="https://mi-app.example,http://localhost:3000"
+export NEXOSIGN_ALLOWED_ORIGINS="https://my-app.example,http://localhost:3000"
 npm run tauri dev
 ```
 
-Por defecto: `localhost` / `127.0.0.1` en puertos **1420** (Tauri+Vite) y **5173**.
+Defaults: `localhost` / `127.0.0.1` on ports **1420** (Tauri+Vite) and **5173**.
 
 ---
 
-## ✅ Pruebas
+## Tests
 
-| Capa | Comando | Valida |
-|------|---------|--------|
-| Dominio Rust | `cargo test -p nexosign --lib domain` | Política de orígenes |
+| Layer | Command | Validates |
+|-------|---------|-----------|
+| Rust domain | `cargo test -p nexosign --lib domain` | Origin policy |
 | HTTP | `cargo test -p nexosign --lib adapters::http` | Batch, intent, CORS |
-| Contrato | `cargo test -p nexosign --test http_contract` | Router sin proceso OS |
-| Cliente TS | `npm run test` | Vitest |
+| Contract | `cargo test -p nexosign --test http_contract` | Router without OS process |
+| TS client | `npm run test` | Vitest |
 | E2E UI | `npm run test:e2e` | Playwright |
-| E2E API | Terminal A: `npm run tauri dev` · B: `NEXOSIGN_E2E_API=1 npm run test:e2e` | Contrato contra API real |
+| E2E API | Terminal A: `npm run tauri dev` · B: `NEXOSIGN_E2E_API=1 npm run test:e2e` | Contract against live API |
 
-Sin servidor en `:14500`, los E2E que llaman a red **se omiten** (no fallan).
+Without a server on `:14500`, network E2E tests are **skipped** (not failed).
 
-Primera vez: `npx playwright install chromium`.
+First time: `npx playwright install chromium`.
 
 ```bash
 npm run test
@@ -259,12 +280,12 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 ---
 
-## 🤝 Contribuir
+## Contributing
 
-Las convenciones de código y el flujo de PR están en **[`CONTRIBUTING.md`](./CONTRIBUTING.md)**. La arquitectura detallada vive en **`AGENTS.md`**.
+See **[CONTRIBUTING.md](./CONTRIBUTING.md)** for setup, conventions, and pull requests. Architecture details: **[AGENTS.md](./AGENTS.md)**.
 
 ---
 
-## 🛠️ IDE recomendado
+## Recommended IDE
 
 [VS Code](https://code.visualstudio.com/) · [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode) · [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) · [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)

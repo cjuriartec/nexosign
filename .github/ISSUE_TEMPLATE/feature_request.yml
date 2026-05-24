@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest an improvement or new capability
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem from a user or integrator perspective. Check existing issues and the README API section first.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      placeholder: As a … I want … so that …
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false

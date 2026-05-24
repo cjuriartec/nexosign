@@ -1,7 +1,15 @@
 {
   "name": "nexosign",
-  "version": "0.1.0",
-  "description": "NexoSign — firma con DNIe y bridge web (Tauri)",
+  "version": "1.0.0",
+  "description": "Desktop PDF signing with hardware certificates and a local API (Tauri)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cjuriartec/nexosign.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cjuriartec/nexosign/issues"
+  },
+  "homepage": "https://github.com/cjuriartec/nexosign#readme",
   "type": "module",
   "scripts": {
     "sync:web-icon": "node -e \"require('fs').copyFileSync('src-tauri/icons/128x128.png','static/favicon.png')\"",

@@ -1,8 +1,10 @@
 [package]
 name = "nexosign"
-version = "0.1.0"
+version = "1.0.0"
 description = "NexoSign desktop (Tauri)"
-authors = ["you"]
+authors = ["NexoSign contributors"]
+license = "MIT"
+repository = "https://github.com/cjuriartec/nexosign"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

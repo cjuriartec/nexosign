@@ -1,78 +1,134 @@
-# Contribuir a NexoSign
+# Contributing to NexoSign
 
-Gracias por dedicar tiempo al proyecto. Esta guía resume cómo preparar el entorno, qué convenciones seguimos y cómo validar los cambios antes de abrir un pull request.
+Thank you for your interest in NexoSign. This guide explains how to set up your environment, follow project conventions, and validate changes before opening a pull request.
 
-## Requisitos
+## Table of contents
 
-- **Node.js** (LTS) y `npm`
-- **Rust** estable y [prerrequisitos de Tauri 2](https://v2.tauri.app/start/prerequisites/)
-- Opcional: **Playwright** (`npx playwright install chromium`) para E2E
+- [Welcome](#welcome)
+- [Before you start](#before-you-start)
+- [How to contribute](#how-to-contribute)
+- [Code standards](#code-standards)
+- [Required checks](#required-checks)
+- [Pull request checklist](#pull-request-checklist)
+- [Bugs and security](#bugs-and-security)
+- [Releases (maintainers)](#releases-maintainers)
+- [License](#license)
 
-## Arranque rápido
+## Welcome
+
+**NexoSign** is a desktop app for signing PDFs with a hardware or Windows certificate (PKCS#11, PAdES), plus a local HTTP API and deep links for web integration.
+
+Please read the [Code of Conduct](./CODE_OF_CONDUCT.md) and the [README](./README.md) for product context.
+
+## Before you start
+
+### Requirements
+
+- **Node.js** (LTS) and `npm`
+- **Rust** (stable) and [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/)
+- Optional: **Playwright** (`npx playwright install chromium`) for E2E tests
+
+### Quick start
 
 ```bash
 npm install
 npm run tauri dev
 ```
 
-- Frontend: `http://localhost:1420`
-- API local: `http://127.0.0.1:14500`
+| Service   | URL                        |
+| --------- | -------------------------- |
+| Frontend  | `http://localhost:1420`    |
+| Local API | `http://127.0.0.1:14500`   |
 
-## Arquitectura y límites
+### Further reading
 
-La fuente de verdad arquitectónica es **`AGENTS.md`** (hexagonal: dominio, casos de uso, puertos, adaptadores).
+- **[AGENTS.md](./AGENTS.md)** — hexagonal architecture (domain, use cases, ports, adapters)
+- **[docs/](./docs/)** — distribution, PKCS#11 / Windows MY, certificates
 
-| Área | Regla breve |
-|------|----------------|
-| `src-tauri/src/domain/` | Sin Axum, Tauri, SQLite ni `cryptoki`. |
-| `src-tauri/src/application/` | Orquestación vía traits en `ports/`. |
-| `src-tauri/src/adapters/` | HTTP, Tauri, PKCS#11, persistencia, worker. |
-| Frontend | Vistas `.svelte` mayormente presentacionales; orquestación en `.ts`. |
+## How to contribute
 
-Si tu cambio cruza capas, enlaza en la descripción del PR cómo respeta esos límites.
+1. **Fork** the repository on GitHub.
+2. Create a branch from **`main`**, e.g. `feature/short-description` or `fix/issue-topic`.
+3. Make focused changes (one topic per pull request when possible).
+4. Run the [required checks](#required-checks).
+5. Open a **pull request** against `main` with a clear description (English or Spanish is fine).
 
-## PKCS#11: PIN en lote y CKA_ALWAYS_AUTHENTICATE
+## Code standards
 
-La interfaz pide el PIN **una vez por lote** antes de enviar `POST /batch/sign`. En backend, el worker firma cada PDF **en serie** por la misma cola PKCS#11 (sin paralelizar operaciones en el chip).
+### Architecture
 
-Muchos tokens DNIe marcan la clave privada con **CKA_ALWAYS_AUTHENTICATE**: el middleware puede exigir **re-autenticación contextual** (`C_Login` con `CKU_CONTEXT_SPECIFIC`) **antes de cada** `C_Sign`, aunque el usuario solo introduzca el PIN una vez en pantalla. Por tanto, “PIN único” en UX **no** implica necesariamente un solo par PKCS#11 login/session para todo el lote. Detalle de implementación: `rsa_sha256_pkcs1_sign` en [`src-tauri/src/adapters/pkcs11/token.rs`](src-tauri/src/adapters/pkcs11/token.rs).
+| Area                         | Rule                                                                 |
+| ---------------------------- | -------------------------------------------------------------------- |
+| `src-tauri/src/domain/`      | No Axum, Tauri, SQLite, or `cryptoki`.                             |
+| `src-tauri/src/application/` | Orchestration via traits in `ports/` only.                           |
+| `src-tauri/src/adapters/`    | HTTP, Tauri, PKCS#11, persistence, worker.                           |
+| Frontend                     | `.svelte` views are mostly presentational; orchestration in `.ts`.   |
 
-## Estilo de código
+If your change crosses layers, explain in the PR how it respects these boundaries.
 
-- **Rust:** `cargo fmt` / `cargo clippy`; errores tipados (`thiserror` donde aplique); sin loguear PIN ni datos sensibles del token.
-- **TypeScript / Svelte:** coherente con el código existente; `npm run check` debe pasar.
-- **Commits:** mensajes claros en español o inglés; una idea principal por commit cuando sea posible.
+### Style
 
-## Qué ejecutar antes de un PR
+- **Rust:** `cargo fmt`; run `cargo clippy` when practical; use typed errors (`thiserror` where appropriate); **never** log PINs or sensitive token data.
+- **TypeScript / Svelte:** match existing patterns; `npm run check` must pass.
+
+### PKCS#11: PIN in the UI vs the token
+
+The UI asks for the PIN **once per batch** before signing. The worker signs PDFs **serially** on a single PKCS#11 queue (do not parallelize chip operations).
+
+Many tokens (e.g. DNIe) set **CKA_ALWAYS_AUTHENTICATE**, so the middleware may require **context-specific re-login** before each `C_Sign` even when the user entered the PIN only once. “Single PIN in UX” does not always mean a single PKCS#11 login for the whole batch. See `rsa_sha256_pkcs1_sign` in [`src-tauri/src/adapters/pkcs11/token.rs`](src-tauri/src/adapters/pkcs11/token.rs).
+
+## Required checks
+
+Run these before opening a PR:
 
 ```bash
-npm run check        # Svelte + TypeScript
-npm run test         # Vitest
+npm run check
+npm run test
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-Si tocas UI o rutas críticas:
+| Layer            | Command                                              |
+| ---------------- | ---------------------------------------------------- |
+| Svelte / TS      | `npm run check`, `npm run test`                      |
+| Rust (all)       | `cargo test --manifest-path src-tauri/Cargo.toml`    |
+| Domain only      | `cargo test -p nexosign --lib domain`                |
+| HTTP adapters    | `cargo test -p nexosign --lib adapters::http`        |
+| HTTP contract    | `cargo test -p nexosign --test http_contract`        |
+
+If you change UI or critical flows:
 
 ```bash
 npm run test:e2e
 ```
 
-Para contratos HTTP contra API real (terminal aparte con `npm run tauri dev`):
+E2E against the live API (separate terminal with `npm run tauri dev`):
 
 ```bash
 NEXOSIGN_E2E_API=1 npm run test:e2e
 ```
 
-## Pull requests
+E2E tests that need `:14500` are **skipped** when the server is not running.
 
-1. Describe **qué** cambia y **por qué** (contexto de usuario o bug).
-2. Adjunta capturas si hay cambio visual relevante.
-3. Si el cambio es grande, considera fragmentarlo; puedes consultar el flujo de trabajo habitual del equipo.
+## Pull request checklist
 
-## Seguridad
+- [ ] Description explains **what** changed and **why**
+- [ ] Screenshots or short recording for visible UI changes
+- [ ] `npm run check`, `npm run test`, and `cargo test` pass
+- [ ] [CHANGELOG.md](./CHANGELOG.md) updated for user-facing changes (if applicable)
+- [ ] No secrets, PINs, `.pfx`, or private keys committed
+- [ ] Large changes split into smaller PRs when possible
 
-Si encuentras una vulnerabilidad, **no** abras un issue público con el exploit completo: contacta al mantenedor por el canal que acordéis.
+## Bugs and security
 
-## Licencia
+- **Bugs and features:** use [GitHub Issues](https://github.com/cjuriartec/nexosign/issues) with the appropriate template.
+- **Security vulnerabilities:** follow [SECURITY.md](./SECURITY.md). Do **not** file public issues with exploit details.
 
-Al contribuir, aceptas que tu aporte se publique bajo la misma licencia del repositorio (**MIT**, salvo que se indique lo contrario).
+## Releases (maintainers)
+
+- Versioning follows **Semantic Versioning** (e.g. `1.0.0`, `1.0.1`).
+- User-facing changes are recorded in [CHANGELOG.md](./CHANGELOG.md).
+- Pushing a tag matching `v*.*.*` triggers the [release workflow](.github/workflows/release.yml) to build Tauri bundles (Windows / macOS). Installers are **not** code-signed in CI for v1; see [docs/distribucion-windows.md](./docs/distribucion-windows.md).
+
+## License
+
+By contributing, you agree that your contributions are licensed under the [MIT License](./LICENSE), the same as the project.

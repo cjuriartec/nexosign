@@ -1,0 +1,67 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Do not include PINs, certificate private data, or full PDFs with personal information.**
+
+  - type: input
+    id: version
+    attributes:
+      label: NexoSign version
+      placeholder: e.g. 1.0.0 or commit SHA
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: 1. … 2. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Redact sensitive paths if needed
+
+  - type: dropdown
+    id: token
+    attributes:
+      label: Certificate source
+      options:
+        - PKCS#11 / smart card (chip)
+        - Windows Personal (MY) store
+        - Not applicable / unknown
