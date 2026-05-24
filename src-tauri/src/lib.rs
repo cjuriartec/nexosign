@@ -12,6 +12,7 @@ use adapters::persistence::queue_store;
 use adapters::persistence::{AllowedOriginsDb, Pkcs11PathsDb};
 use adapters::pkcs11::token::Pkcs11TokenManager;
 use domain::allowed_origins::AllowedOrigins;
+use infrastructure::local_api_listen::LocalApiRuntime;
 use infrastructure::origin_db::OriginDbPath;
 use infrastructure::window::{self, MAIN_WINDOW_LABEL};
 use tauri::{Emitter, Manager, WindowEvent};
@@ -92,8 +93,12 @@ pub fn run() {
     let batch_cancel = Arc::new(Mutex::new(HashMap::<String, CancellationToken>::new()));
     let pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    let local_api = Arc::new(LocalApiRuntime::new());
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            window::show_main_window(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())
@@ -101,9 +106,11 @@ pub fn run() {
         .manage(pkcs11.clone())
         .manage(BatchCancelRegistry(batch_cancel.clone()))
         .manage(PendingBatchIntents(pending_batch_intents.clone()))
+        .manage(local_api.clone())
         .invoke_handler(tauri::generate_handler![
             greet,
             commands::get_local_api_base_url,
+            commands::get_local_api_status,
             commands::get_batch_job_max_secs_config,
             commands::set_batch_job_max_secs,
             commands::list_allowed_origins,
@@ -203,6 +210,7 @@ pub fn run() {
             let api_state = infrastructure::local_server::build_shared_api_state(
                 app.handle().clone(),
                 origins.clone(),
+                local_api.clone(),
                 pkcs11.clone(),
                 batch_cancel.clone(),
                 pending_batch_intents.clone(),
@@ -225,7 +233,7 @@ pub fn run() {
             #[cfg(desktop)]
             try_install_tray(app.handle());
 
-            infrastructure::local_server::spawn_local_api(api_state);
+            infrastructure::local_server::spawn_local_api(api_state, local_api.clone());
 
             Ok(())
         })

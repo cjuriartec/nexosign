@@ -85,6 +85,10 @@ The API listens at **`http://127.0.0.1:14500`** **only while the app is running*
 
 **Desktop app:** the UI uses Tauri **`invoke`** (`local_api_*` Rust commands) for health, ping, enqueue signing, and job status — same logic as the HTTP endpoints, without `fetch` to loopback (avoids CORS and mixed-content issues in release). **`127.0.0.1:14500`** remains the channel for **integrators**, portals, and external tools.
 
+**Single instance:** only one NexoSign process runs at a time; launching again focuses the existing window.
+
+**Port `14500` busy:** if another program holds the port, the HTTP API does not start (fail-fast). The desktop app still signs via IPC; check **Settings → Servicio local** or logs. Override the port with `NEXOSIGN_LOCAL_API_PORT` (single port, no auto-range). `GET /health` includes `port` and `baseUrl` when listening.
+
 | Requirement | Details |
 |-------------|---------|
 | 🌍 **Origin** | Browser **`POST` and `GET`** for batch routes need an **`Origin`** header allowed by CORS (e.g. `http://localhost:1420`). Includes intent status polling and downloads. |

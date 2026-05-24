@@ -12,11 +12,13 @@ use crate::ports::BatchJobSnapshot;
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::adapters::worker::batch::BatchJob;
 use crate::domain::allowed_origins::AllowedOrigins;
+use crate::infrastructure::local_api_listen::LocalApiRuntime;
 
 /// Estado compartido entre el servidor Axum y Tauri (`manage`).
 #[derive(Clone)]
 pub struct SharedState {
     pub origins: Arc<RwLock<AllowedOrigins>>,
+    pub local_api: Arc<LocalApiRuntime>,
     pub app_handle: Option<AppHandle>,
     pub batch_tx: Option<mpsc::Sender<BatchJob>>,
     /// Tokens de cancelación por `job_id` (HTTP registra; worker elimina al terminar).
@@ -42,6 +44,7 @@ pub struct PendingBatchIntents(pub Arc<Mutex<HashMap<String, PendingBatchIntent>
 impl SharedState {
     pub fn new(
         origins: Arc<RwLock<AllowedOrigins>>,
+        local_api: Arc<LocalApiRuntime>,
         app_handle: Option<AppHandle>,
         batch_tx: Option<mpsc::Sender<BatchJob>>,
         batch_cancel: Arc<Mutex<HashMap<String, CancellationToken>>>,
@@ -54,6 +57,7 @@ impl SharedState {
     ) -> Self {
         Self {
             origins,
+            local_api,
             app_handle,
             batch_tx,
             batch_cancel,
@@ -68,7 +72,11 @@ impl SharedState {
 
     /// Estado para tests sin ventana Tauri.
     pub fn test_default() -> Self {
-        Self::test_http(None, None)
+        let s = Self::test_http(None, None);
+        s.local_api.set_listening(
+            crate::infrastructure::local_api_listen::LOCAL_API_DEFAULT_PORT,
+        );
+        s
     }
 
     /// Constructor único para tests HTTP (`batch_tx` y/o mapa de intents compartido).
@@ -78,6 +86,7 @@ impl SharedState {
     ) -> Self {
         Self {
             origins: Arc::new(RwLock::new(AllowedOrigins::development_defaults())),
+            local_api: Arc::new(LocalApiRuntime::new()),
             app_handle: None,
             batch_tx,
             batch_cancel: Arc::new(Mutex::new(HashMap::new())),
@@ -93,10 +102,13 @@ impl SharedState {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
     pub status: &'static str,
     pub service: &'static str,
     pub version: &'static str,
+    pub port: u16,
+    pub base_url: String,
 }
 
 #[derive(Serialize)]

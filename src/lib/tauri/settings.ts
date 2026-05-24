@@ -14,6 +14,18 @@ export async function setBatchJobMaxSecs(secs: number): Promise<void> {
 	return invoke<void>("set_batch_job_max_secs", { secs });
 }
 
+export type LocalApiStatus = {
+	listening: boolean;
+	port: number;
+	baseUrl: string;
+	error?: string | null;
+	lockedByEnv: boolean;
+};
+
+export async function getLocalApiStatus(): Promise<LocalApiStatus> {
+	return invoke<LocalApiStatus>("get_local_api_status");
+}
+
 export async function getLocalApiBaseUrl(): Promise<string> {
 	return invoke<string>("get_local_api_base_url");
 }

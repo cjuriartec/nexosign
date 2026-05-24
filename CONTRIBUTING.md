@@ -109,6 +109,12 @@ NEXOSIGN_E2E_API=1 npm run test:e2e
 
 E2E tests that need `:14500` are **skipped** when the server is not running.
 
+### Local API troubleshooting
+
+- **Only one NexoSign instance** should run; a second launch focuses the first window.
+- If **`14500` is in use** by another app, the HTTP listener fails at startup (no silent fallback). Signing from the desktop UI still works via IPC; integrators need a free port or `NEXOSIGN_LOCAL_API_PORT`.
+- In the app: **Settings → Servicio local** shows bind errors; **`get_local_api_status`** (Tauri) exposes the same state.
+
 ## Pull request checklist
 
 - [ ] Description explains **what** changed and **why**

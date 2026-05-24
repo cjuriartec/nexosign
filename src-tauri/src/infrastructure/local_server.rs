@@ -6,15 +6,19 @@ use std::sync::{Arc, Mutex, RwLock};
 use tauri::AppHandle;
 
 use crate::domain::pending_batch_intent::PendingBatchIntent;
-use crate::adapters::http::{build_router, state::SharedState, LOCAL_API_PORT};
+use crate::adapters::http::{build_router, state::SharedState};
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::domain::allowed_origins::AllowedOrigins;
+use crate::infrastructure::local_api_listen::{
+    effective_listen_port, emit_listen_changed, merge_custom_port_origins, LocalApiRuntime,
+};
 
 /// Construye el estado compartido de la API local (cola batch, snapshots) y arranca worker + vigía.
 /// Debe llamarse una sola vez; el mismo [`SharedState`] se gestiona en Tauri (`.manage`) y se pasa a Axum.
 pub fn build_shared_api_state(
     handle: AppHandle,
     origins: Arc<RwLock<AllowedOrigins>>,
+    local_api: Arc<LocalApiRuntime>,
     pkcs11: Arc<Pkcs11TokenManager>,
     batch_cancel: Arc<Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>,
     pending_batch_intents: Arc<Mutex<HashMap<String, PendingBatchIntent>>>,
@@ -44,6 +48,7 @@ pub fn build_shared_api_state(
 
     SharedState::new(
         origins,
+        local_api,
         Some(handle),
         Some(tx),
         batch_cancel,
@@ -56,28 +61,51 @@ pub fn build_shared_api_state(
     )
 }
 
-/// Arranca el servidor Axum en segundo plano (`127.0.0.1:14500`) con el estado ya construido.
-pub fn spawn_local_api(state: SharedState) {
-    let router = build_router(state);
-    let addr = SocketAddr::from(([127, 0, 0, 1], LOCAL_API_PORT));
+/// Arranca el servidor Axum en loopback (fail-fast en un solo puerto).
+pub fn spawn_local_api(state: SharedState, local_api: Arc<LocalApiRuntime>) {
+    let port = effective_listen_port();
+    if let Ok(mut g) = state.origins.write() {
+        merge_custom_port_origins(&mut *g, port);
+    }
+
+    let router = build_router(state.clone());
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let app_handle = state.app_handle.clone();
 
     tauri::async_runtime::spawn(async move {
         let listener = match tokio::net::TcpListener::bind(addr).await {
             Ok(l) => l,
             Err(e) => {
+                let msg = e.to_string();
                 tracing::error!(
                     error = %e,
-                    "No se pudo enlazar la API local; ¿puerto {} ocupado?",
-                    LOCAL_API_PORT
+                    port,
+                    "No se pudo enlazar la API local; ¿puerto ocupado?"
                 );
+                local_api.set_failed(port, msg.clone());
+                if let Some(ref h) = app_handle {
+                    let snap = local_api.snapshot();
+                    emit_listen_changed(h, &snap);
+                }
                 return;
             }
         };
+
+        local_api.set_listening(port);
+        if let Some(ref h) = app_handle {
+            let snap = local_api.snapshot();
+            emit_listen_changed(h, &snap);
+        }
 
         tracing::info!(%addr, "NexoSign API local escuchando");
 
         if let Err(e) = axum::serve(listener, router).await {
             tracing::error!(error = %e, "servidor Axum terminó con error");
+            local_api.set_failed(port, e.to_string());
+            if let Some(ref h) = app_handle {
+                let snap = local_api.snapshot();
+                emit_listen_changed(h, &snap);
+            }
         }
     });
 }

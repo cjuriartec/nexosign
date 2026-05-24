@@ -73,11 +73,15 @@ impl From<LocalApiOpError> for LocalApiInvokeError {
     }
 }
 
-pub fn health_payload() -> HealthResponse {
+pub fn health_payload(state: &SharedState) -> HealthResponse {
+    let snap = state.local_api.snapshot();
+    let port = snap.port;
     HealthResponse {
-        status: "ok",
+        status: if snap.listening { "ok" } else { "unavailable" },
         service: "nexosign",
         version: env!("CARGO_PKG_VERSION"),
+        port,
+        base_url: crate::infrastructure::local_api_listen::base_url_for_port(port),
     }
 }
 

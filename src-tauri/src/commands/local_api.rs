@@ -58,8 +58,8 @@ impl From<BatchJobSnapshot> for BatchJobStatusIpcResponse {
 }
 
 #[tauri::command]
-pub fn local_api_health() -> HealthResponse {
-    local_api_ops::health_payload()
+pub fn local_api_health(state: State<'_, SharedState>) -> HealthResponse {
+    local_api_ops::health_payload(state.inner())
 }
 
 #[tauri::command]

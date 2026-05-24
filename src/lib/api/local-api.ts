@@ -33,6 +33,8 @@ export type HealthResponse = {
 	status: string;
 	service: string;
 	version: string;
+	port?: number;
+	baseUrl?: string;
 };
 
 export type PingResponse = { ok: boolean };

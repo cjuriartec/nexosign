@@ -7,7 +7,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 
-use crate::adapters::http::LOCAL_API_PORT;
+use crate::infrastructure::local_api_listen::{base_url_for_port, LocalApiListenSnapshot, LocalApiRuntime};
 use crate::domain::pending_batch_intent::PendingBatchIntent;
 use crate::adapters::http::state::PendingBatchIntents;
 use crate::adapters::persistence::queue_store;
@@ -174,8 +174,15 @@ pub fn get_batch_sign_intent(
 }
 
 #[tauri::command]
-pub fn get_local_api_base_url() -> String {
-    format!("http://127.0.0.1:{LOCAL_API_PORT}")
+pub fn get_local_api_base_url(local_api: tauri::State<'_, std::sync::Arc<LocalApiRuntime>>) -> String {
+    base_url_for_port(local_api.configured_port())
+}
+
+#[tauri::command]
+pub fn get_local_api_status(
+    local_api: tauri::State<'_, std::sync::Arc<LocalApiRuntime>>,
+) -> LocalApiListenSnapshot {
+    local_api.snapshot()
 }
 
 #[derive(Serialize)]

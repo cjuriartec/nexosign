@@ -14,6 +14,8 @@
 		listAllowedOrigins,
 		removeAllowedOrigin,
 		getLocalApiBaseUrl,
+		getLocalApiStatus,
+		type LocalApiStatus,
 		clearLocalApiTempCache,
 		getBatchJobMaxSecsConfig,
 		setBatchJobMaxSecs,
@@ -42,6 +44,7 @@
 	let origins = $state<string[]>([]);
 	let newOrigin = $state("");
 	let apiUrl = $state(LOCAL_API_BASE);
+	let apiStatus = $state<LocalApiStatus | null>(null);
 	let loading = $state(false);
 	let diagLoading = $state(false);
 	let health = $state<{ status: string; service: string; version: string } | null>(null);
@@ -388,11 +391,18 @@
 		diagLoading = true;
 		try {
 			if (isTauriRuntime()) {
-				apiUrl = await getLocalApiBaseUrl();
+				apiStatus = await getLocalApiStatus();
+				apiUrl = apiStatus.baseUrl;
+				if (!apiStatus.listening) {
+					health = null;
+					pingOk = false;
+					return;
+				}
 				health = await ipcFetchHealth();
 				const p = await ipcFetchPing();
 				pingOk = p.ok;
 			} else {
+				apiStatus = null;
 				apiUrl = LOCAL_API_BASE;
 				health = await fetchHealth(LOCAL_API_BASE);
 				const p = await fetchPing(LOCAL_API_BASE);
@@ -825,7 +835,19 @@
 		</Card.Header>
 		<Card.Content class="space-y-3 text-sm">
 			<code class="bg-muted block rounded-md p-2 text-xs">{apiUrl || "…"}</code>
-			{#if diagLoading && health === null && pingOk === null}
+			{#if apiStatus && !apiStatus.listening}
+				<div class="space-y-1.5">
+					<Badge variant="destructive">API no disponible</Badge>
+					<p class="text-destructive text-xs leading-relaxed">
+						{apiStatus.error ??
+							`No se pudo enlazar el puerto ${apiStatus.port}. ¿Otra aplicación o instancia de NexoSign lo está usando?`}
+					</p>
+					<p class="text-muted-foreground text-xs">
+						La firma desde esta app sigue funcionando (IPC). Las integraciones web necesitan el servicio HTTP
+						en loopback.
+					</p>
+				</div>
+			{:else if diagLoading && health === null && pingOk === null}
 				<p class="text-muted-foreground">Comprobando…</p>
 			{:else if health}
 				<div class="flex flex-wrap items-center gap-2">

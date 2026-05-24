@@ -17,9 +17,20 @@
 		shouldPollBatchBackend,
 	} from "$lib/stores/batch-queue.svelte";
 	import { isTauriRuntime } from "$lib/tauri/env";
-	import { addAllowedOrigin } from "$lib/tauri/settings";
+	import { addAllowedOrigin, getLocalApiStatus, type LocalApiStatus } from "$lib/tauri/settings";
 
 	let { children } = $props();
+
+	function notifyLocalApiUnavailable(status: LocalApiStatus) {
+		if (status.listening) return;
+		const detail = status.error
+			? `Puerto ${status.port}: ${status.error}`
+			: `No se pudo abrir el puerto ${status.port}.`;
+		toast.error("API local no disponible", {
+			description: `${detail} Comprueba si otra aplicación usa ese puerto. La firma desde la app sigue disponible.`,
+			duration: 12_000,
+		});
+	}
 
 	onMount(() => {
 		const unsubs: (() => void)[] = [];
@@ -60,6 +71,16 @@
 					}),
 				);
 				if (isTauriRuntime()) {
+					try {
+						notifyLocalApiUnavailable(await getLocalApiStatus());
+					} catch {
+						/* invoke no disponible */
+					}
+					unsubs.push(
+						await listen<LocalApiStatus>("local_api_listen_changed", (event) => {
+							notifyLocalApiUnavailable(event.payload);
+						}),
+					);
 					void syncQueuesFromLocalBackend();
 					const POLL_MS = 4000;
 					const poll = window.setInterval(() => {

@@ -32,7 +32,7 @@ use crate::infrastructure::batch_pdf_validation::{
 const MAX_SIGNED_DOWNLOAD_BYTES: u64 =
     crate::infrastructure::batch_pdf_validation::MAX_BATCH_PDF_BYTES + 8 * 1024 * 1024;
 
-pub const LOCAL_API_PORT: u16 = 14500;
+pub use crate::infrastructure::local_api_listen::LOCAL_API_DEFAULT_PORT as LOCAL_API_PORT;
 
 /// Límite del cuerpo HTTP para `POST /batch/sign/intent` (multipart puede acercarse a la suma de PDF).
 const MAX_BATCH_INTENT_BODY: usize =
@@ -67,22 +67,20 @@ fn api_err(status: StatusCode, code: &'static str, detail: impl Into<String>) ->
 }
 
 /// Petición HTTP al propio servidor API en loopback (cabecera `Host`).
-fn host_is_loopback_local_api(host: &str) -> bool {
+fn host_is_loopback_local_api(host: &str, port: u16) -> bool {
     let host = host.trim().to_ascii_lowercase();
-    host == format!("127.0.0.1:{}", LOCAL_API_PORT)
-        || host == format!("localhost:{}", LOCAL_API_PORT)
+    host == format!("127.0.0.1:{port}") || host == format!("localhost:{port}")
 }
 
 /// Pestaña abierta sobre esta API (p. ej. Swagger en `/docs`): el GET puede ir sin `Origin`.
-fn referer_is_loopback_local_api(referer: &str) -> bool {
+fn referer_is_loopback_local_api(referer: &str, port: u16) -> bool {
     let r = referer.trim().to_ascii_lowercase();
-    let p = LOCAL_API_PORT;
-    r.starts_with(&format!("http://127.0.0.1:{p}/"))
-        || r.starts_with(&format!("http://localhost:{p}/"))
+    r.starts_with(&format!("http://127.0.0.1:{port}/"))
+        || r.starts_with(&format!("http://localhost:{port}/"))
 }
 
 /// HTTP/2 usa `:authority`; a veces no hay `Host` en el mapa pero sí autoridad en el [`Uri`].
-fn uri_authority_is_loopback_local_api(uri: &Uri) -> bool {
+fn uri_authority_is_loopback_local_api(uri: &Uri, port: u16) -> bool {
     let Some(auth) = uri.authority() else {
         return false;
     };
@@ -90,15 +88,17 @@ fn uri_authority_is_loopback_local_api(uri: &Uri) -> bool {
     if host != "127.0.0.1" && host != "localhost" {
         return false;
     }
-    auth.port_u16() == Some(LOCAL_API_PORT)
+    auth.port_u16() == Some(port)
 }
 
-fn gate_batch_origin_missing_origin_response() -> Response {
+fn gate_batch_origin_missing_origin_response(port: u16) -> Response {
     (
         StatusCode::FORBIDDEN,
         Json(serde_json::json!({
             "error": "missing_origin",
-            "hint": "Los GET desde Swagger a menudo no envían Origin; la API acepta llamadas al puerto local sin Origin si Host/Referer/URI indican 127.0.0.1:14500. Desde curl: -H \"Origin: http://127.0.0.1:14500\""
+            "hint": format!(
+                "Los GET desde Swagger a menudo no envían Origin; la API acepta llamadas al puerto local sin Origin si Host/Referer/URI indican 127.0.0.1:{port}. Desde curl: -H \"Origin: http://127.0.0.1:{port}\""
+            )
         })),
     )
         .into_response()
@@ -107,6 +107,7 @@ fn gate_batch_origin_missing_origin_response() -> Response {
 /// Rutas batch: `Origin` debe estar en la lista **si** el navegador lo envía; si no hay `Origin`,
 /// se aceptan peticiones claras al propio listener en loopback (Swagger, HTTP/2).
 fn gate_batch_origin(state: &SharedState, headers: &HeaderMap, uri: &Uri) -> Result<(), Response> {
+    let listen_port = state.local_api.gate_listen_port();
     if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
         let allowed = state
             .origins
@@ -140,7 +141,7 @@ fn gate_batch_origin(state: &SharedState, headers: &HeaderMap, uri: &Uri) -> Res
     if headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|h| host_is_loopback_local_api(h))
+        .is_some_and(|h| host_is_loopback_local_api(h, listen_port))
     {
         return Ok(());
     }
@@ -148,16 +149,16 @@ fn gate_batch_origin(state: &SharedState, headers: &HeaderMap, uri: &Uri) -> Res
     if headers
         .get(header::REFERER)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|r| referer_is_loopback_local_api(r))
+        .is_some_and(|r| referer_is_loopback_local_api(r, listen_port))
     {
         return Ok(());
     }
 
-    if uri_authority_is_loopback_local_api(uri) {
+    if uri_authority_is_loopback_local_api(uri, listen_port) {
         return Ok(());
     }
 
-    Err(gate_batch_origin_missing_origin_response())
+    Err(gate_batch_origin_missing_origin_response(listen_port))
 }
 
 fn emit_pending_batch_intents_changed(state: &SharedState, request_id: &str) {
@@ -275,8 +276,8 @@ pub fn build_router(state: SharedState) -> Router {
         .with_state(state)
 }
 
-async fn get_health() -> impl IntoResponse {
-    Json(local_api_ops::health_payload())
+async fn get_health(State(state): State<SharedState>) -> impl IntoResponse {
+    Json(local_api_ops::health_payload(&state))
 }
 
 async fn post_ping() -> impl IntoResponse {
@@ -1022,6 +1023,38 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["status"], "ok");
         assert_eq!(v["service"], "nexosign");
+    }
+
+    #[tokio::test]
+    async fn batch_gate_accepts_host_on_custom_listen_port_without_origin() {
+        use std::sync::Arc;
+
+        use crate::infrastructure::local_api_listen::LocalApiRuntime;
+
+        let local_api = Arc::new(LocalApiRuntime::new());
+        local_api.set_listening(15001);
+        let mut state = SharedState::test_default();
+        state.local_api = local_api;
+        let app = build_router(state);
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/batch/sign/intent")
+                    .header("Host", "127.0.0.1:15001")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"inputs":[]}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_ne!(
+            res.status(),
+            StatusCode::FORBIDDEN,
+            "Host en el puerto efectivo debe pasar el gate sin Origin"
+        );
     }
 
     #[tokio::test]
