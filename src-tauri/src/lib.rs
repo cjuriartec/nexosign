@@ -15,10 +15,9 @@ use domain::allowed_origins::AllowedOrigins;
 use infrastructure::local_api_listen::LocalApiRuntime;
 use infrastructure::origin_db::OriginDbPath;
 use infrastructure::window::{self, MAIN_WINDOW_LABEL};
-use tauri::{Emitter, Manager, WindowEvent};
+use tauri::{Manager, WindowEvent};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri_plugin_deep_link::DeepLinkExt;
 use tokio_util::sync::CancellationToken;
 
 use crate::domain::pending_batch_intent::PendingBatchIntent;
@@ -101,7 +100,6 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_deep_link::init())
         .manage(origins.clone())
         .manage(pkcs11.clone())
         .manage(BatchCancelRegistry(batch_cancel.clone()))
@@ -218,17 +216,6 @@ pub fn run() {
                 batch_signed_outputs.clone(),
             );
             app.manage(api_state.clone());
-
-            let emit_for_deep_link = app.handle().clone();
-            app.handle().deep_link().on_open_url(move |event| {
-                window::show_main_window(&emit_for_deep_link);
-                let urls: Vec<String> =
-                    event.urls().into_iter().map(|u| u.to_string()).collect();
-                let _ = emit_for_deep_link.emit(
-                    "nexosign-deep-link",
-                    serde_json::json!({ "urls": urls }),
-                );
-            });
 
             #[cfg(desktop)]
             try_install_tray(app.handle());

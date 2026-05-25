@@ -20,6 +20,7 @@ use tauri::Emitter;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::adapters::http::state::SharedState;
+use crate::domain::origin_policy;
 use crate::adapters::persistence::queue_store;
 use crate::infrastructure::batch_pdf_validation::{
     validate_batch_pdf_inputs,
@@ -104,15 +105,23 @@ fn gate_batch_origin_missing_origin_response(port: u16) -> Response {
         .into_response()
 }
 
-/// Rutas batch: `Origin` debe estar en la lista **si** el navegador lo envía; si no hay `Origin`,
+fn request_origin(headers: &HeaderMap) -> Option<String> {
+    origin_policy::origin_from_header(
+        headers
+            .get(header::ORIGIN)
+            .and_then(|v| v.to_str().ok()),
+    )
+}
+
+/// Rutas batch: el origen del cliente debe estar en la lista **si** se envía; si no hay origen,
 /// se aceptan peticiones claras al propio listener en loopback (Swagger, HTTP/2).
 fn gate_batch_origin(state: &SharedState, headers: &HeaderMap, uri: &Uri) -> Result<(), Response> {
     let listen_port = state.local_api.gate_listen_port();
-    if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+    if let Some(origin) = request_origin(headers) {
         let allowed = state
             .origins
             .read()
-            .map(|g| g.is_allowed_origin(origin))
+            .map(|g| g.is_allowed_origin(&origin))
             .unwrap_or(false);
 
         if allowed {
@@ -120,6 +129,7 @@ fn gate_batch_origin(state: &SharedState, headers: &HeaderMap, uri: &Uri) -> Res
         }
 
         if let Some(ref h) = state.app_handle {
+            crate::infrastructure::window::show_main_window(h);
             let _ = h.emit(
                 "origin_trust_request",
                 serde_json::json!({ "origin": origin }),
@@ -181,8 +191,6 @@ pub struct BatchSignIntentBody {
 #[derive(Debug, Serialize)]
 pub struct BatchSignIntentResponse {
     pub request_id: String,
-    /// Abrir en el sistema para lanzar NexoSign y el asistente de firma.
-    pub deep_link: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -235,6 +243,11 @@ pub fn build_router(state: SharedState) -> Router {
                 let Ok(s) = origin.to_str() else {
                     return false;
                 };
+                // Reflejar ACAO para cualquier URL de origen bien formada.
+                // La autorización real es `is_allowed_origin` en rutas batch.
+                if origin_policy::is_well_formed_origin(s) {
+                    return true;
+                }
                 let guard = origins_for_cors.read().ok();
                 let Some(guard) = guard else {
                     return false;
@@ -248,6 +261,9 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/docs", get(openapi::get_api_docs))
         .route("/health", get(get_health))
         .route("/api/v1/ping", post(post_ping))
+        .route("/api/v1/focus", post(post_focus))
+        .route("/api/v1/origin/check", get(get_origin_check))
+        .route("/api/v1/origin/prompt", post(post_origin_prompt))
         .route(
             "/api/v1/batch/sign/intent",
             post(post_batch_sign_intent).layer(DefaultBodyLimit::max(MAX_BATCH_INTENT_BODY)),
@@ -282,6 +298,145 @@ async fn get_health(State(state): State<SharedState>) -> impl IntoResponse {
 
 async fn post_ping() -> impl IntoResponse {
     Json(local_api_ops::ping_payload())
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct FocusBody {
+    /// Si se indica, abre el asistente de firma para ese `request_id`.
+    #[serde(default)]
+    intent: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct FocusResponse {
+    ok: bool,
+    focused: bool,
+}
+
+/// Trae NexoSign al frente (y opcionalmente navega al intent de firma).
+#[derive(Debug, Serialize)]
+struct OriginCheckResponse {
+    origin: Option<String>,
+    trusted: bool,
+}
+
+/// Comprueba si el `Origin` de la petición está en la lista permitida (CORS batch).
+async fn get_origin_check(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let origin = request_origin(&headers);
+
+    let Some(ref origin_str) = origin else {
+        return Json(OriginCheckResponse {
+            origin: None,
+            trusted: false,
+        });
+    };
+
+    let trusted = state
+        .origins
+        .read()
+        .map(|g| g.is_allowed_origin(origin_str))
+        .unwrap_or(false);
+
+    Json(OriginCheckResponse {
+        origin,
+        trusted,
+    })
+}
+
+#[derive(Debug, Serialize)]
+struct OriginPromptResponse {
+    trusted: bool,
+    prompted: bool,
+}
+
+/// Muestra el diálogo nativo de confianza (bloqueante). Usar desde la extensión al activar la opción.
+async fn post_origin_prompt(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let Some(origin) = request_origin(&headers) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "missing_origin",
+                "detail": "Se requiere la cabecera Origin (URL de origen del cliente)",
+            })),
+        )
+            .into_response();
+    };
+
+    let already = state
+        .origins
+        .read()
+        .map(|g| g.is_allowed_origin(&origin))
+        .unwrap_or(false);
+    if already {
+        return Json(OriginPromptResponse {
+            trusted: true,
+            prompted: false,
+        })
+        .into_response();
+    }
+
+    let state_clone = state.clone();
+    let trusted = tokio::task::spawn_blocking(move || {
+        let db = state_clone
+            .queue_sqlite_path
+            .as_deref()
+            .map(|p| p.as_path());
+        let Some(ref app) = state_clone.app_handle else {
+            return false;
+        };
+        crate::infrastructure::origin_trust_prompt::prompt_client_origin_trust_blocking(
+            app,
+            &state_clone.origins,
+            db,
+            &origin,
+        )
+    })
+    .await
+    .unwrap_or(false);
+
+    Json(OriginPromptResponse {
+        trusted,
+        prompted: true,
+    })
+    .into_response()
+}
+
+async fn post_focus(
+    State(state): State<SharedState>,
+    _headers: HeaderMap,
+    body: Option<Json<FocusBody>>,
+) -> impl IntoResponse {
+    let intent = body
+        .map(|Json(b)| b.intent)
+        .flatten()
+        .filter(|s| !s.trim().is_empty());
+
+    if let Some(ref h) = state.app_handle {
+        crate::infrastructure::window::show_main_window(h);
+        if let Some(ref request_id) = intent {
+            emit_pending_batch_intents_changed(&state, request_id);
+        }
+        Json(FocusResponse {
+            ok: true,
+            focused: true,
+        })
+        .into_response()
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "app_unavailable",
+                "detail": "NexoSign no está listo para mostrar la ventana.",
+            })),
+        )
+            .into_response()
+    }
 }
 
 /// Registra PDF para firmar **sin encolar** hasta que el usuario complete el asistente en la app.
@@ -392,13 +547,7 @@ async fn post_batch_sign_intent_json(
 
     emit_pending_batch_intents_changed(&state, &request_id);
 
-    let deep_link = format!("nexosign://sign?intent={}", request_id);
-
-    Json(BatchSignIntentResponse {
-        request_id,
-        deep_link,
-    })
-    .into_response()
+    Json(BatchSignIntentResponse { request_id }).into_response()
 }
 
 fn staging_root_dir() -> std::path::PathBuf {
@@ -672,13 +821,7 @@ async fn post_batch_sign_intent_multipart(
 
     emit_pending_batch_intents_changed(&state, &request_id);
 
-    let deep_link = format!("nexosign://sign?intent={}", request_id);
-
-    Json(BatchSignIntentResponse {
-        request_id,
-        deep_link,
-    })
-    .into_response()
+    Json(BatchSignIntentResponse { request_id }).into_response()
 }
 
 async fn post_batch_sign(

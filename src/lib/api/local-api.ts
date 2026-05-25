@@ -87,7 +87,6 @@ export type BatchSignIntentBody = {
 
 export type BatchSignIntentResponse = {
 	request_id: string;
-	deep_link: string;
 };
 
 /** GET /health — sin credenciales; CORS debe incluir el origen del frontend en dev. */

@@ -9,7 +9,6 @@
 	import { Toaster } from "$lib/components/ui/sonner/index.js";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 	import AppSidebar from "$lib/components/app-sidebar.svelte";
-	import { extractIntentFromNexosignUrl } from "$lib/nexosign-deep-link";
 	import {
 		initBatchQueuePersistence,
 		syncQueuesFromLocalBackend,
@@ -56,19 +55,6 @@
 							}
 						},
 					),
-				);
-				unsubs.push(
-					await listen<{ urls: string[] }>("nexosign-deep-link", async (event) => {
-						const urls = event.payload.urls ?? [];
-						for (const urlStr of urls) {
-							const intent = extractIntentFromNexosignUrl(urlStr);
-							if (intent) {
-								await goto(`/sign?intent=${encodeURIComponent(intent)}`);
-								return;
-							}
-						}
-						await goto("/sign");
-					}),
 				);
 				if (isTauriRuntime()) {
 					try {

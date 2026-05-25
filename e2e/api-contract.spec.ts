@@ -89,7 +89,7 @@ test.describe("API local opcional", () => {
 		expect(body.job_id).toBe("e2e-batch-contract");
 	});
 
-	test("POST /api/v1/batch/sign/intent devuelve request_id y deep_link (sin encolar)", async ({
+	test("POST /api/v1/batch/sign/intent devuelve request_id (sin encolar)", async ({
 		request,
 	}) => {
 		test.skip(
@@ -132,9 +132,7 @@ test.describe("API local opcional", () => {
 		expect(res.ok(), `HTTP ${res.status()}`).toBeTruthy();
 		const body = await res.json();
 		expect(body.request_id).toBeTruthy();
-		expect(body.deep_link).toBe(
-			`nexosign://sign?intent=${body.request_id}`,
-		);
+		expect(body.deep_link).toBeUndefined();
 	});
 
 	test("POST /api/v1/batch/sign/intent multipart (archivo en memoria)", async ({
@@ -171,9 +169,7 @@ test.describe("API local opcional", () => {
 		expect(res.ok(), `HTTP ${res.status()}`).toBeTruthy();
 		const body = await res.json();
 		expect(body.request_id).toBeTruthy();
-		expect(body.deep_link).toBe(
-			`nexosign://sign?intent=${body.request_id}`,
-		);
+		expect(body.deep_link).toBeUndefined();
 	});
 
 	test("POST /api/v1/batch/sign/intent sin Origin devuelve 403", async ({

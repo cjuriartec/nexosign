@@ -283,7 +283,7 @@ async fn integration_batch_sign_returns_queued_and_enqueues_job() {
 }
 
 #[tokio::test]
-async fn integration_batch_sign_intent_registers_deep_link_shape() {
+async fn integration_batch_sign_intent_returns_request_id() {
     let pending = Arc::new(Mutex::new(HashMap::new()));
     let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
     let app = build_router(SharedState::test_http(Some(tx), Some(pending.clone())));
@@ -315,17 +315,14 @@ async fn integration_batch_sign_intent_registers_deep_link_shape() {
     assert_eq!(res.status(), StatusCode::OK);
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    let rid = v["request_id"].as_str().unwrap();
-    assert_eq!(
-        v["deep_link"].as_str().unwrap(),
-        format!("nexosign://sign?intent={}", rid)
-    );
+    assert!(v["request_id"].as_str().unwrap().len() > 0);
+    assert!(v.get("deep_link").is_none());
     assert_eq!(pending.lock().unwrap().len(), 1);
     let _ = std::fs::remove_file(&tmp);
 }
 
 #[tokio::test]
-async fn integration_batch_sign_intent_multipart_registers_deep_link_shape() {
+async fn integration_batch_sign_intent_multipart_returns_request_id() {
     let pending = Arc::new(Mutex::new(HashMap::new()));
     let (tx, _rx) = tokio::sync::mpsc::channel::<BatchJob>(4);
     let app = build_router(SharedState::test_http(Some(tx), Some(pending)));
@@ -356,8 +353,8 @@ async fn integration_batch_sign_intent_multipart_registers_deep_link_shape() {
     assert_eq!(res.status(), StatusCode::OK);
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    let rid = v["request_id"].as_str().unwrap();
-    assert_eq!(v["deep_link"], format!("nexosign://sign?intent={rid}"));
+    assert!(v["request_id"].as_str().unwrap().len() > 0);
+    assert!(v.get("deep_link").is_none());
 }
 
 #[tokio::test]

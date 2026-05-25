@@ -61,7 +61,7 @@ Internal planning notes: [`docs/internal/PLAN.md`](./docs/internal/PLAN.md).
 |:---|:---|
 | 🔒 **Privacy by design** | Signing and the PIN happen **on the user’s machine**. The API listens on **loopback only** — not a SaaS that stores your PDFs or keys. |
 | 🖲️ **Real hardware** | PKCS#11: same model as **smart cards**, Spanish DNIe, and HSMs. **One queue, one signer**: parallelism must not break what the chip cannot do. |
-| 🧩 **Your web, the desktop** | From the browser you can register an **intent** (`POST …/intent`), get a **`deep_link`**, and open the app via **`nexosign://`** so the user **completes the wizard** (certificate, PIN, stamp cell). |
+| 🧩 **Your web, the desktop** | From the browser you can register an **intent** (`POST …/intent`), then **`POST /api/v1/focus`** with `{ "intent": "<request_id>" }` so the user **completes the wizard** (certificate, PIN, stamp cell). |
 | ⚙️ **Local automation** | The **desktop app** and tools on the same machine may use internal HTTP routes not in OpenAPI; remote integrators use **intent → status → downloads**. |
 
 ---
@@ -75,7 +75,7 @@ Internal planning notes: [`docs/internal/PLAN.md`](./docs/internal/PLAN.md).
 
 📁 **Output:** `{name}_signed.pdf` next to the original, or inside `…_signed` when signing by folder.
 
-**Background:** closing the window does **not** quit the app (local API and deep links stay active). Restore the window from the **system tray** (**Open NexoSign**) or by opening a **`nexosign://…`** link. To exit completely, use **Quit** in the tray or the application menu (e.g. Cmd+Q on macOS).
+**Background:** closing the window does **not** quit the app (local API stays active). Restore the window from the **system tray** (**Open NexoSign**). To exit completely, use **Quit** in the tray or the application menu (e.g. Cmd+Q on macOS).
 
 ---
 
@@ -94,14 +94,15 @@ The API listens at **`http://127.0.0.1:14500`** **only while the app is running*
 | 🌍 **Origin** | Browser **`POST` and `GET`** for batch routes need an **`Origin`** header allowed by CORS (e.g. `http://localhost:1420`). Includes intent status polling and downloads. |
 | 💻 **`curl`** | Add `-H "Origin: http://localhost:1420"` as in the examples. |
 | 📘 **OpenAPI** | With the app running: **`GET /openapi.json`** — intent, intent status, batch downloads, **`GET /health`**, **`POST /api/v1/ping`**. **`GET /docs`** serves **Swagger UI**. Import into [Scalar](https://scalar.com), Postman, etc. |
-| 📂 **Multipart vs signing** | **`multipart/form-data`** only on **`POST …/batch/sign/intent`** (upload PDFs from the browser). Signing runs in the **app** after the deep link; that step is **not** in **`openapi.json`** (web integrator contract). |
+| 📂 **Multipart vs signing** | **`multipart/form-data`** only on **`POST …/batch/sign/intent`** (upload PDFs from the browser). Signing runs in the **app** after **`POST /api/v1/focus`**; direct **`POST …/batch/sign`** is **not** in **`openapi.json`** (web integrator contract). |
 
 | Endpoint | Role |
 |----------|------|
 | **`GET /api/v1/batch/jobs/{job_id}/signed-files`** | When the batch **has finished**: JSON with `files[]` (`index`, `filename`, `href`) to download each signed PDF **from the browser** (same **Origin** as POST). |
 | **`GET /api/v1/batch/jobs/{job_id}/files/{i}`** | **`application/pdf`** for signed file *i* (same order as `inputs` / successful items only). |
 | **`GET /api/v1/batch/sign/intent/{request_id}/status`** | **Poll** after intent: `phase` = `awaiting_confirmation` \| `processing` \| `completed`, `job_id`, `manifest_href`, `signed_file_count`. No backend required: your page polls `127.0.0.1:14500` with the same **Origin**. |
-| **`POST /api/v1/batch/sign/intent`** | **Does not sign yet.** **`application/json`** (`inputs`: absolute paths) **or** **`multipart/form-data`** with repeatable **`files`** (one PDF per part). Uploads go to temporary staging; returns **`request_id`** + **`deep_link`**. Expires if not confirmed in time (same window as max batch job time; default ~5 min, set via `NEXOSIGN_BATCH_JOB_MAX_SECS`). |
+| **`POST /api/v1/batch/sign/intent`** | **Does not sign yet.** **`application/json`** (`inputs`: absolute paths) **or** **`multipart/form-data`** with repeatable **`files`** (one PDF per part). Uploads go to temporary staging; returns **`request_id`**. Expires if not confirmed in time (same window as max batch job time; default ~5 min, set via `NEXOSIGN_BATCH_JOB_MAX_SECS`). |
+| **`POST /api/v1/focus`** | Brings NexoSign to the front; optional body `{ "intent": "<request_id>" }` opens the signing wizard for that intent. |
 | **`GET /health`** | Service status (no `Origin`). |
 | **`POST /api/v1/ping`** | Echo for smoke tests. |
 | **`NEXOSIGN_BATCH_OUTPUT_DIR`** | Env var: force global output folder `{stem}_signed.pdf`. |
@@ -120,13 +121,12 @@ flowchart LR
   end
   subgraph NexoSign["User machine"]
     B["API 127.0.0.1:14500"]
-    C["nexosign:// deep link"]
     D["NexoSign app — wizard"]
   end
   A -->|"POST /api/v1/batch/sign/intent"| B
-  B -->|"request_id + deep_link"| A
-  A -->|"Open link"| C
-  C --> D
+  B -->|"request_id"| A
+  A -->|"POST /api/v1/focus intent"| B
+  B --> D
   D -->|"Confirm and enqueue (internal)"| B
 ```
 
@@ -135,15 +135,14 @@ flowchart LR
 1. **JSON:** PDFs are already **on disk** (absolute paths) on that PC.
 2. **Multipart:** the browser sends PDFs in repeatable **`files`** (up to 20 PDFs, 50 MiB each, total cap 20×50 MiB); the API stages temporaries and the wizard treats them as batch inputs.
 3. Your client calls **`POST /api/v1/batch/sign/intent`** (JSON or multipart).
-4. You receive **`request_id`** and **`deep_link`** — use them in an **“Open in NexoSign”** button.
-5. The OS opens the app registered for **`nexosign://`** (in dev you may need to start the app manually).
-6. The user completes the wizard; on confirm, **NexoSign** enqueues signing **locally** and links the intent **`request_id`** to the job (`job_id`) for polling and downloads; staging is **removed** when the batch finishes.
+4. You receive **`request_id`** — call **`POST /api/v1/focus`** with `{ "intent": "<request_id>" }` (e.g. “Open in NexoSign” button).
+5. The user completes the wizard; on confirm, **NexoSign** enqueues signing **locally** and links the intent **`request_id`** to the job (`job_id`) for polling and downloads; staging is **removed** when the batch finishes.
 
 ### Portal without your own backend (HTML/JS on your domain only)
 
 No HTTP callback to your server is required. With the intent **`request_id`**:
 
-1. Open the **`deep_link`** to launch NexoSign.
+1. Call **`POST /api/v1/focus`** with `{ "intent": "<request_id>" }` to launch the wizard.
 2. From the same tab (origin already allowed in Settings), **poll** every few seconds:  
    `GET http://127.0.0.1:14500/api/v1/batch/sign/intent/{request_id}/status`  
    with **`Origin`** (your portal’s origin).
@@ -183,9 +182,17 @@ curl -sS -X POST "http://127.0.0.1:14500/api/v1/batch/sign/intent" \
 
 ```json
 {
-  "request_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
-  "deep_link": "nexosign://sign?intent=f47ac10b-58cc-4372-a567-0e02b2c3d479"
+  "request_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479"
 }
+```
+
+Luego abre el asistente:
+
+```bash
+curl -sS -X POST "http://127.0.0.1:14500/api/v1/focus" \
+  -H "Content-Type: application/json" \
+  -H "Origin: http://localhost:1420" \
+  -d '{"intent":"f47ac10b-58cc-4372-a567-0e02b2c3d479"}'
 ```
 
 

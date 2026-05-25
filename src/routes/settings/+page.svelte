@@ -862,7 +862,9 @@
 				<p class="text-destructive">No responde el servicio en esta máquina.</p>
 			{/if}
 			<p class="text-muted-foreground text-xs">
-				Enlaces <code class="bg-muted rounded px-1">nexosign://</code> pueden abrir esta app desde el navegador.
+				Integradores externos: tras <code class="bg-muted rounded px-1">POST /api/v1/batch/sign/intent</code>, usa
+				<code class="bg-muted rounded px-1">POST /api/v1/focus</code> con <code class="bg-muted rounded px-1">{`{ "intent": "<request_id>" }`}</code>
+				para abrir el asistente de firma.
 			</p>
 			{#if isTauriRuntime()}
 				<div class="border-muted space-y-2 border-t pt-3">

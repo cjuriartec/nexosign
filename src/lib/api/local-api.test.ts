@@ -113,13 +113,11 @@ describe("local-api", () => {
 		);
 	});
 
-	it("postBatchSignIntent POSTea inputs y parsea request_id y deep_link", async () => {
+	it("postBatchSignIntent POSTea inputs y parsea request_id", async () => {
 		globalThis.fetch = vi.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({
 				request_id: "550e8400-e29b-41d4-a716-446655440000",
-				deep_link:
-					"nexosign://sign?intent=550e8400-e29b-41d4-a716-446655440000",
 			}),
 		});
 		const r = await postBatchSignIntent(
@@ -127,7 +125,6 @@ describe("local-api", () => {
 			"http://mock.test",
 		);
 		expect(r.request_id).toBe("550e8400-e29b-41d4-a716-446655440000");
-		expect(r.deep_link).toContain("nexosign://sign?intent=");
 		expect(globalThis.fetch).toHaveBeenCalledWith(
 			"http://mock.test/api/v1/batch/sign/intent",
 			expect.objectContaining({
@@ -145,7 +142,6 @@ describe("local-api", () => {
 			ok: true,
 			json: async () => ({
 				request_id: "r1",
-				deep_link: "nexosign://sign?intent=r1",
 			}),
 		});
 		const r = await postBatchSignIntentFormData(fd, "http://mock.test");

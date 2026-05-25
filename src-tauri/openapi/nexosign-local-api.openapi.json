@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "NexoSign API local",
-    "description": "API HTTP en loopback (`127.0.0.1:14500`) cuando NexoSign está en ejecución.\n\n**CORS / origen:** las rutas batch comprueban confianza del origen. Desde **otro dominio** el navegador envía `Origin` (debe estar en sitios permitidos). Desde **esta misma URL** (p. ej. Swagger en `/docs`) suele bastar sin rellenar `Origin` manualmente.\n\n**Portal sin backend:** tras `POST …/batch/sign/intent`, sondea `GET /api/v1/batch/sign/intent/{request_id}/status` hasta `completed`; luego `GET …/jobs/{job_id}/signed-files` y cada `GET …/files/{i}`.\n\n**No incluido aquí:** la encolación directa de firma (`POST …/batch/sign`), el sondeo fino de progreso por `job_id` que usa la app de escritorio, y otras rutas internas; **no** forman parte de este contrato público para integradores.\n\n**Scalar / otros:** importa `http://127.0.0.1:14500/openapi.json` con la app abierta.",
+    "description": "API HTTP en loopback (`127.0.0.1:14500`) cuando NexoSign está en ejecución.\n\n**CORS / origen:** las rutas batch exigen un origen de confianza. Usa `GET /api/v1/origin/check` (cabecera `Origin`) y, si `trusted` es false, `POST /api/v1/origin/prompt` para abrir el diálogo «Confiar» o añade la URL en la app → Ajustes → Sitios permitidos. Desde **Swagger en `/docs`** las rutas batch suelen funcionar sin `Origin` (loopback).\n\n**Portal sin backend:** tras `POST …/batch/sign/intent`, sondea `GET /api/v1/batch/sign/intent/{request_id}/status` hasta `completed`; luego `GET …/jobs/{job_id}/signed-files` y cada `GET …/files/{i}`.\n\n**No incluido aquí:** la encolación directa de firma (`POST …/batch/sign`) ni el sondeo fino de progreso por `job_id` de la app de escritorio.\n\n**Scalar / otros:** importa `http://127.0.0.1:14500/openapi.json` con la app abierta.",
     "version": "0.1.0"
   },
   "servers": [
@@ -13,9 +13,86 @@
   ],
   "tags": [
     { "name": "health", "description": "Estado del servicio" },
-    { "name": "utils", "description": "Utilidades y pruebas" },
+    { "name": "origins", "description": "Comprobar y autorizar orígenes (CORS / sitios permitidos)" },
+    { "name": "utils", "description": "Utilidades (ping, enfocar ventana)" },
     { "name": "batch", "description": "Firma por lotes (intent, estado, descargas); política de origen en el servidor" }
   ],
+  "components": {
+    "parameters": {
+      "OriginHeader": {
+        "name": "Origin",
+        "in": "header",
+        "required": true,
+        "description": "URL de origen del cliente (`http://…`, `https://…`, `chrome-extension://…`, etc.). El navegador la envía en integraciones cross-origin; en Swagger puedes fijarla manualmente para probar.",
+        "schema": { "type": "string" },
+        "example": "http://localhost:1420"
+      },
+      "OriginHeaderOptional": {
+        "name": "Origin",
+        "in": "header",
+        "required": false,
+        "description": "Opcional en check: si falta, la respuesta indica `trusted: false` y `origin: null`.",
+        "schema": { "type": "string" },
+        "example": "chrome-extension://abcdefghijklmnopqrstuvwxyzabcdef"
+      }
+    },
+    "schemas": {
+      "OriginCheckResponse": {
+        "type": "object",
+        "required": ["trusted"],
+        "properties": {
+          "origin": {
+            "type": "string",
+            "nullable": true,
+            "description": "Valor de la cabecera `Origin` recibida, o null si no llegó"
+          },
+          "trusted": {
+            "type": "boolean",
+            "description": "true si el origen está en sitios permitidos (SQLite + defaults)"
+          }
+        }
+      },
+      "OriginPromptResponse": {
+        "type": "object",
+        "required": ["trusted", "prompted"],
+        "properties": {
+          "trusted": {
+            "type": "boolean",
+            "description": "true si el origen quedó autorizado (ya lo estaba o el usuario pulsó «Confiar»)"
+          },
+          "prompted": {
+            "type": "boolean",
+            "description": "false si ya estaba autorizado; true si se mostró el diálogo nativo"
+          }
+        }
+      },
+      "FocusBody": {
+        "type": "object",
+        "properties": {
+          "intent": {
+            "type": "string",
+            "description": "Opcional: `request_id` del intent para abrir el asistente de firma"
+          }
+        }
+      },
+      "FocusResponse": {
+        "type": "object",
+        "required": ["ok", "focused"],
+        "properties": {
+          "ok": { "type": "boolean", "example": true },
+          "focused": { "type": "boolean", "example": true }
+        }
+      },
+      "ApiError": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" },
+          "detail": { "type": "string" },
+          "origin": { "type": "string" }
+        }
+      }
+    }
+  },
   "paths": {
     "/health": {
       "get": {
@@ -59,6 +136,112 @@
                     "ok": { "type": "boolean", "example": true }
                   }
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/origin/check": {
+      "get": {
+        "tags": ["origins"],
+        "summary": "Comprobar si el origen está autorizado",
+        "description": "Lee la cabecera **`Origin`** y responde si esa URL está en sitios permitidos. No muestra diálogo; usa `POST /api/v1/origin/prompt` para pedir confianza al usuario.",
+        "operationId": "getOriginCheck",
+        "parameters": [{ "$ref": "#/components/parameters/OriginHeaderOptional" }],
+        "responses": {
+          "200": {
+            "description": "Estado de confianza del origen",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OriginCheckResponse" },
+                "examples": {
+                  "autorizado": {
+                    "value": {
+                      "origin": "chrome-extension://abcdefghijklmnopqrstuvwxyzabcdef",
+                      "trusted": true
+                    }
+                  },
+                  "sinOrigin": {
+                    "value": { "origin": null, "trusted": false }
+                  },
+                  "noAutorizado": {
+                    "value": {
+                      "origin": "https://portal.ejemplo",
+                      "trusted": false
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/origin/prompt": {
+      "post": {
+        "tags": ["origins"],
+        "summary": "Diálogo nativo para confiar en el origen",
+        "description": "Requiere **`Origin`**. Si el origen no está en la lista, trae NexoSign al frente y muestra un diálogo bloqueante «Confiar / Cancelar»; al aceptar, persiste la URL en sitios permitidos.",
+        "operationId": "postOriginPrompt",
+        "parameters": [{ "$ref": "#/components/parameters/OriginHeader" }],
+        "responses": {
+          "200": {
+            "description": "Resultado del diálogo o origen ya autorizado",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OriginPromptResponse" },
+                "examples": {
+                  "confiado": { "value": { "trusted": true, "prompted": true } },
+                  "yaAutorizado": { "value": { "trusted": true, "prompted": false } },
+                  "rechazado": { "value": { "trusted": false, "prompted": true } }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Falta cabecera Origin o URL inválida",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" },
+                "example": {
+                  "error": "missing_origin",
+                  "detail": "Se requiere la cabecera Origin (URL de origen del cliente)"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/focus": {
+      "post": {
+        "tags": ["utils"],
+        "summary": "Enfocar NexoSign (y opcionalmente un intent)",
+        "description": "Muestra la ventana principal. Con `intent` en el cuerpo, notifica a la UI el `request_id` del lote pendiente y abre el asistente de firma.",
+        "operationId": "postFocus",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/FocusBody" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ventana enfocada",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/FocusResponse" }
+              }
+            }
+          },
+          "503": {
+            "description": "App no disponible",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
               }
             }
           }
@@ -109,12 +292,12 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["request_id", "deep_link"],
+                  "required": ["request_id"],
                   "properties": {
-                    "request_id": { "type": "string", "format": "uuid" },
-                    "deep_link": {
+                    "request_id": {
                       "type": "string",
-                      "description": "nexosign://… para abrir la app"
+                      "format": "uuid",
+                      "description": "Identificador del intent; abrir la app con POST /api/v1/focus y `{ \"intent\": \"<request_id>\" }`"
                     }
                   }
                 }
