@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "NexoSign API local",
-    "description": "API HTTP en loopback (`127.0.0.1:14500`) cuando NexoSign está en ejecución.\n\n**CORS / origen:** las rutas batch exigen un origen de confianza. Usa `GET /api/v1/origin/check` (cabecera `Origin`) y, si `trusted` es false, `POST /api/v1/origin/prompt` para abrir el diálogo «Confiar» o añade la URL en la app → Ajustes → Sitios permitidos. Desde **Swagger en `/docs`** las rutas batch suelen funcionar sin `Origin` (loopback).\n\n**Portal sin backend:** tras `POST …/batch/sign/intent`, sondea `GET /api/v1/batch/sign/intent/{request_id}/status` hasta `completed`; luego `GET …/jobs/{job_id}/signed-files` y cada `GET …/files/{i}`.\n\n**No incluido aquí:** la encolación directa de firma (`POST …/batch/sign`) ni el sondeo fino de progreso por `job_id` de la app de escritorio.\n\n**Scalar / otros:** importa `http://127.0.0.1:14500/openapi.json` con la app abierta.",
+    "description": "API HTTP en loopback (`127.0.0.1:14500`) cuando NexoSign está en ejecución.\n\n**CORS / origen:** las rutas batch exigen un origen de confianza. `GET /api/v1/origin/check` usa cabecera **`Origin`** (navegador) o **`X-Client-Origin`** (respaldo en loopback). Si `trusted` es false, `POST /api/v1/origin/prompt` abre el diálogo «Confiar» o añade la URL en Ajustes → Sitios permitidos. En **Swagger (`/docs`)** rellena solo una de las dos cabeceras.\n\n**Portal sin backend:** tras `POST …/batch/sign/intent`, sondea `GET /api/v1/batch/sign/intent/{request_id}/status` hasta `completed`; luego `GET …/jobs/{job_id}/signed-files` y cada `GET …/files/{i}`.\n\n**No incluido aquí:** la encolación directa de firma (`POST …/batch/sign`) ni el sondeo fino de progreso por `job_id` de la app de escritorio.\n\n**Scalar / otros:** importa `http://127.0.0.1:14500/openapi.json` con la app abierta.",
     "version": "0.1.0"
   },
   "servers": [
@@ -23,7 +23,7 @@
         "name": "Origin",
         "in": "header",
         "required": true,
-        "description": "URL de origen del cliente (`http://…`, `https://…`, `chrome-extension://…`, etc.). El navegador la envía en integraciones cross-origin; en Swagger puedes fijarla manualmente para probar.",
+        "description": "URL de origen del cliente (`http://…`, `https://…`, u otro esquema bien formado). El navegador la envía en integraciones cross-origin; en Swagger puedes fijarla manualmente para probar.",
         "schema": { "type": "string" },
         "example": "http://localhost:1420"
       },
@@ -31,9 +31,17 @@
         "name": "Origin",
         "in": "header",
         "required": false,
-        "description": "Opcional en check: si falta, la respuesta indica `trusted: false` y `origin: null`.",
+        "description": "Cabecera estándar del navegador con la URL de origen del cliente (`http://…`, `https://…`). En Swagger, rellénala para probar un portal web.",
         "schema": { "type": "string" },
-        "example": "chrome-extension://abcdefghijklmnopqrstuvwxyzabcdef"
+        "example": "http://localhost:1420"
+      },
+      "XClientOriginHeader": {
+        "name": "X-Client-Origin",
+        "in": "header",
+        "required": false,
+        "description": "**Respaldo** si no envías `Origin`: el cliente declara la misma URL de origen. Solo válida con `Host` en `127.0.0.1:{puerto}` o `localhost:{puerto}`. Usa una u otra cabecera, no hace falta duplicar el valor en ambas.",
+        "schema": { "type": "string" },
+        "example": "https://portal.ejemplo"
       }
     },
     "schemas": {
@@ -44,7 +52,7 @@
           "origin": {
             "type": "string",
             "nullable": true,
-            "description": "Valor de la cabecera `Origin` recibida, o null si no llegó"
+            "description": "**Campo de respuesta** (no es parámetro de entrada): origen detectado por el servidor, o null si no llegó ninguna cabecera identificable"
           },
           "trusted": {
             "type": "boolean",
@@ -146,9 +154,12 @@
       "get": {
         "tags": ["origins"],
         "summary": "Comprobar si el origen está autorizado",
-        "description": "Lee la cabecera **`Origin`** y responde si esa URL está en sitios permitidos. No muestra diálogo; usa `POST /api/v1/origin/prompt` para pedir confianza al usuario.",
+        "description": "Comprueba si el origen del cliente está en sitios permitidos. En Swagger usa **`Origin`** (portal web) o **`X-Client-Origin`** (cliente local a loopback), no ambos a la vez. Si ninguna llega, `origin: null` y `trusted: false`.",
         "operationId": "getOriginCheck",
-        "parameters": [{ "$ref": "#/components/parameters/OriginHeaderOptional" }],
+        "parameters": [
+          { "$ref": "#/components/parameters/OriginHeaderOptional" },
+          { "$ref": "#/components/parameters/XClientOriginHeader" }
+        ],
         "responses": {
           "200": {
             "description": "Estado de confianza del origen",
@@ -158,7 +169,7 @@
                 "examples": {
                   "autorizado": {
                     "value": {
-                      "origin": "chrome-extension://abcdefghijklmnopqrstuvwxyzabcdef",
+                      "origin": "https://portal.ejemplo",
                       "trusted": true
                     }
                   },
@@ -182,9 +193,12 @@
       "post": {
         "tags": ["origins"],
         "summary": "Diálogo nativo para confiar en el origen",
-        "description": "Requiere **`Origin`**. Si el origen no está en la lista, trae NexoSign al frente y muestra un diálogo bloqueante «Confiar / Cancelar»; al aceptar, persiste la URL en sitios permitidos.",
+        "description": "Identifica el cliente con **`Origin`** o, en loopback, **`X-Client-Origin`**. Si no está en la lista, muestra el diálogo «Confiar / Cancelar» y persiste la URL.",
         "operationId": "postOriginPrompt",
-        "parameters": [{ "$ref": "#/components/parameters/OriginHeader" }],
+        "parameters": [
+          { "$ref": "#/components/parameters/OriginHeaderOptional" },
+          { "$ref": "#/components/parameters/XClientOriginHeader" }
+        ],
         "responses": {
           "200": {
             "description": "Resultado del diálogo o origen ya autorizado",
@@ -206,7 +220,7 @@
                 "schema": { "$ref": "#/components/schemas/ApiError" },
                 "example": {
                   "error": "missing_origin",
-                  "detail": "Se requiere la cabecera Origin (URL de origen del cliente)"
+                  "detail": "Se requiere Origin o X-Client-Origin (loopback) con la URL del cliente"
                 }
               }
             }

@@ -8,8 +8,6 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use crate::adapters::persistence::AllowedOriginsDb;
 use crate::domain::allowed_origins::AllowedOrigins;
 use crate::domain::origin_policy::is_well_formed_origin;
-use crate::infrastructure::window;
-
 /// Muestra el diálogo en el hilo principal y persiste el origen si el usuario acepta.
 pub fn prompt_client_origin_trust_blocking(
     app: &AppHandle,
@@ -40,8 +38,6 @@ pub fn prompt_client_origin_trust_blocking(
     let app_ui = app.clone();
     if app_sched
         .run_on_main_thread(move || {
-            window::show_main_window(&app_ui);
-
             let message = format!(
                 "Un cliente solicita usar la API local de firma.\n\n\
                  Origen:\n{origin_owned}\n\n\

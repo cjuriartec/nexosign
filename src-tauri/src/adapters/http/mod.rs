@@ -7,7 +7,7 @@ pub use crate::domain::pending_batch_intent::PendingBatchIntent;
 use axum::{
     body::Body,
     extract::{DefaultBodyLimit, Path, State},
-    http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri},
+    http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
     Router,
@@ -105,19 +105,50 @@ fn gate_batch_origin_missing_origin_response(port: u16) -> Response {
         .into_response()
 }
 
-fn request_origin(headers: &HeaderMap) -> Option<String> {
-    origin_policy::origin_from_header(
+/// Respaldo cuando el cliente no envía `Origin`/`Referer` (p. ej. fetch a loopback).
+static X_CLIENT_ORIGIN: HeaderName = HeaderName::from_static("x-client-origin");
+
+fn request_is_loopback_local_api(headers: &HeaderMap, listen_port: u16) -> bool {
+    headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|h| host_is_loopback_local_api(h, listen_port))
+}
+
+/// `Origin`, luego `X-Client-Origin` (solo Host loopback), luego `Referer` (salvo Swagger local).
+fn client_origin_from_headers(headers: &HeaderMap, listen_port: u16) -> Option<String> {
+    if let Some(o) = origin_policy::origin_from_header(
         headers
             .get(header::ORIGIN)
             .and_then(|v| v.to_str().ok()),
-    )
+    ) {
+        return Some(o);
+    }
+
+    if request_is_loopback_local_api(headers, listen_port) {
+        if let Some(o) = origin_policy::origin_from_header(
+            headers
+                .get(&X_CLIENT_ORIGIN)
+                .and_then(|v| v.to_str().ok()),
+        ) {
+            return Some(o);
+        }
+    }
+
+    let referer = headers
+        .get(header::REFERER)
+        .and_then(|v| v.to_str().ok())?;
+    if referer_is_loopback_local_api(referer, listen_port) {
+        return None;
+    }
+    origin_policy::origin_from_referer(referer)
 }
 
 /// Rutas batch: el origen del cliente debe estar en la lista **si** se envía; si no hay origen,
 /// se aceptan peticiones claras al propio listener en loopback (Swagger, HTTP/2).
 fn gate_batch_origin(state: &SharedState, headers: &HeaderMap, uri: &Uri) -> Result<(), Response> {
     let listen_port = state.local_api.gate_listen_port();
-    if let Some(origin) = request_origin(headers) {
+    if let Some(origin) = client_origin_from_headers(headers, listen_port) {
         let allowed = state
             .origins
             .read()
@@ -236,6 +267,7 @@ pub fn build_router(state: SharedState) -> Router {
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
             header::ACCEPT,
+            HeaderName::from_static("x-client-origin"),
         ])
         .allow_credentials(true)
         .allow_origin(AllowOrigin::predicate(
@@ -325,7 +357,8 @@ async fn get_origin_check(
     State(state): State<SharedState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let origin = request_origin(&headers);
+    let listen_port = state.local_api.gate_listen_port();
+    let origin = client_origin_from_headers(&headers, listen_port);
 
     let Some(ref origin_str) = origin else {
         return Json(OriginCheckResponse {
@@ -352,17 +385,18 @@ struct OriginPromptResponse {
     prompted: bool,
 }
 
-/// Muestra el diálogo nativo de confianza (bloqueante). Usar desde la extensión al activar la opción.
+/// Muestra el diálogo nativo de confianza (bloqueante). Usar desde el cliente al autorizar un origen nuevo.
 async fn post_origin_prompt(
     State(state): State<SharedState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let Some(origin) = request_origin(&headers) else {
+    let listen_port = state.local_api.gate_listen_port();
+    let Some(origin) = client_origin_from_headers(&headers, listen_port) else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
                 "error": "missing_origin",
-                "detail": "Se requiere la cabecera Origin (URL de origen del cliente)",
+                "detail": "Se requiere Origin o X-Client-Origin (loopback) con la URL del cliente",
             })),
         )
             .into_response();
