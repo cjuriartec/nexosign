@@ -20,6 +20,7 @@
 	} = $props();
 
 	const sidebar = useSidebar();
+	const useMobileIconRail = $derived(sidebar.isMobile && collapsible === "icon");
 </script>
 
 {#if collapsible === "none"}
@@ -32,6 +33,45 @@
 		{...restProps}
 	>
 		{@render children?.()}
+	</div>
+{:else if useMobileIconRail}
+	<div
+		bind:this={ref}
+		class={cn("text-sidebar-foreground group peer block md:hidden", className)}
+		data-state="collapsed"
+		data-collapsible="icon"
+		data-variant={variant}
+		data-side={side}
+		data-slot="sidebar"
+		{...restProps}
+	>
+		<div
+			data-slot="sidebar-gap"
+			class={cn(
+				"relative w-(--sidebar-width-icon) shrink-0 bg-transparent transition-[width] duration-200 ease-linear",
+				variant === "floating" || variant === "inset"
+					? "w-[calc(var(--sidebar-width-icon)+(--spacing(4)))]"
+					: "",
+			)}
+		></div>
+		<div
+			data-slot="sidebar-container"
+			class={cn(
+				"fixed inset-y-0 z-10 flex h-svh w-(--sidebar-width-icon) transition-[width] duration-200 ease-linear",
+				side === "left" ? "start-0 border-e" : "end-0 border-s",
+				variant === "floating" || variant === "inset"
+					? "p-2 w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
+					: "",
+			)}
+		>
+			<div
+				data-sidebar="sidebar"
+				data-slot="sidebar-inner"
+				class="bg-sidebar flex size-full flex-col"
+			>
+				{@render children?.()}
+			</div>
+		</div>
 	</div>
 {:else if sidebar.isMobile}
 	<Sheet.Root

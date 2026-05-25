@@ -141,9 +141,9 @@
 		if (!isTauriRuntime()) return;
 		busy = true;
 		try {
-			await invokeWithTimeout(pkcs11.pkcs11ResetConnection(), SLOT_TIMEOUT_MS, "Reinicializar lector");
+			await invokeWithTimeout(pkcs11.pkcs11ResetConnection(), SLOT_TIMEOUT_MS, "Reconectar lector");
 			await loadCerts({ runChipProbe: true });
-			toast.success("Lector reinicializado");
+			toast.success("Lector reconectado");
 		} catch (e) {
 			toast.error(String(e));
 		} finally {
@@ -167,18 +167,8 @@
 			<h1 class="text-2xl font-semibold tracking-tight">Certificados</h1>
 			<p class="text-muted-foreground mt-0.5 text-sm">DNIe o tarjeta · PIN solo al firmar</p>
 		</div>
-		{#if isTauriRuntime()}
-			<div class="flex flex-wrap items-center gap-2">
-				{#if probeBusy}
-					<Loader2Icon class="text-muted-foreground size-4 animate-spin" aria-hidden="true" />
-				{/if}
-				<Button variant="outline" size="sm" disabled={busy} onclick={() => loadCerts({ runChipProbe: true })}>
-					{busy ? "Cargando…" : "Recargar"}
-				</Button>
-				<Button variant="outline" size="sm" disabled={busy} onclick={() => resetReaderAndReload()}>
-					Reinicializar
-				</Button>
-			</div>
+		{#if isTauriRuntime() && probeBusy}
+			<Loader2Icon class="text-muted-foreground size-4 animate-spin" aria-hidden="true" />
 		{/if}
 	</div>
 
@@ -232,6 +222,8 @@
 					slotsWithToken={slotsWithTokenCount}
 					helpVariant="brief"
 					showDedupeNote={false}
+					onRefresh={() => loadCerts({ runChipProbe: true })}
+					onResetReader={() => resetReaderAndReload()}
 				/>
 			</Card.Content>
 		</Card.Root>

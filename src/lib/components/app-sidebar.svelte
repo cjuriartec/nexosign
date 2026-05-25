@@ -1,14 +1,12 @@
 <script lang="ts">
 	import { page } from "$app/state";
 	import FilePenLineIcon from "@lucide/svelte/icons/file-pen-line";
-	import ListOrderedIcon from "@lucide/svelte/icons/list-ordered";
 	import IdCardIcon from "@lucide/svelte/icons/id-card";
 	import SettingsIcon from "@lucide/svelte/icons/settings";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 
 	const nav = [
 		{ href: "/sign", label: "Firmar", icon: FilePenLineIcon },
-		{ href: "/queue", label: "Colas", icon: ListOrderedIcon },
 		{ href: "/certificates", label: "Certificados", icon: IdCardIcon },
 		{ href: "/settings", label: "Ajustes", icon: SettingsIcon },
 	];
@@ -65,11 +63,11 @@
 			</Sidebar.GroupContent>
 		</Sidebar.Group>
 	</Sidebar.Content>
-	<Sidebar.Footer class="border-t border-sidebar-border p-2">
+	<Sidebar.Footer class="hidden border-t border-sidebar-border p-2 md:block">
 		<div class="flex justify-center group-data-[collapsible=icon]:px-0">
 			<Sidebar.Trigger
 				class="w-full max-w-full justify-center gap-2 group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:p-0"
-				aria-label="Contraer o expandir menú lateral"
+				aria-label="Contraer o expandir menú"
 			/>
 		</div>
 	</Sidebar.Footer>

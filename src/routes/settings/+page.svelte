@@ -730,7 +730,7 @@
 							}
 						}}
 					>
-						Reinicializar lector
+						Reconectar lector
 					</Button>
 				</div>
 				{#if pkcsDiag}

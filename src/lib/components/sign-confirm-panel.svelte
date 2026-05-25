@@ -50,12 +50,8 @@
 	);
 </script>
 
-<Card.Root size="sm" class="w-full overflow-hidden">
-	<Card.Header class="pb-2">
-		<Card.Title class="text-sm font-medium">Confirmar y firmar</Card.Title>
-	</Card.Header>
-
-	<Card.Content class="pt-0 pb-3">
+<Card.Root size="sm" class="mx-auto w-full max-w-md overflow-hidden border-0 bg-transparent shadow-none">
+	<Card.Content class="py-3">
 		<div class="grid grid-cols-2 items-start gap-4">
 			<dl class="bg-muted/20 space-y-2.5 rounded-lg border px-3 py-2.5 text-xs">
 				<div class="flex items-baseline justify-between gap-3">

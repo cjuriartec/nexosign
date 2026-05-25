@@ -25,8 +25,10 @@
 		helpVariant?: "full" | "brief";
 		showDedupeNote?: boolean;
 		onRefresh?: () => void | Promise<void>;
+		onResetReader?: () => void | Promise<void>;
 		/** Asistente Firmar: menos padding y sin fila extra de acciones. */
 		compact?: boolean;
+		class?: string;
 	}
 
 	let {
@@ -37,7 +39,9 @@
 		helpVariant = "full",
 		showDedupeNote = true,
 		onRefresh,
+		onResetReader,
 		compact = false,
+		class: className,
 	}: Props = $props();
 
 	const emptyHelp = $derived(
@@ -47,23 +51,47 @@
 	);
 </script>
 
-<div class={cn(compact ? "space-y-2" : "space-y-3")}>
-	{#if onRefresh}
-		<div class="flex justify-end">
-			<Button
-				type="button"
-				variant="outline"
-				size="sm"
-				class="shrink-0 gap-1.5"
-				disabled={busy}
-				onclick={() => void onRefresh()}
-			>
-				<RefreshCwIcon class="size-4 opacity-80" aria-hidden="true" />
-				Actualizar
-			</Button>
+<div
+	class={cn(
+		compact ? "flex min-h-0 flex-1 flex-col gap-2" : "space-y-3",
+		className,
+	)}
+>
+	{#if onRefresh || onResetReader}
+		<div class="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+			{#if onResetReader}
+				<Button
+					type="button"
+					variant="ghost"
+					size="sm"
+					class="text-muted-foreground h-8 px-2 text-xs"
+					disabled={busy}
+					title="Cierra la conexión con el lector y vuelve a detectar la tarjeta"
+					onclick={() => void onResetReader()}
+				>
+					Reconectar lector
+				</Button>
+			{/if}
+			{#if onRefresh}
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					class="h-8 gap-1.5 px-2.5 text-xs"
+					disabled={busy}
+					title="Actualizar certificados disponibles"
+					onclick={() => void onRefresh()}
+				>
+					<RefreshCwIcon
+						class={cn("size-3.5", busy && "animate-spin")}
+						aria-hidden="true"
+					/>
+					{busy ? "Actualizando…" : "Actualizar"}
+				</Button>
+			{/if}
 		</div>
 	{:else if showDedupeNote}
-		<p class="text-muted-foreground max-w-prose text-xs leading-snug">{DEDUPED_WIN_MY_FOOTNOTE}</p>
+		<p class="text-muted-foreground max-w-prose shrink-0 text-xs leading-snug">{DEDUPED_WIN_MY_FOOTNOTE}</p>
 	{/if}
 
 	{#if certs.length === 0}
@@ -80,7 +108,13 @@
 			{/if}
 		</Alert>
 	{:else}
-		<div class={cn(compact ? "space-y-1.5" : "space-y-2")} role="radiogroup" aria-label="Certificado de firma">
+		<div
+			class={cn(
+				compact ? "min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5" : "space-y-2",
+			)}
+			role="radiogroup"
+			aria-label="Certificado de firma"
+		>
 			{#each certs as c (c.id_hex)}
 				{@const selected = certId === c.id_hex}
 				{@const name = getHumanNameFromDn(c.subject_dn) || c.label || "(sin etiqueta)"}

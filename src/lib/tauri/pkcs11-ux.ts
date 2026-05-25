@@ -38,7 +38,7 @@ export function emptySigningCertsHelpBrief(slotsWithToken: number): EmptySigning
 	if (slotsWithToken <= 0) {
 		return {
 			title: "Sin tarjeta en el lector",
-			description: "Conecta el DNIe y pulsa Recargar.",
+			description: "Conecta el DNIe y pulsa Actualizar.",
 		};
 	}
 	return {
@@ -53,13 +53,13 @@ export function emptySigningCertsHelp(slotsWithToken: number): EmptySigningCerts
 		return {
 			title: "No se detecta el DNIe ni la tarjeta de firma",
 			description:
-				"Conecta el lector e inserta el DNIe (o tu tarjeta) y pulsa «Recargar». Si no aparece, revisa el lector en Ajustes o usa «Reinicializar lector».",
+				"Conecta el lector e inserta el DNIe (o tu tarjeta) y pulsa «Actualizar». Si no aparece, revisa el lector en Ajustes o usa «Reconectar lector».",
 		};
 	}
 	return {
 		title: "Lector conectado, pero sin certificado de firma",
 		description:
-			"El lector reconoce tu DNIe o tarjeta, pero no encontramos ningún certificado de firma en el chip (puede que solo haya certificados de autenticación). En Ajustes → «Lector de DNIe y tarjetas» comprueba el controlador PKCS#11 del fabricante o pulsa «Reinicializar lector» y vuelve aquí. No hace falta abrir otra aplicación para firmar.",
+			"El lector reconoce tu DNIe o tarjeta, pero no encontramos ningún certificado de firma en el chip (puede que solo haya certificados de autenticación). En Ajustes → «Lector de DNIe y tarjetas» comprueba el controlador PKCS#11 del fabricante o pulsa «Reconectar lector» y vuelve aquí. No hace falta abrir otra aplicación para firmar.",
 	};
 }
 

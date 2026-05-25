@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from "svelte";
-	import { open, ask } from "@tauri-apps/plugin-dialog";
+	import { open } from "@tauri-apps/plugin-dialog";
 	import { basename, dirname, join } from "$lib/tauri/path";
 	import { toast } from "svelte-sonner";
 	import * as Card from "$lib/components/ui/card/index.js";
@@ -10,6 +10,8 @@
 	import SigningCertPicker from "$lib/components/signing-cert-picker.svelte";
 	import SignConfirmPanel from "$lib/components/sign-confirm-panel.svelte";
 	import SignJobResults from "$lib/components/sign-job-results.svelte";
+	import SignWizardStepper from "$lib/components/sign-wizard-stepper.svelte";
+	import SignWizardPanel from "$lib/components/sign-wizard-panel.svelte";
 	import { Progress } from "$lib/components/ui/progress/index.js";
 	import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert/index.js";
 	import { Badge } from "$lib/components/ui/badge/index.js";
@@ -48,7 +50,6 @@
 	import CheckIcon from "@lucide/svelte/icons/check";
 	import BanIcon from "@lucide/svelte/icons/ban";
 	import { cn } from "$lib/utils.js";
-	import BatchQueuePanel from "$lib/components/batch-queue-panel.svelte";
 	import { cancelActiveBatchJob } from "$lib/batch/cancel-active-batch";
 	import {
 		batchQueue,
@@ -147,12 +148,24 @@
 		),
 	);
 
-	const jobHasFileErrors = $derived(jobFileDisplayList.some((i) => i.status === "error"));
-
 	/** Evita llamar varias veces a persistir middleware preferido por el mismo lote terminado. */
 	let preferredLearnedForFinishedBatch = $state(false);
 
-	/** Tras un lote completado sin errores en el log, persistir middleware preferido si el usuario no definió uno. */
+	const resultStepSigning = $derived(
+		wizardStep === 5 && !jobSettled && (submitInFlight || busy || batchQueue.activeBatchJobId !== null),
+	);
+
+	const selectedCert = $derived(certs.find((c) => c.id_hex === certId) ?? null);
+
+	const pinRequired = $derived(pkcs11.pinRequiredInApp(selectedCert));
+
+	const jobFileDisplayList = $derived(
+		buildSignJobFileDisplayList(paths, jobFileResults, { signing: resultStepSigning }),
+	);
+
+	const jobHasFileErrors = $derived(jobFileDisplayList.some((i) => i.status === "error"));
+
+	/** Tras un lote completado sin errores en archivos, persistir middleware preferido si el usuario no definió uno. */
 	$effect(() => {
 		if (!isTauriRuntime()) return;
 		if (!jobSettled) {
@@ -165,20 +178,6 @@
 		preferredLearnedForFinishedBatch = true;
 		void maybePersistPreferredModuleAfterSuccessfulBatch();
 	});
-
-	const resultStepSigning = $derived(
-		wizardStep === 5 && !jobSettled && (submitInFlight || busy || batchQueue.activeBatchJobId !== null),
-	);
-
-	const wizardBarPct = $derived(Math.round((wizardStep / TOTAL_STEPS) * 100));
-
-	const selectedCert = $derived(certs.find((c) => c.id_hex === certId) ?? null);
-
-	const pinRequired = $derived(pkcs11.pinRequiredInApp(selectedCert));
-
-	const jobFileDisplayList = $derived(
-		buildSignJobFileDisplayList(paths, jobFileResults, { signing: resultStepSigning }),
-	);
 
 	function isStepNavDisabled(stepNum: number): boolean {
 		if (stepNum === wizardStep) return true;
@@ -250,7 +249,7 @@
 			toast.success(
 				n > 0
 					? "Listo: ya puedes elegir tu certificado."
-					: "Conexión reiniciada. Comprueba que la tarjeta esté bien puesta y pulsa «Actualizar lista».",
+					: "Conexión reiniciada. Comprueba que la tarjeta esté bien puesta y pulsa «Actualizar».",
 			);
 		} catch (e) {
 			toast.error(String(e));
@@ -259,18 +258,14 @@
 		}
 	}
 
-	/** Confirma en lenguaje claro antes de cortar la sesión con el lector (evita clics accidentales). */
-	async function confirmResetReader() {
+	async function refreshCertsWithBusy() {
 		if (!isTauriRuntime()) return;
-		const ok = await ask(
-			"NexoSign cerrará la conexión con tu lector o tarjeta y volverá a buscar certificados. Tus PDF no se modifican.\n\n¿Seguir?",
-			{
-				title: "Volver a detectar la tarjeta",
-				kind: "info",
-			},
-		);
-		if (!ok) return;
-		await resetPkcs11ConnectionAndRefresh();
+		busy = true;
+		try {
+			await refreshCerts();
+		} finally {
+			busy = false;
+		}
 	}
 
 	async function computeFirmadosDir(folderAbs: string): Promise<string> {
@@ -635,228 +630,170 @@
 	<title>Firmar — NexoSign</title>
 </svelte:head>
 
-<div class="space-y-4 pb-6">
-	<div class="flex flex-wrap items-center justify-between gap-3">
-		<h1 class="text-2xl font-semibold tracking-tight">Firmar</h1>
+<div class="mx-auto flex min-h-full w-full max-w-lg flex-1 flex-col gap-2 pb-4">
+	<header class="flex shrink-0 items-center gap-1.5 sm:gap-2">
 		{#if wizardStep > 1}
-			<Button variant="outline" size="sm" onclick={() => goBack()} class="gap-1" disabled={stepHistoryLocked}>
+			<Button
+				type="button"
+				variant="ghost"
+				size="icon"
+				class="size-8 shrink-0 sm:size-9"
+				disabled={stepHistoryLocked}
+				aria-label="Paso anterior"
+				onclick={() => goBack()}
+			>
 				<ChevronLeftIcon class="size-4" />
-				Atrás
 			</Button>
 		{/if}
-	</div>
 
-	<BatchQueuePanel showWizardLockHint activeWorkOnly />
-
-	<nav class="space-y-2" aria-label="Pasos del asistente de firma">
-		<div class="grid grid-cols-5 gap-0.5 sm:gap-1">
-			{#each SIGN_STEPS as s}
-				{@const done = wizardStep > s.step}
-				{@const active = wizardStep === s.step}
-				<button
-					type="button"
-					disabled={isStepNavDisabled(s.step)}
-					title={`Paso ${s.step}: ${s.title}`}
-					class={cn(
-						"flex flex-col items-center gap-0.5 rounded-md border px-1 py-1.5 text-center transition-colors sm:px-2 sm:py-2",
-						active && "border-primary bg-primary/5 ring-primary/25 ring-2",
-						done && !active && "border-border bg-muted/40 hover:bg-muted/70 text-foreground",
-						!done && !active && "border-border/60 opacity-55",
-					)}
-					onclick={() => jumpToStep(s.step)}
-				>
-					<span
-						class={cn(
-							"flex size-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold sm:size-8 sm:text-xs",
-							active && "bg-primary text-primary-foreground",
-							done && !active && "bg-muted-foreground/25 text-muted-foreground",
-							!done && !active && "bg-muted text-muted-foreground",
-						)}
-					>
-						{#if done}
-							<CheckIcon class="size-3 sm:size-3.5" aria-hidden="true" />
-							<span class="sr-only">Completado</span>
-						{:else}
-							{s.step}
-						{/if}
-					</span>
-					<span class="text-[10px] font-medium leading-none sm:text-[11px]">{s.title}</span>
-				</button>
-			{/each}
-		</div>
-		<div class="bg-muted h-1 overflow-hidden rounded-full" role="progressbar" aria-valuenow={wizardBarPct} aria-valuemin={0} aria-valuemax={100} aria-label="Avance del asistente">
-			<div
-				class="bg-primary h-full rounded-full transition-[width] duration-300 ease-out"
-				style="width: {wizardBarPct}%"
-			></div>
-		</div>
-	</nav>
-
-	<div
-		class="border-border/60 bg-background/92 supports-backdrop-filter:bg-background/85 sticky top-0 z-30 -mx-5 mb-3 flex flex-wrap items-center justify-end gap-2 border-y px-5 py-1.5 backdrop-blur-sm md:-mx-6 md:px-6"
-		aria-label="Acciones del paso actual"
-	>
-		<div class="flex w-full shrink-0 flex-wrap items-center justify-end gap-2">
-			{#if wizardStep === 5}
-				{#if canCancelBatchJobStep5}
-					<Button type="button" variant="outline" size="sm" onclick={() => cancelJob()}>Cancelar</Button>
-				{:else if batchQueue.activeBatchJobId && !jobSettled && activeJobItem?.status === "cancelling"}
-					<Badge variant="secondary" class="mr-auto h-6 text-[10px]">Cancelando…</Badge>
-				{/if}
-				<Button
-					type="button"
-					size="sm"
-					disabled={!jobSettled}
-					onclick={() => startNewSigningRound()}
-				>
-					Nuevo lote
-				</Button>
-			{:else if wizardStep === 4}
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					class="mr-auto"
-					disabled={busy || !batchQueue.activeBatchJobId}
-					onclick={() => cancelJob()}
-				>
-					Cancelar
-				</Button>
-			{:else if wizardStep === 3}
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					class="mr-auto h-8 text-xs"
-					disabled={busy}
-					onclick={() => confirmResetReader()}
-				>
-					Reconectar lector
-				</Button>
-				<Button
-					type="button"
-					size="sm"
-					class="gap-1"
-					disabled={busy || !certId.trim() || certs.length === 0}
-					onclick={() => step3CertContinue()}
-					aria-label={`Siguiente paso: ${SIGN_STEPS[3].title}`}
-				>
-					Continuar
-					<ChevronRightIcon class="size-4 opacity-90" aria-hidden="true" />
-				</Button>
-			{:else if wizardStep === 2}
-				<Button
-					type="button"
-					size="sm"
-					class="gap-1"
-					onclick={() => step2PlacementContinue()}
-					aria-label={`Siguiente paso: ${SIGN_STEPS[2].title}`}
-				>
-					Continuar
-					<ChevronRightIcon class="size-4 opacity-90" aria-hidden="true" />
-				</Button>
-			{:else if wizardStep === 1}
-				<Button
-					type="button"
-					size="sm"
-					disabled={busy || paths.length === 0}
-					onclick={() => step1Continue()}
-					class="gap-1"
-					aria-label={`Siguiente paso: ${SIGN_STEPS[1].title}`}
-				>
-					Continuar
-					<ChevronRightIcon class="size-4 opacity-90" aria-hidden="true" />
-				</Button>
-			{/if}
-		</div>
-	</div>
+		<SignWizardStepper
+			currentStep={wizardStep}
+			isStepDisabled={isStepNavDisabled}
+			onStepClick={jumpToStep}
+			class="min-w-0 flex-1"
+		/>
+	</header>
 
 	{#if !isTauriRuntime()}
-		<Alert class="py-2">
+		<Alert class="shrink-0 py-2">
 			<AlertTitle class="text-sm">Requiere la app de escritorio</AlertTitle>
 		</Alert>
 	{/if}
 
 	{#if wizardStep === 1}
-		<Card.Root size="sm">
-			<Card.Header class="pb-1">
-				<Card.Title class="text-sm font-medium">Archivos</Card.Title>
-			</Card.Header>
-			<Card.Content class="space-y-2 pt-0 pb-3">
-				<div class="flex flex-wrap gap-2">
-					<Button type="button" size="sm" onclick={() => pickPdfs()} disabled={busy}>
-						<FileStackIcon class="mr-1.5 size-4" />
-						PDF…
-					</Button>
-					<Button type="button" variant="secondary" size="sm" onclick={() => pickFolder()} disabled={busy}>
-						<FolderOpenIcon class="mr-1.5 size-4" />
-						Carpeta…
-					</Button>
-					<Button type="button" variant="outline" size="sm" disabled={busy || paths.length === 0} onclick={() => clearPaths()}>
-						Limpiar
-					</Button>
-				</div>
-				{#if outputDirForJob && sourceMode === "folder"}
-					<p class="text-muted-foreground truncate font-mono text-[11px]" title={outputDirForJob}>{outputDirForJob}</p>
-				{/if}
-				{#if paths.length > 0}
-					<Table.Root>
-						<Table.Header>
-							<Table.Row>
-								<Table.Head class="w-8 py-2 text-xs">#</Table.Head>
-								<Table.Head class="py-2 text-xs">Ruta ({paths.length})</Table.Head>
-								<Table.Head class="w-10 py-2"></Table.Head>
-							</Table.Row>
-						</Table.Header>
-						<Table.Body>
-							{#each paths as p, i}
-								<Table.Row class="[&_td]:py-1.5">
-									<Table.Cell class="text-muted-foreground text-xs">{i + 1}</Table.Cell>
-									<Table.Cell class="max-w-0 font-mono text-[11px]">
-										<span class="block truncate" title={p}>{p}</span>
-									</Table.Cell>
-									<Table.Cell>
-										<Button
-											variant="ghost"
-											size="icon-xs"
-											class="text-destructive"
-											onclick={() => removeAt(i)}
-											aria-label="Quitar"
-										>
-											<Trash2Icon class="size-4" />
-										</Button>
-									</Table.Cell>
+		<SignWizardPanel>
+			<div class="flex min-h-0 flex-1 flex-col gap-3">
+				{#if paths.length === 0}
+					<div class="grid min-h-0 flex-1 gap-3 sm:grid-cols-2">
+						<button
+							type="button"
+							class="border-border/80 bg-muted/15 hover:border-primary/40 hover:bg-primary/5 flex min-h-[10rem] flex-1 flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-6 transition-colors disabled:opacity-50"
+							disabled={busy}
+							onclick={() => pickPdfs()}
+						>
+							<FileStackIcon class="text-muted-foreground size-11" aria-hidden="true" />
+							<span class="text-sm font-medium">PDF</span>
+						</button>
+						<button
+							type="button"
+							class="border-border/80 bg-muted/15 hover:border-primary/40 hover:bg-primary/5 flex min-h-[10rem] flex-1 flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-6 transition-colors disabled:opacity-50"
+							disabled={busy}
+							onclick={() => pickFolder()}
+						>
+							<FolderOpenIcon class="text-muted-foreground size-11" aria-hidden="true" />
+							<span class="text-sm font-medium">Carpeta</span>
+						</button>
+					</div>
+				{:else}
+					<div class="flex shrink-0 flex-wrap items-center gap-2">
+						<Button
+							type="button"
+							size="sm"
+							variant="secondary"
+							class="gap-1.5"
+							disabled={busy}
+							onclick={() => pickPdfs()}
+						>
+							<FileStackIcon class="size-4" aria-hidden="true" />
+							{sourceMode === "files" ? "Cambiar PDF" : "Elegir PDF"}
+						</Button>
+						<Button
+							type="button"
+							size="sm"
+							variant="outline"
+							class="gap-1.5"
+							disabled={busy}
+							onclick={() => pickFolder()}
+						>
+							<FolderOpenIcon class="size-4" aria-hidden="true" />
+							{sourceMode === "folder" ? "Cambiar carpeta" : "Elegir carpeta"}
+						</Button>
+						<Button
+							type="button"
+							size="sm"
+							variant="ghost"
+							class="text-destructive ml-auto"
+							disabled={busy}
+							onclick={() => clearPaths()}
+						>
+							Limpiar
+						</Button>
+					</div>
+					{#if outputDirForJob && sourceMode === "folder"}
+						<p class="text-muted-foreground shrink-0 truncate font-mono text-[11px]" title={outputDirForJob}>
+							{outputDirForJob}
+						</p>
+					{/if}
+					<div class="border-border/70 min-h-0 flex-1 overflow-hidden rounded-lg border">
+						<Table.Root>
+							<Table.Header class="bg-muted/30 sticky top-0 z-10">
+								<Table.Row>
+									<Table.Head class="w-8 py-2 text-xs">#</Table.Head>
+									<Table.Head class="py-2 text-xs">{paths.length} PDF</Table.Head>
+									<Table.Head class="w-10 py-2"></Table.Head>
 								</Table.Row>
-							{/each}
-						</Table.Body>
-					</Table.Root>
+							</Table.Header>
+							<Table.Body>
+								{#each paths as p, i}
+									<Table.Row class="[&_td]:py-1.5">
+										<Table.Cell class="text-muted-foreground text-xs">{i + 1}</Table.Cell>
+										<Table.Cell class="max-w-0 font-mono text-[11px]">
+											<span class="block truncate" title={p}>{p}</span>
+										</Table.Cell>
+										<Table.Cell>
+											<Button
+												variant="ghost"
+												size="icon-xs"
+												class="text-destructive"
+												onclick={() => removeAt(i)}
+												aria-label="Quitar"
+											>
+												<Trash2Icon class="size-4" />
+											</Button>
+										</Table.Cell>
+									</Table.Row>
+								{/each}
+							</Table.Body>
+						</Table.Root>
+					</div>
 				{/if}
-			</Card.Content>
-		</Card.Root>
+			</div>
+			{#snippet footer()}
+				<Button
+					type="button"
+					size="sm"
+					class="gap-1"
+					disabled={busy || paths.length === 0}
+					onclick={() => step1Continue()}
+				>
+					Siguiente
+					<ChevronRightIcon class="size-4" aria-hidden="true" />
+				</Button>
+			{/snippet}
+		</SignWizardPanel>
 	{/if}
 
 	{#if wizardStep === 2}
-		<Card.Root size="sm">
-			<Card.Header class="flex flex-row items-center justify-between gap-2 space-y-0 pb-1">
-				<Card.Title class="text-sm font-medium">Sello</Card.Title>
-				<Badge variant="outline" class="h-5 font-mono text-[10px] tabular-nums">
-					{sigGridCol + 1}·{sigGridRow + 1}
+		<SignWizardPanel>
+			<div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 py-2">
+				<Badge variant="secondary" class="h-6 px-2.5 font-mono text-xs tabular-nums">
+					{sigGridCol + 1} · {sigGridRow + 1}
 				</Badge>
-			</Card.Header>
-			<Card.Content class="flex justify-center pt-0 pb-3">
-				<div class="w-fit overflow-hidden rounded-md border border-border bg-muted/25">
+				<div
+					class="overflow-hidden rounded-xl border border-border bg-linear-to-b from-muted/30 to-muted/10 p-3 shadow-inner"
+				>
 					{#each [0, 1, 2, 3, 4] as row}
-						<div class="flex border-b border-border/70 last:border-b-0">
+						<div class="flex gap-1.5 pb-1.5 last:pb-0">
 							{#each [0, 1, 2] as col}
 								<button
 									type="button"
 									class={cn(
-										"flex h-8 w-8 shrink-0 items-center justify-center border-r border-border/70 text-[10px] font-medium transition-colors last:border-r-0 sm:h-9 sm:w-9",
+										"flex size-10 shrink-0 items-center justify-center rounded-lg border text-xs font-semibold transition-all sm:size-11",
 										sigGridCol === col && sigGridRow === row
-											? "bg-primary/20 text-foreground ring-2 ring-primary/35 ring-inset"
-											: "bg-background/90 text-muted-foreground hover:bg-muted/80",
+											? "border-primary bg-primary text-primary-foreground shadow-md"
+											: "border-border/70 bg-background text-muted-foreground hover:border-primary/30 hover:bg-muted/60",
 									)}
-									aria-label="Casilla columna {col + 1}, fila {row + 1}"
+									aria-label="Casilla {row * SIG_GRID_COLS + col + 1}"
 									aria-pressed={sigGridCol === col && sigGridRow === row}
 									onclick={() => {
 										sigGridCol = col;
@@ -869,41 +806,48 @@
 						</div>
 					{/each}
 				</div>
-			</Card.Content>
-		</Card.Root>
+			</div>
+			{#snippet footer()}
+				<Button type="button" size="sm" class="gap-1" onclick={() => step2PlacementContinue()}>
+					Siguiente
+					<ChevronRightIcon class="size-4" aria-hidden="true" />
+				</Button>
+			{/snippet}
+		</SignWizardPanel>
 	{/if}
 
 	{#if wizardStep === 3}
-		<Card.Root size="sm">
-			<Card.Header class="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-1">
-				<Card.Title class="text-sm font-medium">Certificado</Card.Title>
+		<SignWizardPanel>
+			<SigningCertPicker
+				{certs}
+				bind:certId
+				{busy}
+				slotsWithToken={slotsWithTokenCount}
+				helpVariant="brief"
+				showDedupeNote={false}
+				compact
+				class="min-h-0 flex-1"
+				onRefresh={() => refreshCertsWithBusy()}
+				onResetReader={() => resetPkcs11ConnectionAndRefresh()}
+			/>
+			{#snippet footer()}
 				<Button
 					type="button"
-					variant="outline"
 					size="sm"
-					class="h-8 shrink-0 gap-1 text-xs"
-					disabled={busy}
-					onclick={() => refreshCerts()}
+					class="gap-1"
+					disabled={busy || !certId.trim() || certs.length === 0}
+					onclick={() => step3CertContinue()}
 				>
-					Actualizar
+					Siguiente
+					<ChevronRightIcon class="size-4" aria-hidden="true" />
 				</Button>
-			</Card.Header>
-			<Card.Content class="pt-0 pb-3">
-				<SigningCertPicker
-					{certs}
-					bind:certId
-					{busy}
-					slotsWithToken={slotsWithTokenCount}
-					helpVariant="brief"
-					showDedupeNote={false}
-					compact
-				/>
-			</Card.Content>
-		</Card.Root>
+			{/snippet}
+		</SignWizardPanel>
 	{/if}
 
 	{#if wizardStep === 4}
-		<SignConfirmPanel
+		<SignWizardPanel contentCentered>
+			<SignConfirmPanel
 				pathCount={paths.length}
 				{selectedCert}
 				{sigGridCol}
@@ -916,98 +860,98 @@
 				{submitInFlight}
 				onSubmit={() => submitBatch()}
 			/>
+		</SignWizardPanel>
 	{/if}
 
 	{#if wizardStep === 5}
-		<Card.Root size="sm" class="overflow-hidden">
-			<Card.Header class="pb-2">
-				{#if resultStepSigning}
-					<div class="flex items-center gap-3">
+		<SignWizardPanel class="w-full">
+			<div class="mx-auto flex min-h-0 w-full max-w-md flex-1 flex-col gap-3 overflow-hidden">
+				<div class="flex shrink-0 items-center gap-3">
+					{#if resultStepSigning}
 						<div
-							class="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary"
+							class="bg-primary/10 text-primary flex size-9 shrink-0 items-center justify-center rounded-full"
 						>
-							<Loader2Icon class="size-5 animate-spin" aria-hidden="true" />
+							<Loader2Icon class="size-4 animate-spin" aria-hidden="true" />
 						</div>
-						<Card.Title class="text-base font-semibold">Firmando</Card.Title>
-						<Badge variant="secondary" class="h-5 text-[10px]">{progressPct}%</Badge>
-					</div>
-				{:else if activeJobItem?.status === "cancelled"}
-					<div class="flex items-center gap-3">
+						<span class="text-sm font-semibold">Firmando</span>
+						<Badge variant="secondary" class="h-5 text-[10px] tabular-nums">{progressPct}%</Badge>
+					{:else if activeJobItem?.status === "cancelled"}
 						<div
-							class="bg-muted/40 flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground"
+							class="bg-muted/50 text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-full"
 						>
-							<BanIcon class="size-5" aria-hidden="true" />
+							<BanIcon class="size-4" aria-hidden="true" />
 						</div>
-						<Card.Title class="text-base font-semibold">Cancelado</Card.Title>
-					</div>
-				{:else if activeJobItem?.status === "error"}
-					<div class="flex items-center gap-3">
+						<span class="text-sm font-semibold">Cancelado</span>
+					{:else if activeJobItem?.status === "error"}
 						<div
-							class="flex size-10 shrink-0 items-center justify-center rounded-full bg-destructive/15 text-destructive"
+							class="bg-destructive/15 text-destructive flex size-9 shrink-0 items-center justify-center rounded-full"
 						>
-							<TriangleAlertIcon class="size-5" aria-hidden="true" />
+							<TriangleAlertIcon class="size-4" aria-hidden="true" />
 						</div>
-						<Card.Title class="text-base font-semibold">Error</Card.Title>
-					</div>
-				{:else if jobSettled && jobHasFileErrors}
-					<div class="flex items-center gap-3">
+						<span class="text-sm font-semibold">Error</span>
+					{:else if jobSettled && jobHasFileErrors}
 						<div
-							class="flex size-10 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400"
+							class="flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400"
 						>
-							<TriangleAlertIcon class="size-5" aria-hidden="true" />
+							<TriangleAlertIcon class="size-4" aria-hidden="true" />
 						</div>
-						<Card.Title class="text-base font-semibold">Con avisos</Card.Title>
-					</div>
-				{:else if jobSettled}
-					<div class="flex items-center gap-3">
+						<span class="text-sm font-semibold">Con avisos</span>
+					{:else if jobSettled}
 						<div
-							class="flex size-10 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+							class="flex size-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
 						>
-							<CircleCheckIcon class="size-5" aria-hidden="true" />
+							<CircleCheckIcon class="size-4" aria-hidden="true" />
 						</div>
-						<Card.Title class="text-base font-semibold">Listo</Card.Title>
+						<span class="text-sm font-semibold">Listo</span>
 						{#if progressSnapshot}
 							<Badge variant="outline" class="h-5 text-[10px] tabular-nums">
 								{progressSnapshot.actual}/{progressSnapshot.total}
 							</Badge>
 						{/if}
-					</div>
-				{/if}
-			</Card.Header>
-			<Card.Content class="space-y-3 pt-0">
+					{/if}
+				</div>
+
 				{#if activeJobItem?.status === "cancelled" && jobSettled}
-					<Alert>
-						<BanIcon class="size-4" />
-						<AlertTitle>Cancelado</AlertTitle>
-						<AlertDescription>Se detuvo la firma del lote. Los PDF no modificados siguen igual.</AlertDescription>
+					<Alert class="shrink-0 py-2">
+						<AlertDescription class="text-xs">Lote detenido.</AlertDescription>
 					</Alert>
 				{/if}
 
 				{#if batchFlowError && activeJobItem?.status === "error"}
-					<Alert variant="destructive">
-						<TriangleAlertIcon class="size-4" />
-						<AlertTitle>No se pudo completar el lote</AlertTitle>
-						<AlertDescription>{batchFlowError}</AlertDescription>
+					<Alert variant="destructive" class="shrink-0 py-2">
+						<AlertDescription class="text-xs">{batchFlowError}</AlertDescription>
 					</Alert>
 				{/if}
 
 				{#if resultStepSigning}
-					<div class="space-y-2">
+					<div class="shrink-0 space-y-1.5">
 						{#if progressSubtitle}
 							<p class="text-muted-foreground truncate text-xs" title={progressSubtitle}>{progressSubtitle}</p>
 						{/if}
-						<Progress value={progressPct} max={100} class="h-2 rounded-full" />
+						<Progress value={progressPct} max={100} class="h-1.5 rounded-full" />
 					</div>
 				{/if}
 
-				<SignJobResults
-					items={jobFileDisplayList}
-					{outputDirForJob}
-					{jobSettled}
-					signing={resultStepSigning}
-					activeFileIndex={progressSnapshot?.actual ?? null}
-				/>
-			</Card.Content>
-		</Card.Root>
+				<div class="min-h-0 flex-1 overflow-y-auto">
+					<SignJobResults
+						items={jobFileDisplayList}
+						{outputDirForJob}
+						{jobSettled}
+						signing={resultStepSigning}
+						activeFileIndex={progressSnapshot?.actual ?? null}
+					/>
+				</div>
+			</div>
+			{#snippet footer()}
+				{#if canCancelBatchJobStep5}
+					<Button type="button" variant="outline" size="sm" onclick={() => cancelJob()}>Cancelar</Button>
+				{:else if batchQueue.activeBatchJobId && !jobSettled && activeJobItem?.status === "cancelling"}
+					<Loader2Icon class="text-muted-foreground mr-auto size-4 animate-spin" aria-label="Cancelando" />
+				{/if}
+				<Button type="button" size="sm" disabled={!jobSettled} onclick={() => startNewSigningRound()}>
+					Nuevo lote
+				</Button>
+			{/snippet}
+		</SignWizardPanel>
 	{/if}
 </div>

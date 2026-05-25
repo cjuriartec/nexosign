@@ -91,9 +91,14 @@
 					unsubs.push(
 						await listen<{ requestId?: string }>(
 							"pending_batch_intents_changed",
-							async () => {
+							async (event) => {
 								await syncIntentQueueFromBackend();
-								await goto("/queue?filter=intents");
+								const rid = event.payload.requestId?.trim();
+								if (rid) {
+									await goto(`/sign?intent=${encodeURIComponent(rid)}`);
+								} else {
+									await goto("/sign");
+								}
 							},
 						),
 					);
@@ -112,16 +117,11 @@
 <ModeWatcher />
 <Toaster richColors position="top-center" />
 
-<Sidebar.Provider>
+<Sidebar.Provider open={false}>
 	<AppSidebar />
-	<!-- Con el menú cerrado en móvil el pie del sidebar no es visible: botón flotante para abrirlo. -->
-	<Sidebar.Trigger
-		class="bg-background border-input fixed bottom-4 right-4 z-50 flex size-10 items-center justify-center rounded-full border shadow-md md:hidden"
-		aria-label="Abrir menú"
-	/>
 	<Sidebar.Inset>
 		<main class="flex min-h-svh flex-1 flex-col">
-			<div class="mx-auto w-full max-w-6xl flex-1 p-5 md:p-6">
+			<div class="mx-auto w-full max-w-6xl flex-1 p-4 sm:p-5 md:p-6">
 				{@render children?.()}
 			</div>
 		</main>

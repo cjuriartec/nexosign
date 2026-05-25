@@ -94,7 +94,7 @@
 			{/if}
 		</div>
 
-		<ul class="space-y-2" role="list">
+		<ul class="space-y-2 pb-1" role="list">
 			{#each items as item (item.index)}
 				{@const badge = statusBadge(item)}
 				{@const isActive = signing && activeFileIndex === item.index}

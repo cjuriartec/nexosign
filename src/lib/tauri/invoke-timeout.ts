@@ -11,7 +11,7 @@ export function invokeWithTimeout<T>(
 				() =>
 					reject(
 						new Error(
-							`${label}: tiempo de espera agotado (${Math.round(ms / 1000)} s). Pulsa «Reinicializar lector» o desconecta y vuelve a conectar el DNIe.`,
+							`${label}: tiempo de espera agotado (${Math.round(ms / 1000)} s). Pulsa «Reconectar lector» o desconecta y vuelve a conectar el DNIe.`,
 						),
 					),
 				ms,
