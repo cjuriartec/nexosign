@@ -23,7 +23,12 @@
 		tokenLabel,
 	} from "$lib/signature-appearance";
 
-	let { certs = [], compact = false }: { certs: SigningCertSummary[]; compact?: boolean } = $props();
+	let {
+		certs = [],
+		compact = false,
+		/** Oculta el título cuando la página ya lleva cabecera de sección. */
+		hideHeader = false,
+	}: { certs: SigningCertSummary[]; compact?: boolean; hideHeader?: boolean } = $props();
 
 	let appearance = $state<SignatureAppearanceState>(defaultSignatureAppearance());
 	let fileInput = $state<HTMLInputElement | null>(null);
@@ -285,14 +290,16 @@
 </script>
 
 <div class="@container w-full min-w-0 space-y-3">
-	<header class="space-y-0.5">
-		<h2 class="text-base font-semibold tracking-tight">Diseño del sello</h2>
-		{#if !compact}
-			<p class="text-muted-foreground text-sm leading-snug">
-				Tres columnas cuando este bloque alcanza ~640px de ancho (con menú lateral, haz la ventana más ancha). Si no, se apilan: campos → orden → vista previa.
-			</p>
-		{/if}
-	</header>
+	{#if !hideHeader}
+		<header class="space-y-0.5">
+			<h2 class="text-base font-semibold tracking-tight">Diseño del sello</h2>
+			{#if !compact}
+				<p class="text-muted-foreground text-sm leading-snug">
+					Tres columnas cuando este bloque alcanza ~640px de ancho (con menú lateral, haz la ventana más ancha). Si no, se apilan: campos → orden → vista previa.
+				</p>
+			{/if}
+		</header>
+	{/if}
 
 	<div
 		class="grid grid-cols-1 gap-3 @min-[640px]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,2fr)] @min-[640px]:gap-3"
