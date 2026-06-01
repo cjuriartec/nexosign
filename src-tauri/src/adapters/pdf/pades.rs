@@ -1,11 +1,12 @@
 //! PAdES-BES mínimo: firma CMS detached (`adbe.pkcs7.detached`) con contenido externo (digest PDF).
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
-use cms::builder::{SignerInfoBuilder, create_signing_time_attribute};
+use cms::builder::SignerInfoBuilder;
 use cms::cert::{CertificateChoices, IssuerAndSerialNumber};
 use cms::content_info::{CmsVersion, ContentInfo};
 use cms::signed_data::{
@@ -13,12 +14,11 @@ use cms::signed_data::{
     SignerInfos,
 };
 use const_oid::db::rfc5911::{ID_DATA, ID_SIGNED_DATA};
-use const_oid::db::rfc5912::ID_SHA_256;
 use der::{Any, AnyRef, Decode, Encode};
 use image::GenericImageView;
 use lopdf::{Dictionary, Document, IncrementalDocument, Object, Stream, StringFormat};
 use sha2::{Digest, Sha256};
-use spki::{AlgorithmIdentifierOwned, DynSignatureAlgorithmIdentifier};
+use spki::DynSignatureAlgorithmIdentifier;
 use x509_cert::Certificate;
 use x509_cert::builder::Builder;
 use chrono;
@@ -26,6 +26,9 @@ use chrono;
 use signature::{Keypair, Signer};
 
 use crate::adapters::pdf::cms_signer::Pkcs11RsaCmsSigner;
+use crate::adapters::pdf::pades_attrs::{
+    certificate_chain_der_windows, pades_bes_signed_attributes, sha256_digest_algorithm,
+};
 use crate::adapters::pkcs11::token::Pkcs11TokenManager;
 use crate::application::errors::SignBatchError;
 use crate::ports::pdf_pades_signer::{PdfPadesSigner, SignatureGridPlacement};
@@ -174,10 +177,7 @@ where
         serial_number: cert.tbs_certificate.serial_number.clone(),
     });
 
-    let digest_algorithm = AlgorithmIdentifierOwned {
-        oid: ID_SHA_256,
-        parameters: None,
-    };
+    let digest_algorithm = sha256_digest_algorithm();
 
     let encap = EncapsulatedContentInfo {
         econtent_type: ID_DATA,
@@ -187,9 +187,13 @@ where
     let mut signer_info_builder =
         SignerInfoBuilder::new(signer, sid, digest_algorithm.clone(), &encap, Some(pdf_digest.as_slice()))
             .map_err(|e| SignBatchError::Pades(format!("SignerInfoBuilder: {e}")))?;
-    signer_info_builder
-        .add_signed_attribute(create_signing_time_attribute().map_err(|e| SignBatchError::Pades(format!("signingTime: {e}")))?)
-        .map_err(|e| SignBatchError::Pades(format!("signed attr: {e}")))?;
+    for attr in pades_bes_signed_attributes(cert_der)
+        .map_err(|e| SignBatchError::Pades(format!("atributos PAdES-BES: {e}")))?
+    {
+        signer_info_builder
+            .add_signed_attribute(attr)
+            .map_err(|e| SignBatchError::Pades(format!("signed attr: {e}")))?;
+    }
 
     let signer_info = signer_info_builder
         .build::<rsa::pkcs1v15::Signature>()
@@ -197,9 +201,23 @@ where
 
     let digest_algorithms = DigestAlgorithmIdentifiers::try_from(vec![digest_algorithm.clone()])
         .map_err(|e| SignBatchError::Pades(format!("digestAlgorithms CMS: {e}")))?;
-    let certificate_set =
-        CertificateSet::try_from(vec![CertificateChoices::Certificate(cert.clone())])
-            .map_err(|e| SignBatchError::Pades(format!("CertificateSet CMS: {e}")))?;
+    let chain = certificate_chain_der_windows(cert_der);
+    let mut cert_choices = Vec::new();
+    let mut seen = HashSet::new();
+    for der in chain {
+        if !seen.insert(der.clone()) {
+            continue;
+        }
+        match Certificate::from_der(&der) {
+            Ok(c) => cert_choices.push(CertificateChoices::Certificate(c)),
+            Err(e) => tracing::warn!(error = %e, "certificado de cadena omitido en CMS"),
+        }
+    }
+    if cert_choices.is_empty() {
+        cert_choices.push(CertificateChoices::Certificate(cert.clone()));
+    }
+    let certificate_set = CertificateSet::try_from(cert_choices)
+        .map_err(|e| SignBatchError::Pades(format!("CertificateSet CMS: {e}")))?;
     let signer_infos =
         SignerInfos::try_from(vec![signer_info]).map_err(|e| SignBatchError::Pades(format!("SignerInfos CMS: {e}")))?;
 

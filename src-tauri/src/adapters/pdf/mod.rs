@@ -1,5 +1,6 @@
 pub mod cms_signer;
 pub mod pades;
+mod pades_attrs;
 #[cfg(windows)]
 pub mod win_my_cms_signer;
 
