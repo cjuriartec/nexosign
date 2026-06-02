@@ -47,9 +47,8 @@ fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// `lopdf` puede escribir `/SubFilter/adbe.pkcs7.detached` (sin espacio) o con espacio; ambos son PDF válidos.
-fn find_subfilter_adobe_pkcs7_detached(buf: &[u8]) -> Option<usize> {
+fn find_subfilter_adobe_pkcs7_detached_from(buf: &[u8], mut search_from: usize) -> Option<usize> {
     const KEY: &[u8] = b"/SubFilter";
-    let mut search_from = 0usize;
     while search_from < buf.len() {
         let rel = find_sub(&buf[search_from..], KEY)?;
         let i = search_from + rel;
@@ -63,6 +62,41 @@ fn find_subfilter_adobe_pkcs7_detached(buf: &[u8]) -> Option<usize> {
         search_from = i.saturating_add(1);
     }
     None
+}
+
+fn enumerate_subfilter_adobe_pkcs7_detached(buf: &[u8]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut from = 0usize;
+    while let Some(i) = find_subfilter_adobe_pkcs7_detached_from(buf, from) {
+        out.push(i);
+        from = i.saturating_add(1);
+    }
+    out
+}
+
+/// Firma provisional recién añadida: `/Contents` hex aún vacío (ceros). En PDF ya firmados hay varias.
+fn find_subfilter_adobe_pkcs7_detached(buf: &[u8]) -> Option<usize> {
+    enumerate_subfilter_adobe_pkcs7_detached(buf)
+        .into_iter()
+        .rev()
+        .find(|&base| contents_hex_is_provisional(buf, base))
+        .or_else(|| enumerate_subfilter_adobe_pkcs7_detached(buf).into_iter().next())
+}
+
+fn contents_hex_is_provisional(buf: &[u8], subfilter_base: usize) -> bool {
+    let Some(lt) = find_contents_hex_angle_open(buf, subfilter_base) else {
+        return false;
+    };
+    let tail = &buf[lt + 1..];
+    let Some(rel_gt) = find_sub(tail, b">") else {
+        return false;
+    };
+    let inner = &tail[..rel_gt];
+    if inner.is_empty() {
+        return true;
+    }
+    let non_zero = inner.iter().any(|b| *b != b'0');
+    !non_zero
 }
 
 /// Posición del `<` que abre el hex string de `/Contents` del diccionario de firma (busca desde `from`).
@@ -609,6 +643,63 @@ fn create_appearance_stream(
     Ok(Object::Reference(doc.new_document.add_object(Object::Stream(stream))))
 }
 
+fn acroform_field_refs(doc: &Document) -> Vec<Object> {
+    let Ok(catalog) = doc.catalog() else {
+        return Vec::new();
+    };
+    let Ok(acro_obj) = catalog.get(b"AcroForm") else {
+        return Vec::new();
+    };
+    let acro_dict = match acro_obj {
+        Object::Reference(id) => doc.get_dictionary(*id).ok(),
+        Object::Dictionary(d) => Some(d),
+        _ => None,
+    };
+    let Some(acro) = acro_dict else {
+        return Vec::new();
+    };
+    let Ok(fields_obj) = acro.get(b"Fields") else {
+        return Vec::new();
+    };
+    match fields_obj {
+        Object::Array(arr) => arr.clone(),
+        Object::Reference(id) => doc
+            .get_object(*id)
+            .ok()
+            .and_then(|o| o.as_array().ok())
+            .map(|a| a.clone())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+fn count_signature_dictionaries(doc: &Document) -> usize {
+    doc.objects
+        .values()
+        .filter(|obj| {
+            let Object::Dictionary(d) = obj else {
+                return false;
+            };
+            let Ok(Object::Name(t)) = d.get(b"Type") else {
+                return false;
+            };
+            t == b"Sig"
+                && d.get(b"SubFilter")
+                    .ok()
+                    .and_then(|sf| match sf {
+                        Object::Name(n) => Some(n.as_slice()),
+                        _ => None,
+                    })
+                    .is_some_and(|n| n == b"adbe.pkcs7.detached")
+        })
+        .count()
+}
+
+fn next_signature_field_name(doc: &Document) -> Vec<u8> {
+    let n = count_signature_dictionaries(doc).saturating_add(1);
+    format!("Signature{n}").into_bytes()
+}
+
 fn get_signer_name_from_der(der: &[u8]) -> String {
     let Ok((_, cert)) = x509_parser::parse_x509_certificate(der) else {
         return "Firmante Desconocido".into();
@@ -627,14 +718,17 @@ fn append_signature_objects(
     der_placeholder_len: usize,
     rect: [i64; 4],
     signer_name: &str,
+    field_name: &[u8],
     seal_png: Option<&[u8]>,
 ) -> Result<(), SignBatchError> {
-    let prev = doc.get_prev_documents();
-    let page_id = prev
+    let existing_fields = acroform_field_refs(doc.get_prev_documents());
+    let page_id = doc
+        .get_prev_documents()
         .page_iter()
         .next()
         .ok_or_else(|| SignBatchError::Pades("PDF sin páginas".into()))?;
-    let root_ref = prev
+    let root_ref = doc
+        .get_prev_documents()
         .trailer
         .get(b"Root")
         .map_err(|e| SignBatchError::Pades(format!("trailer Root: {e}")))?
@@ -686,7 +780,10 @@ fn append_signature_objects(
     annot.set("Type", Object::Name(b"Annot".to_vec()));
     annot.set("Subtype", Object::Name(b"Widget".to_vec()));
     annot.set("FT", Object::Name(b"Sig".to_vec()));
-    annot.set("T", Object::String(b"Signature1".to_vec(), StringFormat::Literal));
+    annot.set(
+        "T",
+        Object::String(field_name.to_vec(), StringFormat::Literal),
+    );
     annot.set("V", Object::Reference(sig_id));
     annot.set("P", Object::Reference(page_id));
     annot.set(
@@ -703,11 +800,11 @@ fn append_signature_objects(
 
     let annot_id = doc.new_document.add_object(Object::Dictionary(annot));
 
+    let mut fields = existing_fields;
+    fields.push(Object::Reference(annot_id));
+
     let mut acro = Dictionary::new();
-    acro.set(
-        "Fields",
-        Object::Array(vec![Object::Reference(annot_id)]),
-    );
+    acro.set("Fields", Object::Array(fields));
     acro.set("SigFlags", Object::Integer(3));
 
     let acro_id = doc.new_document.add_object(Object::Dictionary(acro));
@@ -798,6 +895,11 @@ pub fn sign_pdf_pades_bes(
     };
 
     let signer_name = get_signer_name_from_der(&cert_der);
+    let field_name = {
+        let prev_doc = Document::load_mem(&pdf_bytes)
+            .map_err(|e| SignBatchError::Pades(format!("PDF lectura (campos): {e}")))?;
+        next_signature_field_name(&prev_doc)
+    };
     let mut der_cap = 8192usize;
 
     for _ in 0..25 {
@@ -806,7 +908,7 @@ pub fn sign_pdf_pades_bes(
             .try_into()
             .map_err(|e| SignBatchError::Pades(format!("PDF lectura: {e}")))?;
 
-        append_signature_objects(&mut doc, der_cap, rect, &signer_name, seal_png)?;
+        append_signature_objects(&mut doc, der_cap, rect, &signer_name, &field_name, seal_png)?;
 
         let mut buf = Vec::new();
         doc.save_to(&mut buf)
@@ -884,6 +986,11 @@ pub fn sign_pdf_pades_bes_win_my(
     };
 
     let signer_name = get_signer_name_from_der(&cert_der);
+    let field_name = {
+        let prev_doc = Document::load_mem(&pdf_bytes)
+            .map_err(|e| SignBatchError::Pades(format!("PDF lectura (campos): {e}")))?;
+        next_signature_field_name(&prev_doc)
+    };
     let mut der_cap = 8192usize;
 
     for _ in 0..25 {
@@ -892,7 +999,7 @@ pub fn sign_pdf_pades_bes_win_my(
             .try_into()
             .map_err(|e| SignBatchError::Pades(format!("PDF lectura: {e}")))?;
 
-        append_signature_objects(&mut doc, der_cap, rect, &signer_name, seal_png)?;
+        append_signature_objects(&mut doc, der_cap, rect, &signer_name, &field_name, seal_png)?;
 
         let mut buf = Vec::new();
         doc.save_to(&mut buf)
@@ -1022,7 +1129,11 @@ impl PdfPadesSigner for CompositePdfPadesSigner {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_contents_hex_angle_open, find_subfilter_adobe_pkcs7_detached};
+    use super::{
+        contents_hex_is_provisional, enumerate_subfilter_adobe_pkcs7_detached,
+        find_contents_hex_angle_open, find_subfilter_adobe_pkcs7_detached,
+        find_subfilter_adobe_pkcs7_detached_from,
+    };
 
     #[test]
     fn subfilter_adobe_with_or_without_space() {
@@ -1038,5 +1149,19 @@ mod tests {
         let base = find_subfilter_adobe_pkcs7_detached(buf).unwrap();
         let lt = find_contents_hex_angle_open(buf, base).unwrap();
         assert_eq!(buf[lt], b'<');
+    }
+
+    #[test]
+    fn active_subfilter_is_provisional_when_multiple_signatures() {
+        let first = b"<</Type/Sig/SubFilter/adbe.pkcs7.detached/Contents<ABCDEF>";
+        let second = b"<</Type/Sig/SubFilter/adbe.pkcs7.detached/Contents<000000000000>";
+        let mut buf = Vec::new();
+        buf.extend_from_slice(first);
+        buf.extend_from_slice(second);
+        assert_eq!(enumerate_subfilter_adobe_pkcs7_detached(&buf).len(), 2);
+        let last = find_subfilter_adobe_pkcs7_detached_from(&buf, 0).unwrap();
+        let active = find_subfilter_adobe_pkcs7_detached(&buf).unwrap();
+        assert!(contents_hex_is_provisional(&buf, active));
+        assert_ne!(last, active);
     }
 }
