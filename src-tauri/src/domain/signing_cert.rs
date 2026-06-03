@@ -67,7 +67,7 @@ pub fn dedupe_signing_certs_prefer_pkcs11(certs: Vec<SigningCertSummary>) -> Vec
                 return false;
             }
             let subj = subject_dedupe_key(&c.subject_dn);
-            !(subj.is_empty() || !pkcs11_subjects.contains(&subj))
+            subj.is_empty() || !pkcs11_subjects.contains(&subj)
         })
         .collect()
 }
@@ -164,5 +164,16 @@ mod tests {
         let out = dedupe_signing_certs_prefer_pkcs11(vec![chip, my]);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].source, SigningCertSource::Pkcs11);
+    }
+
+    #[test]
+    fn dedupe_keeps_win_my_when_mixed_with_pkcs11() {
+        let chip = cert("aa", SigningCertSource::Pkcs11, "deadbeef", "CN=Test");
+        let my1 = cert("winmy:deadbeef", SigningCertSource::WinMy, "deadbeef", "CN=Test");
+        let my2 = cert("winmy:abc", SigningCertSource::WinMy, "abc", "CN=Solo Windows");
+        let out = dedupe_signing_certs_prefer_pkcs11(vec![chip, my1, my2]);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().any(|c| c.source == SigningCertSource::Pkcs11 && c.cert_thumbprint_sha1_hex == "deadbeef"));
+        assert!(out.iter().any(|c| c.source == SigningCertSource::WinMy && c.cert_thumbprint_sha1_hex == "abc"));
     }
 }
