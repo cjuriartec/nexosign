@@ -1,6 +1,6 @@
 //! Atributos CMS/PAdES exigidos por validadores estrictos (Firma Perú, Refirma, ETSI PAdES-BES).
 
-use cms::builder::create_signing_time_attribute;
+
 use der::asn1::{Any, SetOfVec};
 use der::Tag;
 use sha2::{Digest, Sha256};
@@ -17,39 +17,81 @@ pub fn sha256_digest_algorithm() -> AlgorithmIdentifierOwned {
     }
 }
 
-fn wrap_sequence(content: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(content.len() + 4);
-    out.push(0x30);
-    if content.len() < 128 {
-        out.push(content.len() as u8);
+fn encode_der_length(len: usize) -> Vec<u8> {
+    if len < 128 {
+        vec![len as u8]
+    } else if len < 256 {
+        vec![0x81, len as u8]
+    } else if len < 65536 {
+        vec![0x82, (len >> 8) as u8, (len & 0xFF) as u8]
     } else {
-        out.push(0x81);
-        out.push(content.len() as u8);
+        vec![
+            0x83,
+            ((len >> 16) & 0xFF) as u8,
+            ((len >> 8) & 0xFF) as u8,
+            (len & 0xFF) as u8,
+        ]
     }
+}
+
+fn wrap_sequence(content: &[u8]) -> Vec<u8> {
+    let len_bytes = encode_der_length(content.len());
+    let mut out = Vec::with_capacity(1 + len_bytes.len() + content.len());
+    out.push(0x30);
+    out.extend_from_slice(&len_bytes);
     out.extend_from_slice(content);
     out
 }
 
 /// ESS `SigningCertificateV2` (RFC 5035) — obligatorio en PAdES-BES con SHA-256.
-fn signing_certificate_v2_der(cert_der: &[u8]) -> Vec<u8> {
+fn signing_certificate_v2_der(cert_der: &[u8]) -> Result<Vec<u8>, der::Error> {
+    let (_, parsed_cert) = x509_parser::parse_x509_certificate(cert_der)
+        .map_err(|_| der::Error::from(der::ErrorKind::Failed))?;
+        
     let hash = Sha256::digest(cert_der);
-    // AlgorithmIdentifier SHA-256
-    let alg_id: [u8; 15] = [
-        0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00,
-    ];
-    let mut ess_cert_id_v2 = Vec::with_capacity(alg_id.len() + 34);
-    ess_cert_id_v2.extend_from_slice(&alg_id);
-    ess_cert_id_v2.push(0x04);
-    ess_cert_id_v2.push(0x20);
-    ess_cert_id_v2.extend_from_slice(&hash);
-    let ess_wrapped = wrap_sequence(&ess_cert_id_v2);
-    let certs_of = wrap_sequence(&ess_wrapped);
-    wrap_sequence(&certs_of)
+    let mut cert_hash_der = Vec::new();
+    cert_hash_der.push(0x04); // OCTET STRING
+    cert_hash_der.push(0x20); // Length: 32 bytes
+    cert_hash_der.extend_from_slice(&hash);
+    
+    let raw_serial = parsed_cert.tbs_certificate.raw_serial();
+    let issuer_raw = parsed_cert.tbs_certificate.issuer.as_raw();
+    
+    // directoryName [4] Name
+    let mut directory_name = Vec::new();
+    directory_name.push(0xA4);
+    directory_name.extend_from_slice(&encode_der_length(issuer_raw.len()));
+    directory_name.extend_from_slice(issuer_raw);
+    
+    // generalNames SEQUENCE OF GeneralName
+    let general_names = wrap_sequence(&directory_name);
+    
+    // serialNumber INTEGER
+    let mut serial_number_der = Vec::new();
+    serial_number_der.push(0x02);
+    serial_number_der.extend_from_slice(&encode_der_length(raw_serial.len()));
+    serial_number_der.extend_from_slice(raw_serial);
+    
+    // issuerSerial SEQUENCE
+    let mut issuer_serial_content = Vec::new();
+    issuer_serial_content.extend_from_slice(&general_names);
+    issuer_serial_content.extend_from_slice(&serial_number_der);
+    let issuer_serial = wrap_sequence(&issuer_serial_content);
+    
+    // ESSCertIDv2 SEQUENCE
+    let mut ess_cert_id_v2_content = Vec::new();
+    ess_cert_id_v2_content.extend_from_slice(&cert_hash_der);
+    ess_cert_id_v2_content.extend_from_slice(&issuer_serial);
+    let ess_cert_id_v2 = wrap_sequence(&ess_cert_id_v2_content);
+    
+    // certs SEQUENCE OF ESSCertIDv2
+    let certs = wrap_sequence(&ess_cert_id_v2);
+    Ok(certs)
 }
 
 /// Atributo firmado `id-aa-signingCertificateV2`.
 pub fn create_signing_certificate_v2_attribute(cert_der: &[u8]) -> Result<Attribute, der::Error> {
-    let der = signing_certificate_v2_der(cert_der);
+    let der = signing_certificate_v2_der(cert_der)?;
     let value = AttributeValue::new(Tag::Sequence, der)?;
     let mut values = SetOfVec::<AttributeValue>::new();
     values.insert(value)?;
@@ -60,45 +102,28 @@ pub fn create_signing_certificate_v2_attribute(cert_der: &[u8]) -> Result<Attrib
 }
 
 /// Atributos firmados estándar PAdES-BES además de los que añade `SignerInfoBuilder`.
+/// NOTA: NO incluir `signingTime` aquí. Per ETSI EN 319 122-1, cuando se usa
+/// `/SubFilter /ETSI.CAdES.detached`, la hora de firma se transmite exclusivamente
+/// en la entrada `/M` del diccionario de firma PDF, no en atributos CMS.
 pub fn pades_bes_signed_attributes(cert_der: &[u8]) -> Result<Vec<Attribute>, der::Error> {
-  let mut attrs = Vec::new();
+    let mut attrs = Vec::new();
     attrs.push(create_signing_certificate_v2_attribute(cert_der)?);
-    attrs.push(
-        create_signing_time_attribute().map_err(|_| der::Error::from(der::ErrorKind::Failed))?,
-    );
     Ok(attrs)
 }
 
 #[cfg(windows)]
 pub fn certificate_chain_der_windows(leaf_der: &[u8]) -> Vec<Vec<u8>> {
     use windows::Win32::Security::Cryptography::{
-        CertCloseStore, CertFindCertificateInStore, CertFreeCertificateChain,
-        CertFreeCertificateContext, CertGetCertificateChain, CertOpenSystemStoreW,
-        CERT_CHAIN_CONTEXT, CERT_CHAIN_ELEMENT, CERT_CHAIN_PARA, CERT_FIND_EXISTING,
+        CertFreeCertificateChain, CertFreeCertificateContext, CertGetCertificateChain,
+        CERT_CHAIN_CONTEXT, CERT_CHAIN_ELEMENT, CERT_CHAIN_PARA,
         CERT_QUERY_ENCODING_TYPE, PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
+        CertCreateCertificateContext,
     };
-    use windows::core::w;
 
     unsafe {
-        let store = match CertOpenSystemStoreW(None, w!("MY")) {
-            Ok(s) => s,
-            Err(_) => return vec![leaf_der.to_vec()],
-        };
         let enc = CERT_QUERY_ENCODING_TYPE(X509_ASN_ENCODING.0 | PKCS_7_ASN_ENCODING.0);
-        let mut find_blob = windows::Win32::Security::Cryptography::CRYPT_INTEGER_BLOB {
-            cbData: leaf_der.len() as u32,
-            pbData: leaf_der.as_ptr() as *mut u8,
-        };
-        let ctx = CertFindCertificateInStore(
-            store,
-            enc,
-            0,
-            CERT_FIND_EXISTING,
-            Some(std::ptr::addr_of_mut!(find_blob).cast()),
-            None,
-        );
+        let ctx = CertCreateCertificateContext(enc, leaf_der);
         if ctx.is_null() {
-            let _ = CertCloseStore(Some(store), 0);
             return vec![leaf_der.to_vec()];
         }
 
@@ -145,7 +170,6 @@ pub fn certificate_chain_der_windows(leaf_der: &[u8]) -> Vec<Vec<u8>> {
         }
 
         let _ = CertFreeCertificateContext(Some(ctx));
-        let _ = CertCloseStore(Some(store), 0);
 
         if out.is_empty() {
             vec![leaf_der.to_vec()]
@@ -165,10 +189,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn signing_certificate_v2_has_expected_size() {
+    fn signing_certificate_v2_fails_on_invalid_cert() {
         let fake_cert = vec![0u8; 64];
-        let der = signing_certificate_v2_der(&fake_cert);
-        assert!(der.starts_with(&[0x30]));
-        assert!(der.len() > 40 && der.len() < 120);
+        assert!(signing_certificate_v2_der(&fake_cert).is_err());
     }
 }

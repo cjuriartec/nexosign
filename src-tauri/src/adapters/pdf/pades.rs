@@ -46,9 +46,15 @@ fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-/// `lopdf` puede escribir `/SubFilter/adbe.pkcs7.detached` (sin espacio) o con espacio; ambos son PDF válidos.
-fn find_subfilter_adobe_pkcs7_detached_from(buf: &[u8], mut search_from: usize) -> Option<usize> {
+/// Busca `/SubFilter` seguido de `/ETSI.CAdES.detached` o `/adbe.pkcs7.detached`.
+/// Ambos formatos son válidos; el primero es requerido por Refirma/PAdES, el segundo
+/// puede existir en PDFs firmados por terceros. `lopdf` puede o no poner espacio.
+fn find_subfilter_pades_from(buf: &[u8], mut search_from: usize) -> Option<usize> {
     const KEY: &[u8] = b"/SubFilter";
+    const ACCEPTED: &[&[u8]] = &[
+        b"/ETSI.CAdES.detached",
+        b"/adbe.pkcs7.detached",
+    ];
     while search_from < buf.len() {
         let rel = find_sub(&buf[search_from..], KEY)?;
         let i = search_from + rel;
@@ -56,7 +62,7 @@ fn find_subfilter_adobe_pkcs7_detached_from(buf: &[u8], mut search_from: usize) 
         while j < buf.len() && buf[j].is_ascii_whitespace() {
             j += 1;
         }
-        if buf[j..].starts_with(b"/adbe.pkcs7.detached") {
+        if ACCEPTED.iter().any(|sf| buf[j..].starts_with(sf)) {
             return Some(i);
         }
         search_from = i.saturating_add(1);
@@ -64,10 +70,10 @@ fn find_subfilter_adobe_pkcs7_detached_from(buf: &[u8], mut search_from: usize) 
     None
 }
 
-fn enumerate_subfilter_adobe_pkcs7_detached(buf: &[u8]) -> Vec<usize> {
+fn enumerate_subfilter_pades(buf: &[u8]) -> Vec<usize> {
     let mut out = Vec::new();
     let mut from = 0usize;
-    while let Some(i) = find_subfilter_adobe_pkcs7_detached_from(buf, from) {
+    while let Some(i) = find_subfilter_pades_from(buf, from) {
         out.push(i);
         from = i.saturating_add(1);
     }
@@ -75,12 +81,12 @@ fn enumerate_subfilter_adobe_pkcs7_detached(buf: &[u8]) -> Vec<usize> {
 }
 
 /// Firma provisional recién añadida: `/Contents` hex aún vacío (ceros). En PDF ya firmados hay varias.
-fn find_subfilter_adobe_pkcs7_detached(buf: &[u8]) -> Option<usize> {
-    enumerate_subfilter_adobe_pkcs7_detached(buf)
+fn find_subfilter_pades(buf: &[u8]) -> Option<usize> {
+    enumerate_subfilter_pades(buf)
         .into_iter()
         .rev()
         .find(|&base| contents_hex_is_provisional(buf, base))
-        .or_else(|| enumerate_subfilter_adobe_pkcs7_detached(buf).into_iter().next())
+        .or_else(|| enumerate_subfilter_pades(buf).into_iter().next())
 }
 
 fn contents_hex_is_provisional(buf: &[u8], subfilter_base: usize) -> bool {
@@ -119,10 +125,10 @@ fn find_contents_hex_angle_open(buf: &[u8], from: usize) -> Option<usize> {
 }
 
 /// Calcula digest SHA-256 del PDF excluyendo el contenido hexadecimal de `/Contents < ... >`.
-fn digest_pdf_pkcs7_detached(buf: &[u8]) -> Result<[u8; 32], SignBatchError> {
-    let base = find_subfilter_adobe_pkcs7_detached(buf).ok_or_else(|| {
+fn digest_pdf_pades(buf: &[u8]) -> Result<[u8; 32], SignBatchError> {
+    let base = find_subfilter_pades(buf).ok_or_else(|| {
         SignBatchError::Pades(
-            "no se encontró el diccionario de firma (/SubFilter + adbe.pkcs7.detached) tras guardar".into(),
+            "no se encontró el diccionario de firma (/SubFilter ETSI.CAdES.detached o adbe.pkcs7.detached) tras guardar".into(),
         )
     })?;
     let lt = find_contents_hex_angle_open(buf, base).ok_or_else(|| {
@@ -139,7 +145,7 @@ fn digest_pdf_pkcs7_detached(buf: &[u8]) -> Result<[u8; 32], SignBatchError> {
 }
 
 fn patch_pdf_contents_der(buf: &mut Vec<u8>, cms_der: &[u8]) -> Result<(), SignBatchError> {
-    let base = find_subfilter_adobe_pkcs7_detached(buf.as_slice())
+    let base = find_subfilter_pades(buf.as_slice())
         .ok_or_else(|| SignBatchError::Pades("marker cms".into()))?;
     let lt = find_contents_hex_angle_open(buf.as_slice(), base)
         .ok_or_else(|| SignBatchError::Pades("/Contents".into()))?;
@@ -532,36 +538,18 @@ fn create_appearance_from_seal_png(
     doc: &mut IncrementalDocument,
     rect: [i64; 4],
     png_bytes: &[u8],
-) -> Result<Object, SignBatchError> {
+) -> Result<(lopdf::ObjectId, lopdf::ObjectId), SignBatchError> {
     let (img_ref, _iw, _ih) = create_image_and_smask(doc, png_bytes)?;
 
     let fw = (rect[2] - rect[0]).abs() as f64;
     let fh = (rect[3] - rect[1]).abs() as f64;
 
-    let content = format!("q {} 0 0 {} 0 0 cm /Img0 Do Q", fw, fh);
-
-    let mut xobj = Dictionary::new();
-    xobj.set("Img0", Object::Reference(img_ref));
-
-    let mut form_res = Dictionary::new();
-    form_res.set("XObject", Object::Dictionary(xobj));
-
-    let mut form_dict = Dictionary::new();
-    form_dict.set("Type", Object::Name(b"XObject".to_vec()));
-    form_dict.set("Subtype", Object::Name(b"Form".to_vec()));
-    form_dict.set("FormType", Object::Integer(1));
-    form_dict.set(
-        "Matrix",
-        Object::Array(vec![
-            Object::Integer(1),
-            Object::Integer(0),
-            Object::Integer(0),
-            Object::Integer(1),
-            Object::Integer(0),
-            Object::Integer(0),
-        ]),
-    );
-    form_dict.set(
+    // 1. n2 Form XObject: Layer 2 contains the foreground image drawing
+    let mut n2_dict = Dictionary::new();
+    n2_dict.set("Type", Object::Name(b"XObject".to_vec()));
+    n2_dict.set("Subtype", Object::Name(b"Form".to_vec()));
+    n2_dict.set("FormType", Object::Integer(1));
+    n2_dict.set(
         "BBox",
         Object::Array(vec![
             Object::Real(0.0),
@@ -570,49 +558,134 @@ fn create_appearance_from_seal_png(
             Object::Real(fh as f32),
         ]),
     );
-    form_dict.set("Resources", Object::Dictionary(form_res));
-    let form_stream = Stream::new(form_dict, content.into_bytes());
-    Ok(Object::Reference(
-        doc.new_document
-            .add_object(Object::Stream(form_stream)),
-    ))
+    let mut n2_xobj = Dictionary::new();
+    n2_xobj.set("img1", Object::Reference(img_ref));
+    let mut n2_res = Dictionary::new();
+    n2_res.set("XObject", Object::Dictionary(n2_xobj));
+    n2_res.set(
+        "ProcSet",
+        Object::Array(vec![
+            Object::Name(b"PDF".to_vec()),
+            Object::Name(b"Text".to_vec()),
+            Object::Name(b"ImageB".to_vec()),
+            Object::Name(b"ImageC".to_vec()),
+            Object::Name(b"ImageI".to_vec()),
+        ]),
+    );
+    n2_dict.set("Resources", Object::Dictionary(n2_res));
+    let n2_content = format!("q {} 0 0 {} 0 0 cm /img1 Do Q", fw, fh);
+    let n2_stream = Stream::new(n2_dict, n2_content.into_bytes());
+    let n2_ref = doc.new_document.add_object(Object::Stream(n2_stream));
+
+    // 2. n0 Form XObject: Layer 0 background is an empty Form XObject
+    let mut n0_dict = Dictionary::new();
+    n0_dict.set("Type", Object::Name(b"XObject".to_vec()));
+    n0_dict.set("Subtype", Object::Name(b"Form".to_vec()));
+    n0_dict.set("FormType", Object::Integer(1));
+    n0_dict.set(
+        "BBox",
+        Object::Array(vec![
+            Object::Real(0.0),
+            Object::Real(0.0),
+            Object::Real(fw as f32),
+            Object::Real(fh as f32),
+        ]),
+    );
+    n0_dict.set("Resources", Object::Dictionary(Dictionary::new()));
+    let n0_stream = Stream::new(n0_dict, Vec::new());
+    let n0_ref = doc.new_document.add_object(Object::Stream(n0_stream));
+
+    // 3. FRM Form XObject: Middle frame combining background n0 and foreground n2
+    let mut frm_dict = Dictionary::new();
+    frm_dict.set("Type", Object::Name(b"XObject".to_vec()));
+    frm_dict.set("Subtype", Object::Name(b"Form".to_vec()));
+    frm_dict.set("FormType", Object::Integer(1));
+    frm_dict.set(
+        "BBox",
+        Object::Array(vec![
+            Object::Real(0.0),
+            Object::Real(0.0),
+            Object::Real(fw as f32),
+            Object::Real(fh as f32),
+        ]),
+    );
+    let mut frm_xobj = Dictionary::new();
+    frm_xobj.set("n0", Object::Reference(n0_ref));
+    frm_xobj.set("n2", Object::Reference(n2_ref));
+    let mut frm_res = Dictionary::new();
+    frm_res.set("XObject", Object::Dictionary(frm_xobj));
+    frm_res.set(
+        "ProcSet",
+        Object::Array(vec![
+            Object::Name(b"PDF".to_vec()),
+            Object::Name(b"Text".to_vec()),
+            Object::Name(b"ImageB".to_vec()),
+            Object::Name(b"ImageC".to_vec()),
+            Object::Name(b"ImageI".to_vec()),
+        ]),
+    );
+    frm_dict.set("Resources", Object::Dictionary(frm_res));
+    let frm_content = "q 1 0 0 1 0 0 cm /n0 Do Q q 1 0 0 1 0 0 cm /n2 Do Q";
+    let frm_stream = Stream::new(frm_dict, frm_content.as_bytes().to_vec());
+    let frm_ref = doc.new_document.add_object(Object::Stream(frm_stream));
+
+    // 4. Main appearance /N Form XObject: Wrapper that draws FRM
+    let mut n_dict = Dictionary::new();
+    n_dict.set("Type", Object::Name(b"XObject".to_vec()));
+    n_dict.set("Subtype", Object::Name(b"Form".to_vec()));
+    n_dict.set("FormType", Object::Integer(1));
+    n_dict.set(
+        "BBox",
+        Object::Array(vec![
+            Object::Real(0.0),
+            Object::Real(0.0),
+            Object::Real(fw as f32),
+            Object::Real(fh as f32),
+        ]),
+    );
+    let mut n_xobj = Dictionary::new();
+    n_xobj.set("FRM", Object::Reference(frm_ref));
+    let mut n_res = Dictionary::new();
+    n_res.set("XObject", Object::Dictionary(n_xobj));
+    n_res.set(
+        "ProcSet",
+        Object::Array(vec![
+            Object::Name(b"PDF".to_vec()),
+            Object::Name(b"Text".to_vec()),
+            Object::Name(b"ImageB".to_vec()),
+            Object::Name(b"ImageC".to_vec()),
+            Object::Name(b"ImageI".to_vec()),
+        ]),
+    );
+    n_dict.set("Resources", Object::Dictionary(n_res));
+    let n_content = "q 1 0 0 1 0 0 cm /FRM Do Q";
+    let n_stream = Stream::new(n_dict, n_content.as_bytes().to_vec());
+    let n_ref = doc.new_document.add_object(Object::Stream(n_stream));
+
+    Ok((n_ref, frm_ref))
 }
 
 fn create_appearance_stream(
     doc: &mut IncrementalDocument,
     rect: [i64; 4],
     signer_name: &str,
-) -> Result<Object, SignBatchError> {
+) -> Result<(lopdf::ObjectId, lopdf::ObjectId), SignBatchError> {
     let w = (rect[2] - rect[0]).abs() as f64;
     let h = (rect[3] - rect[1]).abs() as f64;
 
-    let mut resources = Dictionary::new();
+    // 1. Font Dict
     let mut font_dict = Dictionary::new();
     font_dict.set("Type", Object::Name(b"Font".to_vec()));
     font_dict.set("Subtype", Object::Name(b"Type1".to_vec()));
     font_dict.set("BaseFont", Object::Name(b"Helvetica".to_vec()));
     let font_id = doc.new_document.add_object(Object::Dictionary(font_dict));
 
-    let mut fonts = Dictionary::new();
-    fonts.set("F1", Object::Reference(font_id));
-    resources.set("Font", Object::Dictionary(fonts));
-
-    let mut xobject = Dictionary::new();
-    xobject.set("Type", Object::Name(b"XObject".to_vec()));
-    xobject.set("Subtype", Object::Name(b"Form".to_vec()));
-    xobject.set("FormType", Object::Integer(1));
-    xobject.set(
-        "Matrix",
-        Object::Array(vec![
-            Object::Integer(1),
-            Object::Integer(0),
-            Object::Integer(0),
-            Object::Integer(1),
-            Object::Integer(0),
-            Object::Integer(0),
-        ]),
-    );
-    xobject.set(
+    // 2. n2 Form XObject: Foreground layer containing the text drawing
+    let mut n2_dict = Dictionary::new();
+    n2_dict.set("Type", Object::Name(b"XObject".to_vec()));
+    n2_dict.set("Subtype", Object::Name(b"Form".to_vec()));
+    n2_dict.set("FormType", Object::Integer(1));
+    n2_dict.set(
         "BBox",
         Object::Array(vec![
             Object::Real(0.0),
@@ -621,13 +694,27 @@ fn create_appearance_stream(
             Object::Real(h as f32),
         ]),
     );
-    xobject.set("Resources", Object::Dictionary(resources));
+    let mut n2_fonts = Dictionary::new();
+    n2_fonts.set("F1", Object::Reference(font_id));
+    let mut n2_res = Dictionary::new();
+    n2_res.set("Font", Object::Dictionary(n2_fonts));
+    n2_res.set(
+        "ProcSet",
+        Object::Array(vec![
+            Object::Name(b"PDF".to_vec()),
+            Object::Name(b"Text".to_vec()),
+            Object::Name(b"ImageB".to_vec()),
+            Object::Name(b"ImageC".to_vec()),
+            Object::Name(b"ImageI".to_vec()),
+        ]),
+    );
+    n2_dict.set("Resources", Object::Dictionary(n2_res));
 
     let now = chrono::Local::now().format("%d/%m/%Y %H:%M").to_string();
     let name_esc = pdf_escape_pdf_literal(signer_name);
     let now_esc = pdf_escape_pdf_literal(&now);
 
-    let content = format!(
+    let n2_content = format!(
         "q 0.97 0.98 1 rg 0 0 {w} {h} re f Q \
          BT /F1 7 Tf 0.22 0.24 0.3 rg 8 {y1} Td (Firma digital PAdES) Tj \
          /F1 8 Tf 0.07 0.09 0.14 rg 0 -12 Td ({name}) Tj \
@@ -638,9 +725,95 @@ fn create_appearance_stream(
         name = name_esc,
         now = now_esc,
     );
+    let n2_stream = Stream::new(n2_dict, n2_content.into_bytes());
+    let n2_ref = doc.new_document.add_object(Object::Stream(n2_stream));
 
-    let stream = Stream::new(xobject, content.into_bytes());
-    Ok(Object::Reference(doc.new_document.add_object(Object::Stream(stream))))
+    // 3. n0 Form XObject: Layer 0 background (empty)
+    let mut n0_dict = Dictionary::new();
+    n0_dict.set("Type", Object::Name(b"XObject".to_vec()));
+    n0_dict.set("Subtype", Object::Name(b"Form".to_vec()));
+    n0_dict.set("FormType", Object::Integer(1));
+    n0_dict.set(
+        "BBox",
+        Object::Array(vec![
+            Object::Real(0.0),
+            Object::Real(0.0),
+            Object::Real(w as f32),
+            Object::Real(h as f32),
+        ]),
+    );
+    n0_dict.set("Resources", Object::Dictionary(Dictionary::new()));
+    let n0_stream = Stream::new(n0_dict, Vec::new());
+    let n0_ref = doc.new_document.add_object(Object::Stream(n0_stream));
+
+    // 4. FRM Form XObject: Combines background n0 and foreground n2
+    let mut frm_dict = Dictionary::new();
+    frm_dict.set("Type", Object::Name(b"XObject".to_vec()));
+    frm_dict.set("Subtype", Object::Name(b"Form".to_vec()));
+    frm_dict.set("FormType", Object::Integer(1));
+    frm_dict.set(
+        "BBox",
+        Object::Array(vec![
+            Object::Real(0.0),
+            Object::Real(0.0),
+            Object::Real(w as f32),
+            Object::Real(h as f32),
+        ]),
+    );
+    let mut frm_xobj = Dictionary::new();
+    frm_xobj.set("n0", Object::Reference(n0_ref));
+    frm_xobj.set("n2", Object::Reference(n2_ref));
+    let mut frm_res = Dictionary::new();
+    frm_res.set("XObject", Object::Dictionary(frm_xobj));
+    frm_res.set(
+        "ProcSet",
+        Object::Array(vec![
+            Object::Name(b"PDF".to_vec()),
+            Object::Name(b"Text".to_vec()),
+            Object::Name(b"ImageB".to_vec()),
+            Object::Name(b"ImageC".to_vec()),
+            Object::Name(b"ImageI".to_vec()),
+        ]),
+    );
+    frm_dict.set("Resources", Object::Dictionary(frm_res));
+    let frm_content = "q 1 0 0 1 0 0 cm /n0 Do Q q 1 0 0 1 0 0 cm /n2 Do Q";
+    let frm_stream = Stream::new(frm_dict, frm_content.as_bytes().to_vec());
+    let frm_ref = doc.new_document.add_object(Object::Stream(frm_stream));
+
+    // 5. Main appearance /N Form XObject: Wrapper that draws FRM
+    let mut n_dict = Dictionary::new();
+    n_dict.set("Type", Object::Name(b"XObject".to_vec()));
+    n_dict.set("Subtype", Object::Name(b"Form".to_vec()));
+    n_dict.set("FormType", Object::Integer(1));
+    n_dict.set(
+        "BBox",
+        Object::Array(vec![
+            Object::Real(0.0),
+            Object::Real(0.0),
+            Object::Real(w as f32),
+            Object::Real(h as f32),
+        ]),
+    );
+    let mut n_xobj = Dictionary::new();
+    n_xobj.set("FRM", Object::Reference(frm_ref));
+    let mut n_res = Dictionary::new();
+    n_res.set("XObject", Object::Dictionary(n_xobj));
+    n_res.set(
+        "ProcSet",
+        Object::Array(vec![
+            Object::Name(b"PDF".to_vec()),
+            Object::Name(b"Text".to_vec()),
+            Object::Name(b"ImageB".to_vec()),
+            Object::Name(b"ImageC".to_vec()),
+            Object::Name(b"ImageI".to_vec()),
+        ]),
+    );
+    n_dict.set("Resources", Object::Dictionary(n_res));
+    let n_content = "q 1 0 0 1 0 0 cm /FRM Do Q";
+    let n_stream = Stream::new(n_dict, n_content.as_bytes().to_vec());
+    let n_ref = doc.new_document.add_object(Object::Stream(n_stream));
+
+    Ok((n_ref, frm_ref))
 }
 
 fn acroform_field_refs(doc: &Document) -> Vec<Object> {
@@ -690,7 +863,7 @@ fn count_signature_dictionaries(doc: &Document) -> usize {
                         Object::Name(n) => Some(n.as_slice()),
                         _ => None,
                     })
-                    .is_some_and(|n| n == b"adbe.pkcs7.detached")
+                    .is_some_and(|n| n == b"adbe.pkcs7.detached" || n == b"ETSI.CAdES.detached")
         })
         .count()
 }
@@ -743,7 +916,7 @@ fn append_signature_objects(
     let mut sig_dict = Dictionary::new();
     sig_dict.set("Type", Object::Name(b"Sig".to_vec()));
     sig_dict.set("Filter", Object::Name(b"Adobe.PPKLite".to_vec()));
-    sig_dict.set("SubFilter", Object::Name(b"adbe.pkcs7.detached".to_vec()));
+    sig_dict.set("SubFilter", Object::Name(b"ETSI.CAdES.detached".to_vec()));
     sig_dict.set(
         "Contents",
         Object::String(vec![0u8; der_placeholder_len], StringFormat::Hexadecimal),
@@ -758,7 +931,22 @@ fn append_signature_objects(
         ]),
     );
 
-    let now_pdf = chrono::Local::now().format("D:%Y%m%d%H%M%S%:z").to_string().replace(':', "'") + "'";
+    // Timestamp (formato PDF ISO 32000: D:YYYYMMDDHHMMSS±HH'MM')
+    let now = chrono::Local::now();
+    let now_pdf = now.format("D:%Y%m%d%H%M%S").to_string();
+    let tz_offset = now.format("%z").to_string(); // e.g. "-0500" or "+0100"
+    let now_pdf = if tz_offset.len() >= 5 {
+        let sign = &tz_offset[..1];
+        let hrs = &tz_offset[1..3];
+        let mins = &tz_offset[3..5];
+        format!("{}{}{}'{}'" , now_pdf, sign, hrs, mins)
+    } else {
+        format!("{}Z", now_pdf)
+    };
+
+    sig_dict.set("Name", Object::String(signer_name.as_bytes().to_vec(), StringFormat::Hexadecimal));
+    sig_dict.set("Reason", Object::String(b"Soy el autor del documento".to_vec(), StringFormat::Literal));
+    sig_dict.set("Location", Object::String(b"Peru".to_vec(), StringFormat::Literal));
     sig_dict.set(
         "M",
         Object::String(
@@ -769,7 +957,7 @@ fn append_signature_objects(
 
     let sig_id = doc.new_document.add_object(Object::Dictionary(sig_dict));
 
-    let ap_ref = match seal_png {
+    let (ap_ref, frm_ref) = match seal_png {
         Some(bytes) => create_appearance_from_seal_png(doc, rect, bytes)?,
         None => create_appearance_stream(doc, rect, signer_name)?,
     };
@@ -803,17 +991,32 @@ fn append_signature_objects(
     let mut fields = existing_fields;
     fields.push(Object::Reference(annot_id));
 
+    // Create global default resource dictionary (DR) with the signature /FRM Form XObject
+    let mut dr = Dictionary::new();
+    let mut dr_xobject = Dictionary::new();
+    dr_xobject.set("FRM", Object::Reference(frm_ref));
+    dr.set("XObject", Object::Dictionary(dr_xobject));
+    dr.set(
+        "ProcSet",
+        Object::Array(vec![
+            Object::Name(b"PDF".to_vec()),
+            Object::Name(b"Text".to_vec()),
+            Object::Name(b"ImageB".to_vec()),
+            Object::Name(b"ImageC".to_vec()),
+            Object::Name(b"ImageI".to_vec()),
+        ]),
+    );
+
     let mut acro = Dictionary::new();
     acro.set("Fields", Object::Array(fields));
     acro.set("SigFlags", Object::Integer(3));
-
-    let acro_id = doc.new_document.add_object(Object::Dictionary(acro));
+    acro.set("DR", Object::Dictionary(dr));
 
     let catalog = doc
         .new_document
         .catalog_mut()
         .map_err(|e| SignBatchError::Pades(format!("catalog_mut: {e}")))?;
-    catalog.set("AcroForm", Object::Reference(acro_id));
+    catalog.set("AcroForm", Object::Dictionary(acro));
 
     let page = doc
         .new_document
@@ -832,9 +1035,9 @@ fn append_signature_objects(
 }
 
 fn patch_byte_range(buf: &mut [u8]) -> Result<(), SignBatchError> {
-    let base = find_subfilter_adobe_pkcs7_detached(buf).ok_or_else(|| {
+    let base = find_subfilter_pades(buf).ok_or_else(|| {
         SignBatchError::Pades(
-            "no se encontró la firma provisional (/SubFilter + adbe.pkcs7.detached) en el PDF incremental"
+            "no se encontró la firma provisional (/SubFilter) en el PDF incremental"
                 .into(),
         )
     })?;
@@ -916,7 +1119,7 @@ pub fn sign_pdf_pades_bes(
 
         patch_byte_range(&mut buf)?;
 
-        let digest = digest_pdf_pkcs7_detached(&buf)?;
+        let digest = digest_pdf_pades(&buf)?;
 
         let cms_signer = Pkcs11RsaCmsSigner::new(token.clone(), cert_id_hex.to_string(), &cert_der)
             .map_err(|e| SignBatchError::Signer(e.to_string()))?;
@@ -1007,7 +1210,7 @@ pub fn sign_pdf_pades_bes_win_my(
 
         patch_byte_range(&mut buf)?;
 
-        let digest = digest_pdf_pkcs7_detached(&buf)?;
+        let digest = digest_pdf_pades(&buf)?;
 
         let cms_der = build_cms_signed_data(win.as_ref(), &cert_der, &digest)?;
 
@@ -1130,38 +1333,56 @@ impl PdfPadesSigner for CompositePdfPadesSigner {
 #[cfg(test)]
 mod tests {
     use super::{
-        contents_hex_is_provisional, enumerate_subfilter_adobe_pkcs7_detached,
-        find_contents_hex_angle_open, find_subfilter_adobe_pkcs7_detached,
-        find_subfilter_adobe_pkcs7_detached_from,
+        contents_hex_is_provisional, enumerate_subfilter_pades,
+        find_contents_hex_angle_open, find_subfilter_pades,
+        find_subfilter_pades_from,
     };
 
     #[test]
-    fn subfilter_adobe_with_or_without_space() {
+    fn subfilter_etsi_with_or_without_space() {
+        let with_space = b"<</Type/Sig/SubFilter /ETSI.CAdES.detached/Contents<";
+        let no_space = b"<</Type/Sig/SubFilter/ETSI.CAdES.detached/Contents<";
+        assert!(find_subfilter_pades(with_space).is_some());
+        assert!(find_subfilter_pades(no_space).is_some());
+    }
+
+    #[test]
+    fn subfilter_adobe_legacy_still_found() {
         let with_space = b"<</Type/Sig/SubFilter /adbe.pkcs7.detached/Contents<";
         let no_space = b"<</Type/Sig/SubFilter/adbe.pkcs7.detached/Contents<";
-        assert!(find_subfilter_adobe_pkcs7_detached(with_space).is_some());
-        assert!(find_subfilter_adobe_pkcs7_detached(no_space).is_some());
+        assert!(find_subfilter_pades(with_space).is_some());
+        assert!(find_subfilter_pades(no_space).is_some());
     }
 
     #[test]
     fn contents_hex_angle_after_optional_whitespace() {
-        let buf = b"<</Type/Sig/SubFilter/adbe.pkcs7.detached/Contents   <001122>";
-        let base = find_subfilter_adobe_pkcs7_detached(buf).unwrap();
+        let buf = b"<</Type/Sig/SubFilter/ETSI.CAdES.detached/Contents   <001122>";
+        let base = find_subfilter_pades(buf).unwrap();
         let lt = find_contents_hex_angle_open(buf, base).unwrap();
         assert_eq!(buf[lt], b'<');
     }
 
     #[test]
     fn active_subfilter_is_provisional_when_multiple_signatures() {
-        let first = b"<</Type/Sig/SubFilter/adbe.pkcs7.detached/Contents<ABCDEF>";
-        let second = b"<</Type/Sig/SubFilter/adbe.pkcs7.detached/Contents<000000000000>";
+        let first = b"<</Type/Sig/SubFilter/ETSI.CAdES.detached/Contents<ABCDEF>";
+        let second = b"<</Type/Sig/SubFilter/ETSI.CAdES.detached/Contents<000000000000>";
         let mut buf = Vec::new();
         buf.extend_from_slice(first);
         buf.extend_from_slice(second);
-        assert_eq!(enumerate_subfilter_adobe_pkcs7_detached(&buf).len(), 2);
-        let last = find_subfilter_adobe_pkcs7_detached_from(&buf, 0).unwrap();
-        let active = find_subfilter_adobe_pkcs7_detached(&buf).unwrap();
+        assert_eq!(enumerate_subfilter_pades(&buf).len(), 2);
+        let last = find_subfilter_pades_from(&buf, 0).unwrap();
+        let active = find_subfilter_pades(&buf).unwrap();
         assert!(contents_hex_is_provisional(&buf, active));
         assert_ne!(last, active);
+    }
+
+    #[test]
+    fn mixed_subfilters_both_found() {
+        let etsi = b"<</Type/Sig/SubFilter/ETSI.CAdES.detached/Contents<ABCDEF>";
+        let adbe = b"<</Type/Sig/SubFilter/adbe.pkcs7.detached/Contents<000000>";
+        let mut buf = Vec::new();
+        buf.extend_from_slice(etsi);
+        buf.extend_from_slice(adbe);
+        assert_eq!(enumerate_subfilter_pades(&buf).len(), 2);
     }
 }
