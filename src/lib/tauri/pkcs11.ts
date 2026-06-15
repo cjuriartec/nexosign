@@ -4,6 +4,9 @@ export type SigningCertSource = "pkcs11" | "win_my";
 
 export type SigningPinUi = "required_in_app" | "hidden_use_os_crypto" | "os_may_prompt";
 
+/** Dónde está la clave privada en almacén Windows MY (solo `win_my`). */
+export type WinMyKeyBinding = "smart_card" | "software" | "unknown";
+
 export type SigningCertSummary = {
 	id_hex: string;
 	label: string;
@@ -12,6 +15,7 @@ export type SigningCertSummary = {
 	pin_ui?: SigningPinUi;
 	/** Huella SHA-1 del DER; el backend oculta MY duplicado cuando coincide con chip. */
 	cert_thumbprint_sha1_hex?: string;
+	win_my_key_binding?: WinMyKeyBinding;
 };
 
 /** PKCS#11 requiere PIN en la app; almacén MY solo si `required_in_app`. */

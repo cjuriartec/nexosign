@@ -10,17 +10,14 @@
 	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
 	import {
 		hasPkcs11ChipCerts,
-		onlyWinMySigningCerts,
 		probeTotalSlotsWithToken,
-		winMyOnlyHintBrief,
+		signingCertListContextHint,
 	} from "$lib/tauri/pkcs11-ux";
 	import { isTauriRuntime } from "$lib/tauri/env";
 	import { invokeWithTimeout } from "$lib/tauri/invoke-timeout";
 	import { getHumanNameFromDn, extractDniFromDn } from "$lib/signature-appearance";
 	import SignatureAppearanceCard from "$lib/components/signature-appearance-card.svelte";
 	import SigningCertPicker from "$lib/components/signing-cert-picker.svelte";
-	import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert/index.js";
-	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import IdCardIcon from "@lucide/svelte/icons/id-card";
 	import KeyRoundIcon from "@lucide/svelte/icons/key-round";
@@ -60,10 +57,8 @@
 		return null;
 	});
 
-	const winMyOnlyHint = $derived(
-		isTauriRuntime() && onlyWinMySigningCerts(certs)
-			? winMyOnlyHintBrief(chipProbe, slotsWithTokenCount)
-			: null,
+	const listContextHint = $derived(
+		isTauriRuntime() ? signingCertListContextHint(certs, slotsWithTokenCount) : null,
 	);
 	const showPinProbe = $derived(
 		isTauriRuntime() && slotsWithTokenCount > 0 && !hasPkcs11ChipCerts(certs),
@@ -243,14 +238,6 @@
 			</div>
 
 			<div class="flex flex-col gap-3 p-4 sm:p-5">
-				{#if winMyOnlyHint}
-					<Alert class="py-2.5">
-						<TriangleAlertIcon class="size-4" />
-						<AlertTitle class="text-sm">Solo en Windows</AlertTitle>
-						<AlertDescription class="text-xs leading-snug">{winMyOnlyHint}</AlertDescription>
-					</Alert>
-				{/if}
-
 				{#if showPinProbe}
 					<div
 						class="border-border/70 bg-muted/15 space-y-2.5 rounded-lg border border-dashed px-3 py-3"
@@ -300,6 +287,7 @@
 						bind:certId
 						{busy}
 						slotsWithToken={slotsWithTokenCount}
+						contextHint={listContextHint}
 						helpVariant="full"
 						showDedupeNote={false}
 						compact

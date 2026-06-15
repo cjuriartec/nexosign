@@ -8,6 +8,7 @@
 		emptySigningCertsHelp,
 		emptySigningCertsHelpBrief,
 		signingCertSourceLabel,
+		signingCertSourceSubtitle,
 	} from "$lib/tauri/pkcs11-ux";
 	import { getHumanNameFromDn, extractDniFromDn } from "$lib/signature-appearance";
 	import { cn } from "$lib/utils.js";
@@ -28,6 +29,8 @@
 		onResetReader?: () => void | Promise<void>;
 		/** Asistente Firmar: menos padding y sin fila extra de acciones. */
 		compact?: boolean;
+		/** Mensaje extra cuando la lista está vacía (política chip vs MY). */
+		contextHint?: string | null;
 		class?: string;
 	}
 
@@ -41,6 +44,7 @@
 		onRefresh,
 		onResetReader,
 		compact = false,
+		contextHint = null,
 		class: className,
 	}: Props = $props();
 
@@ -101,11 +105,12 @@
 		>
 			<TriangleAlertIcon class="size-4" />
 			<AlertTitle class="text-sm">{emptyHelp.title}</AlertTitle>
-			{#if helpVariant === "full"}
-				<AlertDescription class="text-xs leading-snug">{emptyHelp.description}</AlertDescription>
-			{:else}
-				<AlertDescription class="text-xs">{emptyHelp.description}</AlertDescription>
-			{/if}
+			<AlertDescription class="space-y-1.5 text-xs leading-snug">
+				<p>{emptyHelp.description}</p>
+				{#if contextHint}
+					<p class="text-muted-foreground">{contextHint}</p>
+				{/if}
+			</AlertDescription>
 		</Alert>
 	{:else}
 		<div
@@ -119,6 +124,7 @@
 				{@const selected = certId === c.id_hex}
 				{@const name = getHumanNameFromDn(c.subject_dn) || c.label || "(sin etiqueta)"}
 				{@const dni = extractDniFromDn(c.subject_dn)}
+				{@const subtitle = signingCertSourceSubtitle(c.source, c.win_my_key_binding)}
 				<button
 					type="button"
 					role="radio"
@@ -155,6 +161,9 @@
 						</span>
 						{#if dni}
 							<span class="text-muted-foreground block text-[11px] tabular-nums leading-tight">{dni}</span>
+						{/if}
+						{#if subtitle}
+							<span class="text-muted-foreground block text-[10px] leading-tight">{subtitle}</span>
 						{/if}
 					</span>
 					{#if selected}

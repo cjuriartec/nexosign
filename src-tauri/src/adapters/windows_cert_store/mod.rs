@@ -23,7 +23,7 @@ use windows::Win32::Security::Cryptography::{
 
 use crate::domain::cert_filter::der_is_signing_certificate;
 use crate::domain::signing_cert::{
-    sha1_thumbprint_hex, SigningCertSource, SigningCertSummary, SigningPinUi,
+    sha1_thumbprint_hex, SigningCertSource, SigningCertSummary, SigningPinUi, WinMyKeyBinding,
     WIN_MY_CERT_ID_PREFIX,
 };
 use x509_cert::Certificate;
@@ -151,16 +151,40 @@ unsafe fn provider_name_lower(ctx: *const CERT_CONTEXT) -> Option<String> {
     wstr_to_lower(kpi.pwszProvName)
 }
 
+fn provider_suggests_smart_card(name: &str) -> bool {
+    name.contains("smart card")
+        || name.contains("scard")
+        || name.contains("virtual smart card")
+        || name.contains("minidriver")
+}
+
+fn provider_suggests_software(name: &str) -> bool {
+    name.contains("microsoft software key storage") || name.contains("software key storage")
+}
+
+/// Clasifica si la clave privada en MY está en tarjeta o en software local.
+pub(crate) unsafe fn classify_win_my_key_binding(ctx: *const CERT_CONTEXT) -> WinMyKeyBinding {
+    if let Some(name) = provider_name_lower(ctx) {
+        if provider_suggests_smart_card(&name) {
+            return WinMyKeyBinding::SmartCard;
+        }
+        if provider_suggests_software(&name) {
+            return WinMyKeyBinding::Software;
+        }
+    }
+    if silent_acquire_succeeds(ctx) {
+        WinMyKeyBinding::Software
+    } else {
+        WinMyKeyBinding::Unknown
+    }
+}
+
 pub(crate) unsafe fn classify_pin_ui(ctx: *const CERT_CONTEXT) -> SigningPinUi {
     if let Some(name) = provider_name_lower(ctx) {
-        if name.contains("smart card")
-            || name.contains("scard")
-            || name.contains("virtual smart card")
-            || name.contains("minidriver")
-        {
+        if provider_suggests_smart_card(&name) {
             return SigningPinUi::RequiredInApp;
         }
-        if name.contains("microsoft software key storage") || name.contains("software key storage") {
+        if provider_suggests_software(&name) {
             return if silent_acquire_succeeds(ctx) {
                 SigningPinUi::HiddenUseOsCrypto
             } else {
@@ -241,7 +265,9 @@ pub fn list_my_store_signing_rsa_certs() -> Result<Vec<SigningCertSummary>, WinC
                 let thumb = sha1_thumbprint(ctx)?;
                 let id_hex = format!("{}{}", WIN_MY_CERT_ID_PREFIX, hex::encode(thumb));
                 let subject_dn = subject_dn_from_der(der);
-                let pin_ui = classify_pin_ui(ctx as *const CERT_CONTEXT);
+                let ctx_const = ctx as *const CERT_CONTEXT;
+                let pin_ui = classify_pin_ui(ctx_const);
+                let key_binding = classify_win_my_key_binding(ctx_const);
                 let label = if subject_dn.is_empty() {
                     id_hex.clone()
                 } else {
@@ -254,6 +280,7 @@ pub fn list_my_store_signing_rsa_certs() -> Result<Vec<SigningCertSummary>, WinC
                     source: SigningCertSource::WinMy,
                     pin_ui,
                     cert_thumbprint_sha1_hex: sha1_thumbprint_hex(der),
+                    win_my_key_binding: Some(key_binding),
                 });
             }
             prev = Some(ctx.cast_const());

@@ -30,7 +30,14 @@
 	import { enumeratePdfsUnderFolder } from "$lib/tauri/batch";
 	import { getBatchSignIntent } from "$lib/tauri/batch-sign-intent";
 	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
-	import { maybePersistPreferredModuleAfterSuccessfulBatch } from "$lib/tauri/pkcs11-ux";
+	import {
+		hasPkcs11ChipCerts,
+		maybePersistPreferredModuleAfterSuccessfulBatch,
+		signingCertListContextHint,
+	} from "$lib/tauri/pkcs11-ux";
+	import { Input } from "$lib/components/ui/input/index.js";
+	import { Label } from "$lib/components/ui/label/index.js";
+	import KeyRoundIcon from "@lucide/svelte/icons/key-round";
 	import {
 		buildSignJobFileDisplayList,
 		labelFromProgressPayload,
@@ -80,6 +87,8 @@
 	let certs = $state<SigningCertSummary[]>([]);
 	/** Slots con token presente (para mensajes si la lista de firma está vacía). */
 	let slotsWithTokenCount = $state(0);
+	let probePin = $state("");
+	let pinProbeBusy = $state(false);
 	let certId = $state("");
 	let pin = $state("");
 	let pinVisible = $state(false);
@@ -158,6 +167,13 @@
 	const selectedCert = $derived(certs.find((c) => c.id_hex === certId) ?? null);
 
 	const pinRequired = $derived(pkcs11.pinRequiredInApp(selectedCert));
+
+	const listContextHint = $derived(
+		isTauriRuntime() ? signingCertListContextHint(certs, slotsWithTokenCount) : null,
+	);
+	const showPinProbe = $derived(
+		isTauriRuntime() && wizardStep === 3 && slotsWithTokenCount > 0 && !hasPkcs11ChipCerts(certs),
+	);
 
 	const jobFileDisplayList = $derived(
 		buildSignJobFileDisplayList(paths, jobFileResults, { signing: resultStepSigning }),
@@ -265,6 +281,32 @@
 			await refreshCerts();
 		} finally {
 			busy = false;
+		}
+	}
+
+	async function tryListWithPin() {
+		if (!isTauriRuntime() || !probePin.trim()) {
+			toast.error("Introduce el PIN del DNIe.");
+			return;
+		}
+		pinProbeBusy = true;
+		try {
+			certs = await pkcs11.pkcs11ListSigningWithPin(probePin.trim());
+			if (certs.length && !certId) {
+				certId = certs[0]?.id_hex ?? "";
+			}
+			slotsWithTokenCount = await pkcs11.pkcs11SlotCount().catch(() => slotsWithTokenCount);
+			if (hasPkcs11ChipCerts(certs)) {
+				toast.success("Certificado del lector detectado");
+			} else {
+				toast.message("PIN correcto, sin certificado de firma en chip");
+			}
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			await pkcs11.pkcs11ResetConnection().catch(() => {});
+			probePin = "";
+			pinProbeBusy = false;
 		}
 	}
 
@@ -818,24 +860,65 @@
 
 	{#if wizardStep === 3}
 		<SignWizardPanel>
-			<SigningCertPicker
-				{certs}
-				bind:certId
-				{busy}
-				slotsWithToken={slotsWithTokenCount}
-				helpVariant="brief"
-				showDedupeNote={false}
-				compact
-				class="min-h-0 flex-1"
-				onRefresh={() => refreshCertsWithBusy()}
-				onResetReader={() => resetPkcs11ConnectionAndRefresh()}
-			/>
+			<div class="flex min-h-0 flex-1 flex-col gap-2">
+				{#if showPinProbe}
+					<div
+						class="border-border/70 bg-muted/15 shrink-0 space-y-2 rounded-lg border border-dashed px-2.5 py-2"
+					>
+						<div class="flex items-start gap-2">
+							<KeyRoundIcon class="text-muted-foreground mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+							<p class="text-muted-foreground text-[11px] leading-snug">
+								El lector responde. Introduce el PIN del DNIe para listar el certificado de firma del chip.
+							</p>
+						</div>
+						<div class="flex flex-wrap items-end gap-2">
+							<div class="min-w-[7rem] flex-1 space-y-1">
+								<Label for="sign-pin-probe" class="text-xs">PIN</Label>
+								<Input
+									id="sign-pin-probe"
+									type="password"
+									autocomplete="off"
+									placeholder="••••"
+									class="h-8"
+									bind:value={probePin}
+									disabled={pinProbeBusy || busy}
+									onkeydown={(e) => {
+										if (e.key === "Enter" && probePin.trim()) void tryListWithPin();
+									}}
+								/>
+							</div>
+							<Button
+								variant="secondary"
+								size="sm"
+								class="h-8 shrink-0"
+								disabled={pinProbeBusy || busy || !probePin.trim()}
+								onclick={() => tryListWithPin()}
+							>
+								{pinProbeBusy ? "Leyendo…" : "Probar PIN"}
+							</Button>
+						</div>
+					</div>
+				{/if}
+				<SigningCertPicker
+					{certs}
+					bind:certId
+					busy={busy || pinProbeBusy}
+					slotsWithToken={slotsWithTokenCount}
+					contextHint={listContextHint}
+					helpVariant="brief"
+					showDedupeNote={false}
+					compact
+					class="min-h-0 flex-1"
+					onRefresh={() => refreshCertsWithBusy()}
+					onResetReader={() => resetPkcs11ConnectionAndRefresh()}
+				/>
+			</div>
 			{#snippet footer()}
 				<Button
 					type="button"
 					size="sm"
 					class="gap-1"
-					disabled={busy || !certId.trim() || certs.length === 0}
+					disabled={busy || pinProbeBusy || !certId.trim() || certs.length === 0}
 					onclick={() => step3CertContinue()}
 				>
 					Siguiente

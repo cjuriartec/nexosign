@@ -18,7 +18,22 @@ El identificador en la UI es `winmy:` seguido de la huella **SHA-1** del certifi
 
 ### Deduplicación chip + MY
 
-Si el mismo certificado (misma huella SHA-1 del DER) aparece en **PKCS#11** y en **MY**, `list_signing_certificates` devuelve **solo la entrada del lector (chip)**. Así la UI no duplica el mismo DNIe. Los certificados que solo existen en MY (sin lectura en chip) siguen listándose.
+Si el mismo certificado (misma huella SHA-1 del DER) aparece en **PKCS#11** y en **MY**, `list_signing_certificates` devuelve **solo la entrada del lector (chip)**. Así la UI no duplica el mismo DNIe.
+
+### Política de visibilidad (MY vs chip)
+
+Tras fusionar PKCS#11 + MY y deduplicar, se aplica `apply_signing_cert_visibility_policy` en el dominio (`domain/signing_cert.rs`):
+
+| Tipo en MY (`win_my_key_binding`) | ¿Hay certificado PKCS#11 en la lista? | ¿Se muestra? |
+|-----------------------------------|----------------------------------------|--------------|
+| `smart_card` o `unknown` | No | **No** (evita el DNIe “fantasma” solo en Windows) |
+| `smart_card` o `unknown` | Sí | Oculto por dedupe; solo **Lector (chip)** |
+| `software` | No | **Sí** (firma con clave en el PC) |
+| `software` | Sí | Ambos si son certificados distintos |
+
+La clasificación del binding usa el proveedor de clave en MY (`smart card`, `minidriver`, `software key storage`, etc.).
+
+**UX:** si el lector detecta tarjeta pero la lista queda vacía (p. ej. el chip exige PIN para enumerar), la UI ofrece **Probar con PIN** en Certificados y en el paso 3 del asistente Firmar.
 
 ### PIN en la interfaz (`pin_ui`)
 
