@@ -178,7 +178,7 @@
 	<title>Certificados — NexoSign</title>
 </svelte:head>
 
-<div class="mx-auto flex w-full max-w-xl flex-1 flex-col gap-4 pb-6">
+<div class="mx-auto flex w-full max-w-xl min-h-0 flex-1 flex-col gap-4 overflow-y-auto pb-6">
 	<header class="flex flex-col items-center gap-2 pt-1 text-center">
 		<div
 			class="bg-primary/10 text-primary flex size-11 items-center justify-center rounded-full ring-1 ring-primary/20"

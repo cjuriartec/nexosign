@@ -106,8 +106,8 @@
 <Sidebar.Provider open={false}>
 	<AppSidebar />
 	<Sidebar.Inset>
-		<main class="flex min-h-svh flex-1 flex-col">
-			<div class="mx-auto w-full max-w-6xl flex-1 p-4 sm:p-5 md:p-6">
+		<main class="flex h-svh min-h-0 flex-col overflow-hidden">
+			<div class="mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col overflow-hidden p-4 sm:p-5 md:p-6">
 				{@render children?.()}
 			</div>
 		</main>
