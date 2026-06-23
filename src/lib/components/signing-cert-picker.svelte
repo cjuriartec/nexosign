@@ -57,7 +57,7 @@
 
 <div
 	class={cn(
-		compact ? "flex min-h-0 flex-1 flex-col gap-2" : "space-y-3",
+		compact ? "flex flex-col gap-2" : "space-y-3",
 		className,
 	)}
 >
@@ -114,9 +114,7 @@
 		</Alert>
 	{:else}
 		<div
-			class={cn(
-				compact ? "min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5" : "space-y-2",
-			)}
+			class={cn(compact ? "space-y-1.5" : "space-y-2")}
 			role="radiogroup"
 			aria-label="Certificado de firma"
 		>

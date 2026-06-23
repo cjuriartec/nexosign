@@ -26,9 +26,16 @@
 	let {
 		certs = [],
 		compact = false,
+		/** En vista estrecha (Certificados), muestra la vista previa antes que el editor. */
+		previewFirst = false,
 		/** Oculta el título cuando la página ya lleva cabecera de sección. */
 		hideHeader = false,
-	}: { certs: SigningCertSummary[]; compact?: boolean; hideHeader?: boolean } = $props();
+	}: {
+		certs: SigningCertSummary[];
+		compact?: boolean;
+		previewFirst?: boolean;
+		hideHeader?: boolean;
+	} = $props();
 
 	let appearance = $state<SignatureAppearanceState>(defaultSignatureAppearance());
 	let fileInput = $state<HTMLInputElement | null>(null);
@@ -302,11 +309,17 @@
 	{/if}
 
 	<div
-		class="grid grid-cols-1 gap-3 @min-[640px]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,2fr)] @min-[640px]:gap-3"
+		class={cn(
+			"grid grid-cols-1 gap-3",
+			!previewFirst && "@min-[640px]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,2fr)] @min-[640px]:gap-3",
+		)}
 	>
 		<!-- 1 · Chips -->
 		<div
-			class="border-border/50 bg-muted/15 flex flex-col gap-2 rounded-lg border p-3 @min-[640px]:max-h-[min(85vh,520px)] @min-[640px]:overflow-y-auto"
+			class={cn(
+				"border-border/50 bg-muted/15 flex flex-col gap-2 rounded-lg border p-3 @min-[640px]:max-h-[min(85vh,520px)] @min-[640px]:overflow-y-auto",
+				previewFirst && "order-2",
+			)}
 		>
 			<div>
 				<h3 class="text-sm font-medium">Campos</h3>
@@ -331,7 +344,12 @@
 		</div>
 
 		<!-- 2 · Orden -->
-		<div class="border-border/50 flex min-h-0 min-w-0 select-none flex-col gap-2 rounded-lg border p-3 @min-[640px]:max-h-[min(85vh,520px)]">
+		<div
+			class={cn(
+				"border-border/50 flex min-h-0 min-w-0 select-none flex-col gap-2 rounded-lg border p-3 @min-[640px]:max-h-[min(85vh,520px)]",
+				previewFirst && "order-3",
+			)}
+		>
 			<div class="shrink-0">
 				<h3 class="text-sm font-medium">Orden del sello</h3>
 				{#if !compact}
@@ -451,7 +469,10 @@
 
 		<!-- 3 · Vista previa -->
 		<div
-			class="border-border/50 bg-muted/10 flex flex-col gap-2 rounded-lg border p-3 @min-[640px]:max-h-[min(85vh,520px)] @min-[640px]:overflow-y-auto"
+			class={cn(
+				"border-border/50 bg-muted/10 flex flex-col gap-2 rounded-lg border p-3 @min-[640px]:max-h-[min(85vh,520px)] @min-[640px]:overflow-y-auto",
+				previewFirst && "order-1",
+			)}
 		>
 			<div>
 				<h3 class="text-sm font-medium">Vista previa</h3>
