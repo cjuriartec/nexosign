@@ -281,7 +281,7 @@
 					</div>
 				{/if}
 
-				<div class="scrollbar-subtle max-h-[min(50vh,26rem)] overflow-y-auto pr-0.5">
+				<div class="flex max-h-[min(50vh,26rem)] min-h-0 flex-col">
 					<SigningCertPicker
 						{certs}
 						bind:certId
@@ -291,6 +291,7 @@
 						helpVariant="full"
 						showDedupeNote={false}
 						compact
+						class="min-h-0 flex-1"
 						onRefresh={() => loadCerts({ runChipProbe: true })}
 						onResetReader={() => resetReaderAndReload()}
 					/>
@@ -323,7 +324,7 @@
 			</div>
 
 			<div class="p-4 sm:p-5">
-				<SignatureAppearanceCard certs={previewCerts} compact previewFirst hideHeader />
+				<SignatureAppearanceCard certs={previewCerts} compact hideHeader />
 			</div>
 		</section>
 	{/if}
