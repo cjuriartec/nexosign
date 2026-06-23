@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2026-06-23
+
+### Added
+
+- **Firmar:** overlay con blur al arrastrar PDF o carpetas sobre la ventana.
+- **Toasts:** avisos compactos al omitir archivos inválidos del lote (nombre de archivo y motivo breve).
+
+### Changed
+
+- **Toasts:** posición inferior derecha, menos intrusivos; errores de validación como aviso en lugar de bloque rojo.
+- **Resultados de firma:** mensajes de error más legibles en la lista del lote.
+
+### Fixed
+
+- **PAdES:** firma incremental en PDF ya firmados (última firma, reserva de `ByteRange` y CMS).
+- **PAdES:** lectura de `MediaBox` con fallback cuando el trailer del PDF no es parseable.
+- **Colas:** entrada en el menú y acceso directo a `/queue` sin redirección forzada.
+
 ## [1.0.4] - 2026-06-01
 
 ### Added
