@@ -11,7 +11,6 @@
 	import FileStackIcon from "@lucide/svelte/icons/files";
 	import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
-	import UploadIcon from "@lucide/svelte/icons/upload";
 	import KeyRoundIcon from "@lucide/svelte/icons/key-round";
 
 	interface Props {
@@ -88,23 +87,20 @@
 	<!-- Zona de carga -->
 	<div
 		class={cn(
-			"relative shrink-0 overflow-hidden rounded-xl border-2 border-dashed transition-colors",
+			"relative shrink-0 overflow-hidden rounded-xl border-2 border-dashed transition-[border-color,box-shadow,background-color] duration-200",
 			dropHover
-				? "border-primary bg-primary/10"
+				? "border-primary bg-primary/5 shadow-[inset_0_0_0_1px] shadow-primary/20"
 				: paths.length === 0
 					? "border-border/80 bg-muted/15 hover:border-primary/35"
 					: "border-border/60 bg-muted/10",
 		)}
 	>
-		{#if dropHover}
-			<div
-				class="bg-primary/5 pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-2"
-			>
-				<UploadIcon class="text-primary size-8" aria-hidden="true" />
-				<p class="text-primary text-sm font-medium">Suelta PDF o carpeta</p>
-			</div>
-		{/if}
-
+		<div
+			class={cn(
+				"transition-opacity duration-200",
+				dropHover && "opacity-40",
+			)}
+		>
 		<div class="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
 			<div class="min-w-0 space-y-1">
 				<p class="text-sm font-medium">
@@ -146,6 +142,7 @@
 					</Button>
 				{/if}
 			</div>
+		</div>
 		</div>
 	</div>
 

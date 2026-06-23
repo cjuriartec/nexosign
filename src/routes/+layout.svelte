@@ -5,6 +5,7 @@
 	import { listen } from "@tauri-apps/api/event";
 	import { ask } from "@tauri-apps/plugin-dialog";
 	import { toast } from "svelte-sonner";
+	import { toastFail } from "$lib/ui/app-toast";
 	import { ModeWatcher } from "mode-watcher";
 	import { Toaster } from "$lib/components/ui/sonner/index.js";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
@@ -25,10 +26,7 @@
 		const detail = status.error
 			? `Puerto ${status.port}: ${status.error}`
 			: `No se pudo abrir el puerto ${status.port}.`;
-		toast.error("API local no disponible", {
-			description: `${detail} Comprueba si otra aplicación usa ese puerto. La firma desde la app sigue disponible.`,
-			duration: 12_000,
-		});
+		toastFail("API local no disponible", `${detail} La firma desde la app sigue disponible.`);
 	}
 
 	onMount(() => {
@@ -101,7 +99,7 @@
 </script>
 
 <ModeWatcher />
-<Toaster richColors position="top-center" />
+<Toaster position="bottom-right" closeButton duration={4500} visibleToasts={3} expand={false} />
 
 <Sidebar.Provider open={false}>
 	<AppSidebar />

@@ -5,6 +5,7 @@
 	import { isTauriRuntime } from "$lib/tauri/env";
 	import { showOutputDirectoryInExplorer, showSignedOutputInExplorer } from "$lib/tauri/open-output";
 	import { toast } from "svelte-sonner";
+	import { humanizeUserFacingError } from "$lib/ui/pdf-rejection-toast";
 	import { cn } from "$lib/utils.js";
 	import CircleCheckIcon from "@lucide/svelte/icons/circle-check";
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
@@ -166,7 +167,12 @@
 							</div>
 
 							{#if item.error}
-								<p class="text-destructive text-xs leading-relaxed">{item.error}</p>
+								<p
+									class="text-destructive/90 text-xs leading-relaxed"
+									title={item.error}
+								>
+									{humanizeUserFacingError(item.error)}
+								</p>
 							{/if}
 						</div>
 					</div>

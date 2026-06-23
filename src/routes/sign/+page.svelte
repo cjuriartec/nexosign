@@ -3,6 +3,8 @@
 	import { open } from "@tauri-apps/plugin-dialog";
 	import { basename, dirname, join } from "$lib/tauri/path";
 	import { toast } from "svelte-sonner";
+	import { toastFail, toastInfo, toastWarn } from "$lib/ui/app-toast";
+	import { toastPdfRejections } from "$lib/ui/pdf-rejection-toast";
 	import { Button } from "$lib/components/ui/button/index.js";
 
 	import SignComposePanel from "$lib/components/sign-compose-panel.svelte";
@@ -44,6 +46,7 @@
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 	import BanIcon from "@lucide/svelte/icons/ban";
 	import PenLineIcon from "@lucide/svelte/icons/pen-line";
+	import UploadIcon from "@lucide/svelte/icons/upload";
 	import { listenWindowFileDrop } from "$lib/tauri/drag-drop";
 	import { ingestDroppedPaths } from "$lib/sign/ingest-dropped-paths";
 	import {
@@ -239,15 +242,7 @@
 		if (!isTauriRuntime()) return list;
 		if (list.length === 0) return [];
 		const { accepted, rejected } = await partitionBatchPdfPaths(list);
-		if (rejected.length > 0) {
-			const desc = rejected.map((r) => `${r.path}: ${r.reason}`).join("\n");
-			toast.error(
-				rejected.length === 1
-					? rejected[0].reason
-					: `${rejected.length} archivo(s) no se incluyeron (revisa tamaño ≤ 50 MiB y extensión .pdf)`,
-				{ description: desc },
-			);
-		}
+		if (rejected.length > 0) toastPdfRejections(rejected);
 		return accepted;
 	}
 
@@ -363,14 +358,11 @@
 		try {
 			const ingested = await ingestDroppedPaths(rawPaths, computeFirmadosDir);
 			if (ingested.pdfs.length === 0) {
-				toast.message("No se encontraron PDF en lo soltado.");
+				toastInfo("No hay PDF en lo soltado.");
 				return;
 			}
 			const beforeCount = paths.length;
 			await applyIngestedPaths(ingested, beforeCount > 0);
-			if (paths.length === beforeCount) {
-				toast.message("Ningún PDF válido (revisa extensión y tamaño ≤ 50 MiB).");
-			}
 		} catch (e) {
 			toast.error(String(e));
 		} finally {
@@ -415,9 +407,7 @@
 			intentRequestId = null;
 			intentDetachWizard();
 			if (pdfs.length === 0) {
-				toast.message("No hay PDFs en esa carpeta.");
-			} else if (paths.length === 0) {
-				toast.message("Ningún PDF válido en esa carpeta.");
+				toastInfo("No hay PDFs en esa carpeta.");
 			}
 		} catch (e) {
 			toast.error(String(e));
@@ -603,9 +593,7 @@
 			if (e instanceof LocalBackendInvokeError) {
 				const detail = e.detail || e.code;
 				if (detail.toLowerCase().includes("demasiado grande") || detail.includes("50 MiB")) {
-					toast.error(
-						"Uno o más PDF superan 50 MiB. Reduce el tamaño, divide el documento o quítalo del lote.",
-					);
+					toastWarn("PDF demasiado grande", "Máximo 50 MiB por archivo.");
 				} else if (
 					detail.toLowerCase().includes("pin") ||
 					detail.toLowerCase().includes("token") ||
@@ -613,29 +601,28 @@
 				) {
 					pinError =
 						"No hemos podido firmar con ese PIN. Revisa el PIN o vuelve a conectar el lector con la tarjeta dentro.";
-					toast.error(pinError);
+					toastFail(pinError);
 				} else {
-					toast.error(detail);
+					toastFail(detail);
 				}
 			} else if (e instanceof LocalApiHttpError) {
 				const detail = extractJsonErrorMessage(e.body) ?? e.message;
 				if (e.status === 400 && detail.includes("demasiado grande")) {
-					toast.error(
-						"Uno o más PDF superan 50 MiB. Reduce el tamaño, divide el documento o quítalo del lote.",
-					);
+					toastWarn("PDF demasiado grande", "Máximo 50 MiB por archivo.");
 				} else if (e.status === 401) {
 					pinError =
 						"No hemos podido firmar con ese PIN. Revisa el PIN o vuelve a conectar el lector con la tarjeta dentro.";
-					toast.error(pinError);
+					toastFail(pinError);
 				} else if (e.status === 403 && String(detail).toLowerCase().includes("origin")) {
-					toast.error(
-						"Origen no autorizado para la API local. Añade este origen en Ajustes → Orígenes permitidos.",
+					toastFail(
+						"Origen no autorizado",
+						"Añádelo en Ajustes → Orígenes permitidos.",
 					);
 				} else {
-					toast.error(detail);
+					toastFail(detail);
 				}
 			} else {
-				toast.error(String(e));
+				toastFail(String(e));
 			}
 		} finally {
 			busy = false;
@@ -765,8 +752,22 @@
 
 	{#if wizardStep === 1}
 		<section
-			class="bg-card text-card-foreground flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border shadow-sm"
+			class="bg-card text-card-foreground relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border shadow-sm"
 		>
+			{#if dropHover && isTauriRuntime()}
+				<div
+					class="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 rounded-xl bg-background/50 backdrop-blur-md transition-[background-color,backdrop-filter] duration-200 supports-backdrop-filter:backdrop-blur-md"
+					aria-hidden="true"
+				>
+					<div
+						class="border-primary/30 bg-card/85 flex flex-col items-center gap-2 rounded-2xl border px-8 py-6 shadow-lg backdrop-blur-sm"
+					>
+						<UploadIcon class="text-primary size-10" aria-hidden="true" />
+						<p class="text-primary text-sm font-semibold">Suelta PDF o carpeta</p>
+						<p class="text-muted-foreground text-xs">Se añadirán al lote</p>
+					</div>
+				</div>
+			{/if}
 			<div class="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5 scrollbar-subtle">
 				<SignComposePanel
 					{paths}
