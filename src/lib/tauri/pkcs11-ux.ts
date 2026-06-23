@@ -7,6 +7,7 @@ import type {
 	Pkcs11ProbeCertificateListing,
 	SigningCertSource,
 	SigningCertSummary,
+	WinMyKeyBinding,
 } from "./pkcs11";
 import { getPkcs11PreferredModule, setPkcs11PreferredModule } from "./settings";
 
@@ -23,9 +24,15 @@ export function signingCertSourceLabel(source?: SigningCertSource): string {
 }
 
 /** Subtítulo corto para selectores (origen del certificado). */
-export function signingCertSourceSubtitle(source?: SigningCertSource): string | null {
+export function signingCertSourceSubtitle(
+	source?: SigningCertSource,
+	winMyKeyBinding?: WinMyKeyBinding,
+): string | null {
 	if (source === "pkcs11") return "Tarjeta / lector";
-	if (source === "win_my") return "Almacén Personal de Windows";
+	if (source === "win_my") {
+		if (winMyKeyBinding === "software") return "Clave en este equipo";
+		return "Almacén Personal de Windows";
+	}
 	return null;
 }
 
@@ -37,13 +44,13 @@ export const DEDUPED_WIN_MY_FOOTNOTE =
 export function emptySigningCertsHelpBrief(slotsWithToken: number): EmptySigningCertsHelp {
 	if (slotsWithToken <= 0) {
 		return {
-			title: "Sin tarjeta en el lector",
-			description: "Conecta el DNIe y pulsa Actualizar.",
+			title: "Conecta el DNIe",
+			description: "Inserta la tarjeta en el lector y pulsa Actualizar.",
 		};
 	}
 	return {
-		title: "Sin certificado de firma",
-		description: "Prueba con PIN o revisa el lector en Ajustes.",
+		title: "Certificado no visible",
+		description: "El lector detecta tarjeta. Usa «Probar PIN» si hace falta.",
 	};
 }
 
@@ -57,10 +64,22 @@ export function emptySigningCertsHelp(slotsWithToken: number): EmptySigningCerts
 		};
 	}
 	return {
-		title: "Lector conectado, pero sin certificado de firma",
+		title: "Lector conectado, pero sin certificado de firma en el chip",
 		description:
-			"El lector reconoce tu DNIe o tarjeta, pero no encontramos ningún certificado de firma en el chip (puede que solo haya certificados de autenticación). En Ajustes → «Lector de DNIe y tarjetas» comprueba el controlador PKCS#11 del fabricante o pulsa «Reconectar lector» y vuelve aquí. No hace falta abrir otra aplicación para firmar.",
+			"El lector reconoce tu DNIe o tarjeta. Algunos tokens solo muestran el certificado de firma tras el PIN: usa «Probar con PIN» abajo. Si sigue vacío, revisa el controlador PKCS#11 en Ajustes o «Reconectar lector».",
 	};
+}
+
+/** Mensaje contextual bajo el selector cuando la lista está vacía (post-política de visibilidad). */
+export function signingCertListContextHint(
+	certs: SigningCertSummary[],
+	slotsWithToken: number,
+): string | null {
+	if (certs.length > 0) return null;
+	if (slotsWithToken <= 0) {
+		return "No mostramos certificados del almacén Windows si no hay lectura del chip: conecta el lector e inserta el DNIe.";
+	}
+	return "No aparece el certificado de firma del chip. Prueba con PIN (abajo) o reconecta el lector.";
 }
 
 /**
@@ -108,7 +127,7 @@ export function winMyOnlyChipUnreadableMessage(
 	const raw = probeTotalRawOnChip(probe);
 	const signing = probeTotalSigningOnChip(probe);
 	if (raw === 0) {
-		return "El lector está conectado, pero no vemos certificados en el chip sin PIN. Usa «Probar con PIN» en esta página o configura el controlador PKCS#11 del DNIe en Ajustes. El certificado «Windows (MY)» puede ser una copia en el PC, no el chip.";
+		return "El lector está conectado, pero no vemos certificados en el chip sin PIN. Usa «Probar con PIN» o configura el controlador PKCS#11 del DNIe en Ajustes.";
 	}
 	if (raw > 0 && signing === 0) {
 		return "Hay certificados en la tarjeta, pero ninguno tiene uso de firma electrónica (nonRepudiation) según nuestro criterio. Puede que solo haya certificados de autenticación en el chip.";
@@ -126,7 +145,7 @@ export function winMyOnlyHintBrief(
 	const raw = probeTotalRawOnChip(probe);
 	const signing = probeTotalSigningOnChip(probe);
 	if (raw === 0) {
-		return "Solo aparece en Windows. Prueba con PIN o revisa Ajustes.";
+		return "Prueba con PIN o revisa Ajustes.";
 	}
 	if (raw > 0 && signing === 0) {
 		return "En la tarjeta no hay certificado de firma (solo autenticación).";

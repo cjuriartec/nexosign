@@ -17,7 +17,7 @@ use crate::adapters::pkcs11::token::{
     Pkcs11Diagnostics, Pkcs11ProbeCertificateListing, Pkcs11TokenManager, SessionStatusDto,
 };
 use crate::domain::allowed_origins::AllowedOrigins;
-use crate::domain::signing_cert::SigningCertSummary;
+use crate::domain::signing_cert::{apply_signing_cert_visibility_policy, SigningCertSummary};
 #[cfg(windows)]
 use crate::domain::signing_cert::dedupe_signing_certs_prefer_pkcs11;
 use crate::infrastructure::origin_db::OriginDbPath;
@@ -476,17 +476,17 @@ pub async fn pkcs11_probe_certificate_listing(
 }
 
 #[cfg(windows)]
-fn append_windows_my_signing_certs(mut v: Vec<SigningCertSummary>) -> Vec<SigningCertSummary> {
+fn finalize_signing_cert_list(mut pkcs11: Vec<SigningCertSummary>) -> Vec<SigningCertSummary> {
     match crate::adapters::windows_cert_store::list_my_store_signing_rsa_certs() {
-        Ok(mut w) => v.append(&mut w),
+        Ok(mut w) => pkcs11.append(&mut w),
         Err(e) => tracing::warn!(error = %e, "listado certificados almacén Windows MY"),
     }
-    dedupe_signing_certs_prefer_pkcs11(v)
+    apply_signing_cert_visibility_policy(dedupe_signing_certs_prefer_pkcs11(pkcs11))
 }
 
 #[cfg(not(windows))]
-fn append_windows_my_signing_certs(v: Vec<SigningCertSummary>) -> Vec<SigningCertSummary> {
-    v
+fn finalize_signing_cert_list(pkcs11: Vec<SigningCertSummary>) -> Vec<SigningCertSummary> {
+    apply_signing_cert_visibility_policy(pkcs11)
 }
 
 #[tauri::command]
@@ -499,7 +499,7 @@ pub async fn pkcs11_list_signing_with_pin(
         let v = mgr
             .list_pkcs11_signing_with_pin(pin)
             .map_err(|e| e.to_string())?;
-        Ok(append_windows_my_signing_certs(v))
+        Ok(finalize_signing_cert_list(v))
     })
     .await
 }
@@ -511,7 +511,7 @@ pub async fn list_signing_certificates(
     let mgr = Arc::clone(&*state);
     pkcs11_blocking(move || {
         let v = mgr.list_signing_certificates().map_err(|e| e.to_string())?;
-        Ok(append_windows_my_signing_certs(v))
+        Ok(finalize_signing_cert_list(v))
     })
     .await
 }

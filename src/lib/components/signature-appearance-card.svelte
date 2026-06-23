@@ -26,9 +26,16 @@
 	let {
 		certs = [],
 		compact = false,
+		/** En vista estrecha (Certificados), muestra la vista previa antes que el editor. */
+		previewFirst = false,
 		/** Oculta el título cuando la página ya lleva cabecera de sección. */
 		hideHeader = false,
-	}: { certs: SigningCertSummary[]; compact?: boolean; hideHeader?: boolean } = $props();
+	}: {
+		certs: SigningCertSummary[];
+		compact?: boolean;
+		previewFirst?: boolean;
+		hideHeader?: boolean;
+	} = $props();
 
 	let appearance = $state<SignatureAppearanceState>(defaultSignatureAppearance());
 	let fileInput = $state<HTMLInputElement | null>(null);
@@ -289,7 +296,7 @@
 	const isDragging = $derived(drag !== null && drag.armed);
 </script>
 
-<div class="@container w-full min-w-0 space-y-3">
+<div class="@container w-full min-w-0 max-w-full space-y-2 overflow-hidden">
 	{#if !hideHeader}
 		<header class="space-y-0.5">
 			<h2 class="text-base font-semibold tracking-tight">Diseño del sello</h2>
@@ -302,11 +309,20 @@
 	{/if}
 
 	<div
-		class="grid grid-cols-1 gap-3 @min-[640px]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,2fr)] @min-[640px]:gap-3"
+		class={cn(
+			"grid grid-cols-1",
+			compact ? "gap-2" : "gap-3",
+			!previewFirst && "@min-[640px]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,2fr)] @min-[640px]:gap-3",
+		)}
 	>
 		<!-- 1 · Chips -->
 		<div
-			class="border-border/50 bg-muted/15 flex flex-col gap-2 rounded-lg border p-3 @min-[640px]:max-h-[min(85vh,520px)] @min-[640px]:overflow-y-auto"
+			class={cn(
+				"border-border/50 bg-muted/15 flex min-w-0 flex-col gap-2 rounded-lg border",
+				compact ? "p-2" : "p-3",
+				!compact && "@min-[640px]:max-h-[min(85vh,520px)] @min-[640px]:overflow-y-auto",
+				previewFirst && "order-2",
+			)}
 		>
 			<div>
 				<h3 class="text-sm font-medium">Campos</h3>
@@ -320,7 +336,10 @@
 				{#each PALETTE_ITEMS as item}
 					<button
 						type="button"
-						class="border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex w-full cursor-grab touch-none select-none items-center justify-start rounded-md border px-2.5 py-1.5 text-left text-sm font-medium shadow-sm transition-colors active:cursor-grabbing"
+						class={cn(
+							"border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex w-full min-w-0 cursor-grab touch-none select-none items-center justify-start rounded-md border px-2 py-1 text-left font-medium shadow-sm transition-colors active:cursor-grabbing",
+							compact ? "text-xs" : "px-2.5 py-1.5 text-sm",
+						)}
 						onpointerdown={(e) => startPaletteDrag(e, item.part, item.label)}
 						onclick={() => appendPart(item.part)}
 					>
@@ -331,7 +350,14 @@
 		</div>
 
 		<!-- 2 · Orden -->
-		<div class="border-border/50 flex min-h-0 min-w-0 select-none flex-col gap-2 rounded-lg border p-3 @min-[640px]:max-h-[min(85vh,520px)]">
+		<div
+			class={cn(
+				"border-border/50 flex min-w-0 select-none flex-col gap-2 rounded-lg border",
+				compact ? "p-2" : "p-3",
+				!compact && "min-h-0 @min-[640px]:max-h-[min(85vh,520px)]",
+				previewFirst && "order-3",
+			)}
+		>
 			<div class="shrink-0">
 				<h3 class="text-sm font-medium">Orden del sello</h3>
 				{#if !compact}
@@ -341,7 +367,10 @@
 				{/if}
 			</div>
 
-			<div class="min-h-0 flex-1 overflow-y-auto pr-0.5" bind:this={listEl}>
+			<div
+				class={cn("pr-0.5", !compact && "min-h-0 flex-1 overflow-y-auto")}
+				bind:this={listEl}
+			>
 				{#if appearance.parts.length === 0}
 					<div
 						class={cn(
@@ -373,7 +402,7 @@
 							<div
 								data-row
 								class={cn(
-									"border-input bg-card text-card-foreground my-1 flex items-center gap-1 rounded-lg border px-1.5 py-1 shadow-sm transition-opacity",
+									"border-input bg-card text-card-foreground my-1 flex min-w-0 items-center gap-1 rounded-lg border px-1.5 py-1 shadow-sm transition-opacity",
 									isOrigin && "opacity-30",
 								)}
 							>
@@ -451,7 +480,12 @@
 
 		<!-- 3 · Vista previa -->
 		<div
-			class="border-border/50 bg-muted/10 flex flex-col gap-2 rounded-lg border p-3 @min-[640px]:max-h-[min(85vh,520px)] @min-[640px]:overflow-y-auto"
+			class={cn(
+				"border-border/50 bg-muted/10 flex min-w-0 flex-col gap-2 rounded-lg border",
+				compact ? "p-2" : "p-3",
+				!compact && "@min-[640px]:max-h-[min(85vh,520px)] @min-[640px]:overflow-y-auto",
+				previewFirst && "order-1",
+			)}
 		>
 			<div>
 				<h3 class="text-sm font-medium">Vista previa</h3>
@@ -478,13 +512,20 @@
 				/>
 			</div>
 
-			<div class="mx-auto w-min min-w-[120px] overflow-hidden rounded-md border border-border bg-background shadow-sm ring-1 ring-black/5 dark:ring-white/10">
+			<div class="mx-auto w-full max-w-[120px] overflow-hidden rounded-md border border-border bg-background shadow-sm ring-1 ring-black/5 dark:ring-white/10">
 				<div class="flex justify-center pb-1">
-					<img src={imgSrc} alt="" class="w-[120px] object-contain" />
+					<img src={imgSrc} alt="" class="w-full max-w-[120px] object-contain" />
 				</div>
 				<div class="px-2 pt-1 pb-2 text-justify">
 					{#each previewLines as line}
-						<p class="text-[9px] leading-tight text-foreground wrap-break-word">{line}</p>
+						<p
+							class={cn(
+								"leading-tight text-foreground break-all",
+								compact ? "text-[8px]" : "text-[9px] wrap-break-word",
+							)}
+						>
+							{line}
+						</p>
 					{/each}
 				</div>
 				{#if !previewCert}

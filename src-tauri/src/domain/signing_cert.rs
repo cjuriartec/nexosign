@@ -72,6 +72,42 @@ pub fn dedupe_signing_certs_prefer_pkcs11(certs: Vec<SigningCertSummary>) -> Vec
         .collect()
 }
 
+/// Dónde reside la clave privada asociada a un certificado en el almacén MY (solo Windows).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WinMyKeyBinding {
+    /// Clave en tarjeta inteligente / lector (referencia en MY).
+    SmartCard,
+    /// Clave software en este equipo.
+    Software,
+    /// No clasificado; se trata como tarjeta para la política de visibilidad.
+    Unknown,
+}
+
+/// `true` si la lista incluye al menos un certificado de firma leído del chip (PKCS#11).
+pub fn has_pkcs11_signing_cert(certs: &[SigningCertSummary]) -> bool {
+    certs.iter().any(|c| c.source == SigningCertSource::Pkcs11)
+}
+
+/// Oculta entradas MY ligadas a tarjeta cuando el chip no está visible en PKCS#11.
+pub fn apply_signing_cert_visibility_policy(certs: Vec<SigningCertSummary>) -> Vec<SigningCertSummary> {
+    if has_pkcs11_signing_cert(&certs) {
+        return certs;
+    }
+    certs
+        .into_iter()
+        .filter(|c| {
+            if c.source != SigningCertSource::WinMy {
+                return true;
+            }
+            match c.win_my_key_binding {
+                Some(WinMyKeyBinding::Software) => true,
+                Some(WinMyKeyBinding::SmartCard) | Some(WinMyKeyBinding::Unknown) | None => false,
+            }
+        })
+        .collect()
+}
+
 /// Origen del certificado en la lista unificada.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -103,6 +139,9 @@ pub struct SigningCertSummary {
     pub pin_ui: SigningPinUi,
     /// Huella SHA-1 del DER (hex minúsculas); permite ocultar duplicados MY cuando ya hay chip.
     pub cert_thumbprint_sha1_hex: String,
+    /// Solo `win_my`: dónde está la clave privada (política de visibilidad).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub win_my_key_binding: Option<WinMyKeyBinding>,
 }
 
 #[cfg(test)]
@@ -115,6 +154,25 @@ mod tests {
         thumb: &str,
         subject: &str,
     ) -> SigningCertSummary {
+        cert_with_binding(id, source, thumb, subject, None)
+    }
+
+    fn cert_my(
+        id: &str,
+        thumb: &str,
+        subject: &str,
+        binding: WinMyKeyBinding,
+    ) -> SigningCertSummary {
+        cert_with_binding(id, SigningCertSource::WinMy, thumb, subject, Some(binding))
+    }
+
+    fn cert_with_binding(
+        id: &str,
+        source: SigningCertSource,
+        thumb: &str,
+        subject: &str,
+        win_my_key_binding: Option<WinMyKeyBinding>,
+    ) -> SigningCertSummary {
         SigningCertSummary {
             id_hex: id.to_string(),
             label: id.to_string(),
@@ -122,6 +180,7 @@ mod tests {
             source,
             pin_ui: SigningPinUi::RequiredInApp,
             cert_thumbprint_sha1_hex: thumb.to_string(),
+            win_my_key_binding,
         }
     }
 
@@ -175,5 +234,51 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert!(out.iter().any(|c| c.source == SigningCertSource::Pkcs11 && c.cert_thumbprint_sha1_hex == "deadbeef"));
         assert!(out.iter().any(|c| c.source == SigningCertSource::WinMy && c.cert_thumbprint_sha1_hex == "abc"));
+    }
+
+    #[test]
+    fn visibility_hides_my_smart_card_without_chip() {
+        let my = cert_my("winmy:aa", "aa", "CN=DNI", WinMyKeyBinding::SmartCard);
+        let out = apply_signing_cert_visibility_policy(vec![my]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn visibility_keeps_my_software_without_chip() {
+        let my = cert_my("winmy:bb", "bb", "CN=Soft", WinMyKeyBinding::Software);
+        let out = apply_signing_cert_visibility_policy(vec![my]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].source, SigningCertSource::WinMy);
+    }
+
+    #[test]
+    fn visibility_hides_my_unknown_without_chip() {
+        let my = cert_my("winmy:cc", "cc", "CN=X", WinMyKeyBinding::Unknown);
+        let out = apply_signing_cert_visibility_policy(vec![my]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn visibility_keeps_chip_and_hides_orphan_my_after_dedupe() {
+        let chip = cert("aa", SigningCertSource::Pkcs11, "deadbeef", "CN=Test");
+        let my = cert_my(
+            "winmy:deadbeef",
+            "deadbeef",
+            "CN=Test",
+            WinMyKeyBinding::SmartCard,
+        );
+        let out = apply_signing_cert_visibility_policy(dedupe_signing_certs_prefer_pkcs11(vec![
+            chip, my,
+        ]));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].source, SigningCertSource::Pkcs11);
+    }
+
+    #[test]
+    fn visibility_does_not_hide_my_smart_card_when_chip_present() {
+        let chip = cert("aa", SigningCertSource::Pkcs11, "t1", "CN=A");
+        let my_other = cert_my("winmy:t2", "t2", "CN=B", WinMyKeyBinding::SmartCard);
+        let out = apply_signing_cert_visibility_policy(vec![chip, my_other]);
+        assert_eq!(out.len(), 2);
     }
 }

@@ -4,17 +4,11 @@
 	import { cn } from "$lib/utils.js";
 	import CheckIcon from "@lucide/svelte/icons/check";
 	import FilesIcon from "@lucide/svelte/icons/files";
-	import LayoutGridIcon from "@lucide/svelte/icons/layout-grid";
-	import IdCardIcon from "@lucide/svelte/icons/id-card";
-	import PenLineIcon from "@lucide/svelte/icons/pen-line";
 	import ListChecksIcon from "@lucide/svelte/icons/list-checks";
 
 	const STEP_ICONS: Record<number, Component> = {
 		1: FilesIcon,
-		2: LayoutGridIcon,
-		3: IdCardIcon,
-		4: PenLineIcon,
-		5: ListChecksIcon,
+		2: ListChecksIcon,
 	};
 
 	interface Props {
@@ -27,10 +21,7 @@
 	let { currentStep, isStepDisabled, onStepClick, class: className }: Props = $props();
 </script>
 
-<nav
-	class={cn("w-full min-w-0", className)}
-	aria-label="Pasos de firma"
->
+<nav class={cn("w-full min-w-0", className)} aria-label="Pasos de firma">
 	<ol class="flex items-center gap-0">
 		{#each SIGN_STEPS as s, i (s.step)}
 			{@const done = currentStep > s.step}
@@ -59,10 +50,18 @@
 						<Icon class="size-3.5 sm:size-4" aria-hidden="true" />
 					{/if}
 				</button>
+				<span
+					class={cn(
+						"ml-1.5 hidden truncate text-xs font-medium sm:inline",
+						active ? "text-foreground" : "text-muted-foreground",
+					)}
+				>
+					{s.title}
+				</span>
 				{#if i < TOTAL_STEPS - 1}
 					<div
 						class={cn(
-							"mx-0.5 h-0.5 min-w-[6px] flex-1 rounded-full sm:mx-1",
+							"mx-1 h-0.5 min-w-[12px] flex-1 rounded-full sm:mx-2",
 							currentStep > s.step ? "bg-primary/70" : "bg-border",
 						)}
 						aria-hidden="true"

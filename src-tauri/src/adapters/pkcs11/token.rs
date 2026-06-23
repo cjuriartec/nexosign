@@ -225,6 +225,7 @@ fn collect_signing_certs_from_session(
             source: SigningCertSource::Pkcs11,
             pin_ui: SigningPinUi::RequiredInApp,
             cert_thumbprint_sha1_hex: sha1_thumbprint_hex(&der),
+            win_my_key_binding: None,
         });
     }
 
@@ -1053,6 +1054,7 @@ mod tests {
             source: SigningCertSource::Pkcs11,
             pin_ui: SigningPinUi::RequiredInApp,
             cert_thumbprint_sha1_hex: String::new(),
+            win_my_key_binding: None,
         }
     }
 

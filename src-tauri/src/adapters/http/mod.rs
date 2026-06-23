@@ -275,11 +275,6 @@ pub fn build_router(state: SharedState) -> Router {
                 let Ok(s) = origin.to_str() else {
                     return false;
                 };
-                // Reflejar ACAO para cualquier URL de origen bien formada.
-                // La autorización real es `is_allowed_origin` en rutas batch.
-                if origin_policy::is_well_formed_origin(s) {
-                    return true;
-                }
                 let guard = origins_for_cors.read().ok();
                 let Some(guard) = guard else {
                     return false;

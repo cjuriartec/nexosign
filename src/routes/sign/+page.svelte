@@ -3,15 +3,11 @@
 	import { open } from "@tauri-apps/plugin-dialog";
 	import { basename, dirname, join } from "$lib/tauri/path";
 	import { toast } from "svelte-sonner";
-	import * as Card from "$lib/components/ui/card/index.js";
 	import { Button } from "$lib/components/ui/button/index.js";
-	import * as Table from "$lib/components/ui/table/index.js";
 
-	import SigningCertPicker from "$lib/components/signing-cert-picker.svelte";
-	import SignConfirmPanel from "$lib/components/sign-confirm-panel.svelte";
+	import SignComposePanel from "$lib/components/sign-compose-panel.svelte";
 	import SignJobResults from "$lib/components/sign-job-results.svelte";
 	import SignWizardStepper from "$lib/components/sign-wizard-stepper.svelte";
-	import SignWizardPanel from "$lib/components/sign-wizard-panel.svelte";
 	import { Progress } from "$lib/components/ui/progress/index.js";
 	import { Alert, AlertDescription, AlertTitle } from "$lib/components/ui/alert/index.js";
 	import { Badge } from "$lib/components/ui/badge/index.js";
@@ -30,7 +26,11 @@
 	import { enumeratePdfsUnderFolder } from "$lib/tauri/batch";
 	import { getBatchSignIntent } from "$lib/tauri/batch-sign-intent";
 	import { isPkcs11NoTokenError } from "$lib/tauri/pkcs11-errors";
-	import { maybePersistPreferredModuleAfterSuccessfulBatch } from "$lib/tauri/pkcs11-ux";
+	import {
+		hasPkcs11ChipCerts,
+		maybePersistPreferredModuleAfterSuccessfulBatch,
+		signingCertListContextHint,
+	} from "$lib/tauri/pkcs11-ux";
 	import {
 		buildSignJobFileDisplayList,
 		labelFromProgressPayload,
@@ -42,14 +42,16 @@
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import CircleCheckIcon from "@lucide/svelte/icons/circle-check";
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
-	import FileStackIcon from "@lucide/svelte/icons/files";
-	import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
-	import Trash2Icon from "@lucide/svelte/icons/trash-2";
-	import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
-	import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
-	import CheckIcon from "@lucide/svelte/icons/check";
 	import BanIcon from "@lucide/svelte/icons/ban";
-	import { cn } from "$lib/utils.js";
+	import PenLineIcon from "@lucide/svelte/icons/pen-line";
+	import { listenWindowFileDrop } from "$lib/tauri/drag-drop";
+	import { ingestDroppedPaths } from "$lib/sign/ingest-dropped-paths";
+	import {
+		loadLastSigningCertId,
+		loadSignaturePlacement,
+		saveLastSigningCertId,
+		saveSignaturePlacement,
+	} from "$lib/sign/signature-placement-prefs";
 	import { cancelActiveBatchJob } from "$lib/batch/cancel-active-batch";
 	import {
 		batchQueue,
@@ -65,7 +67,7 @@
 		type BatchQueueItem,
 		TERMINAL_BATCH_STATUSES,
 	} from "$lib/stores/batch-queue.svelte";
-	import { SIGN_STEPS, TOTAL_STEPS, SIG_GRID_COLS, SIG_GRID_ROWS } from "$lib/sign/constants";
+	import { TOTAL_STEPS } from "$lib/sign/constants";
 	import { pdfBasenameFromPath } from "$lib/sign/path-util";
 	import { stripIntentQueryFromBrowser } from "$lib/sign/intent-url";
 	import { buildBatchSignBodyFromWizard } from "$lib/sign/build-batch-sign-body";
@@ -80,6 +82,8 @@
 	let certs = $state<SigningCertSummary[]>([]);
 	/** Slots con token presente (para mensajes si la lista de firma está vacía). */
 	let slotsWithTokenCount = $state(0);
+	let probePin = $state("");
+	let pinProbeBusy = $state(false);
 	let certId = $state("");
 	let pin = $state("");
 	let pinVisible = $state(false);
@@ -87,11 +91,15 @@
 	let apiBase = $state("");
 	let busy = $state(false);
 
-	/** 1 archivos · 2 ubicación · 3 certificado · 4 confirmar + PIN */
+	/** 1 preparar · 2 resultado */
 	let wizardStep = $state(1);
 
-	let sigGridCol = $state(1);
-	let sigGridRow = $state(4);
+	const savedPlacement = loadSignaturePlacement();
+	let sigGridCol = $state(savedPlacement.col);
+	let sigGridRow = $state(savedPlacement.row);
+
+	let dropHover = $state(false);
+	let pinModalOpen = $state(false);
 
 	/** Si viene de `POST /api/v1/batch/sign/intent`, se envía al confirmar para cerrar la intención. */
 	let intentRequestId = $state<string | null>(null);
@@ -152,12 +160,35 @@
 	let preferredLearnedForFinishedBatch = $state(false);
 
 	const resultStepSigning = $derived(
-		wizardStep === 5 && !jobSettled && (submitInFlight || busy || batchQueue.activeBatchJobId !== null),
+		wizardStep === 2 && !jobSettled && (submitInFlight || busy || batchQueue.activeBatchJobId !== null),
 	);
 
 	const selectedCert = $derived(certs.find((c) => c.id_hex === certId) ?? null);
 
 	const pinRequired = $derived(pkcs11.pinRequiredInApp(selectedCert));
+
+	const listContextHint = $derived(
+		isTauriRuntime() ? signingCertListContextHint(certs, slotsWithTokenCount) : null,
+	);
+	const showPinProbe = $derived(
+		isTauriRuntime() && wizardStep === 1 && slotsWithTokenCount > 0 && !hasPkcs11ChipCerts(certs),
+	);
+
+	const canSign = $derived(
+		!busy &&
+			!submitInFlight &&
+			paths.length > 0 &&
+			!!certId.trim() &&
+			certs.length > 0,
+	);
+
+	const signButtonLabel = $derived(
+		paths.length === 0
+			? "Firmar"
+			: paths.length === 1
+				? "Firmar 1 PDF"
+				: `Firmar ${paths.length} PDF`,
+	);
 
 	const jobFileDisplayList = $derived(
 		buildSignJobFileDisplayList(paths, jobFileResults, { signing: resultStepSigning }),
@@ -183,7 +214,7 @@
 		if (stepNum === wizardStep) return true;
 		if (stepHistoryLocked) return true;
 		if (stepNum < wizardStep) return false;
-		if (stepNum === 5 && jobSettled) return false;
+		if (stepNum === 2 && jobSettled) return false;
 		return true;
 	}
 
@@ -198,6 +229,7 @@
 		jobFileResults = [];
 		pin = "";
 		pinError = null;
+		pinModalOpen = false;
 		submitInFlight = false;
 		stepHistoryLocked = false;
 		clearPaths();
@@ -223,8 +255,13 @@
 		if (!isTauriRuntime()) return 0;
 		try {
 			certs = await pkcs11.listSigningCertificates();
-			if (certs.length && !certId) {
-				certId = certs[0]?.id_hex ?? "";
+			if (certs.length) {
+				const saved = loadLastSigningCertId();
+				if (saved && certs.some((c) => c.id_hex === saved)) {
+					certId = saved;
+				} else if (!certId.trim()) {
+					certId = certs[0]?.id_hex ?? "";
+				}
 			}
 			return certs.length;
 		} catch (e) {
@@ -268,10 +305,77 @@
 		}
 	}
 
+	async function tryListWithPin() {
+		if (!isTauriRuntime() || !probePin.trim()) {
+			toast.error("Introduce el PIN del DNIe.");
+			return;
+		}
+		pinProbeBusy = true;
+		try {
+			certs = await pkcs11.pkcs11ListSigningWithPin(probePin.trim());
+			if (certs.length && !certId) {
+				certId = certs[0]?.id_hex ?? "";
+			}
+			slotsWithTokenCount = await pkcs11.pkcs11SlotCount().catch(() => slotsWithTokenCount);
+			if (hasPkcs11ChipCerts(certs)) {
+				toast.success("Certificado del lector detectado");
+			} else {
+				toast.message("PIN correcto, sin certificado de firma en chip");
+			}
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			await pkcs11.pkcs11ResetConnection().catch(() => {});
+			probePin = "";
+			pinProbeBusy = false;
+		}
+	}
+
 	async function computeFirmadosDir(folderAbs: string): Promise<string> {
 		const parent = await dirname(folderAbs);
 		const base = await basename(folderAbs);
 		return join(parent, `${base}_firmados`);
+	}
+
+	async function applyIngestedPaths(
+		ingested: Awaited<ReturnType<typeof ingestDroppedPaths>>,
+		merge: boolean,
+	) {
+		const accepted = await partitionPaths(ingested.pdfs);
+		if (accepted.length === 0) return;
+
+		if (merge && paths.length > 0 && ingested.sourceMode === "files") {
+			paths = [...new Set([...paths, ...accepted])];
+		} else {
+			paths = accepted;
+			sourceMode = ingested.sourceMode;
+			folderPath = ingested.folderPath;
+			outputDirForJob = ingested.outputDirForJob;
+		}
+
+		intentRequestId = null;
+		intentDetachWizard();
+	}
+
+	async function handleDroppedPaths(rawPaths: string[]) {
+		if (!isTauriRuntime() || rawPaths.length === 0) return;
+		busy = true;
+		try {
+			const ingested = await ingestDroppedPaths(rawPaths, computeFirmadosDir);
+			if (ingested.pdfs.length === 0) {
+				toast.message("No se encontraron PDF en lo soltado.");
+				return;
+			}
+			const beforeCount = paths.length;
+			await applyIngestedPaths(ingested, beforeCount > 0);
+			if (paths.length === beforeCount) {
+				toast.message("Ningún PDF válido (revisa extensión y tamaño ≤ 50 MiB).");
+			}
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			busy = false;
+		}
 	}
 
 	async function pickPdfs() {
@@ -371,37 +475,34 @@
 		if (paths.length === 0) clearPaths();
 	}
 
-	async function step1Continue() {
-		if (paths.length === 0) return;
-		wizardStep = 2;
-	}
-
-	async function step2PlacementContinue() {
-		wizardStep = 3;
-		void refreshCerts();
-	}
-
-	async function step3CertContinue() {
-		if (!certId.trim()) {
-			toast.error("Selecciona un certificado.");
-			return;
-		}
-		pinError = null;
-		wizardStep = 4;
-	}
-
-	function goBack() {
-		if (stepHistoryLocked) return;
-		if (wizardStep <= 1) return;
-		wizardStep -= 1;
-	}
-
 	function jumpToStep(step: number) {
 		if (stepHistoryLocked) return;
 		if (step < 1 || step > TOTAL_STEPS) return;
 		if (step === wizardStep) return;
-		if (step > wizardStep && !(step === 5 && jobSettled)) return;
+		if (step > wizardStep && !(step === 2 && jobSettled)) return;
 		wizardStep = step;
+	}
+
+	$effect(() => {
+		if (certId.trim()) saveLastSigningCertId(certId);
+	});
+
+	function requestSign() {
+		if (submitInFlight || busy) return;
+		if (!certId.trim()) {
+			toast.error("Selecciona un certificado.");
+			return;
+		}
+		if (paths.length === 0) {
+			toast.error("No hay PDFs.");
+			return;
+		}
+		if (pinRequired && !pin.trim()) {
+			pinError = null;
+			pinModalOpen = true;
+			return;
+		}
+		void submitBatch();
 	}
 
 	async function submitBatch() {
@@ -415,8 +516,8 @@
 			return;
 		}
 		if (pinRequired && !pin.trim()) {
-			toast.error("Introduce el PIN de tu DNIe o tarjeta para firmar.");
 			pinError = "Introduce tu PIN.";
+			pinModalOpen = true;
 			return;
 		}
 
@@ -438,6 +539,8 @@
 				toast.success("PIN correcto");
 			} catch (e) {
 				submitInFlight = false;
+				stepHistoryLocked = false;
+				pinModalOpen = true;
 				upsertBatchQueueItem(pendingQueueId, { status: "error" });
 				const msg = String(e);
 				if (msg.includes("PIN incorrecto")) {
@@ -463,7 +566,9 @@
 		progressSnapshot = null;
 		setActiveBatchJobId(null);
 		activeJobRef.current = null;
-		wizardStep = 5;
+		saveSignaturePlacement({ col: sigGridCol, row: sigGridRow });
+		pinModalOpen = false;
+		wizardStep = 2;
 
 		try {
 			const body = await buildBatchSignBodyFromWizard({
@@ -491,7 +596,9 @@
 				label: pdfBasenameFromPath(paths[0] ?? "Lote"),
 			});
 		} catch (e) {
-			wizardStep = 4;
+			wizardStep = 1;
+			stepHistoryLocked = false;
+			if (pinRequired) pinModalOpen = true;
 			upsertBatchQueueItem(pendingQueueId, { status: "error" });
 			if (e instanceof LocalBackendInvokeError) {
 				const detail = e.detail || e.code;
@@ -548,11 +655,18 @@
 
 	onMount(() => {
 		let unlisten: (() => void) | undefined;
+		let unlistenDrop: (() => void) | undefined;
 
 		void (async () => {
 			if (isTauriRuntime()) {
 				apiBase = await getLocalApiBaseUrl();
 				await refreshCerts();
+				unlistenDrop = await listenWindowFileDrop(
+					(dropped) => void handleDroppedPaths(dropped),
+					(over) => {
+						dropHover = over;
+					},
+				);
 			} else {
 				apiBase = "http://127.0.0.1:14500";
 			}
@@ -591,7 +705,10 @@
 			}
 		})();
 
-		return () => unlisten?.();
+		return () => {
+			unlisten?.();
+			unlistenDrop?.();
+		};
 	});
 
 	$effect(() => {
@@ -630,22 +747,8 @@
 	<title>Firmar — NexoSign</title>
 </svelte:head>
 
-<div class="mx-auto flex min-h-full w-full max-w-lg flex-1 flex-col gap-2 pb-4">
-	<header class="flex shrink-0 items-center gap-1.5 sm:gap-2">
-		{#if wizardStep > 1}
-			<Button
-				type="button"
-				variant="ghost"
-				size="icon"
-				class="size-8 shrink-0 sm:size-9"
-				disabled={stepHistoryLocked}
-				aria-label="Paso anterior"
-				onclick={() => goBack()}
-			>
-				<ChevronLeftIcon class="size-4" />
-			</Button>
-		{/if}
-
+<div class="mx-auto flex w-full max-w-lg min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+	<header class="flex shrink-0 items-center gap-2">
 		<SignWizardStepper
 			currentStep={wizardStep}
 			isStepDisabled={isStepNavDisabled}
@@ -661,211 +764,67 @@
 	{/if}
 
 	{#if wizardStep === 1}
-		<SignWizardPanel>
-			<div class="flex min-h-0 flex-1 flex-col gap-3">
-				{#if paths.length === 0}
-					<div class="grid min-h-0 flex-1 gap-3 sm:grid-cols-2">
-						<button
-							type="button"
-							class="border-border/80 bg-muted/15 hover:border-primary/40 hover:bg-primary/5 flex min-h-[10rem] flex-1 flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-6 transition-colors disabled:opacity-50"
-							disabled={busy}
-							onclick={() => pickPdfs()}
-						>
-							<FileStackIcon class="text-muted-foreground size-11" aria-hidden="true" />
-							<span class="text-sm font-medium">PDF</span>
-						</button>
-						<button
-							type="button"
-							class="border-border/80 bg-muted/15 hover:border-primary/40 hover:bg-primary/5 flex min-h-[10rem] flex-1 flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-6 transition-colors disabled:opacity-50"
-							disabled={busy}
-							onclick={() => pickFolder()}
-						>
-							<FolderOpenIcon class="text-muted-foreground size-11" aria-hidden="true" />
-							<span class="text-sm font-medium">Carpeta</span>
-						</button>
-					</div>
-				{:else}
-					<div class="flex shrink-0 flex-wrap items-center gap-2">
-						<Button
-							type="button"
-							size="sm"
-							variant="secondary"
-							class="gap-1.5"
-							disabled={busy}
-							onclick={() => pickPdfs()}
-						>
-							<FileStackIcon class="size-4" aria-hidden="true" />
-							{sourceMode === "files" ? "Cambiar PDF" : "Elegir PDF"}
-						</Button>
-						<Button
-							type="button"
-							size="sm"
-							variant="outline"
-							class="gap-1.5"
-							disabled={busy}
-							onclick={() => pickFolder()}
-						>
-							<FolderOpenIcon class="size-4" aria-hidden="true" />
-							{sourceMode === "folder" ? "Cambiar carpeta" : "Elegir carpeta"}
-						</Button>
-						<Button
-							type="button"
-							size="sm"
-							variant="ghost"
-							class="text-destructive ml-auto"
-							disabled={busy}
-							onclick={() => clearPaths()}
-						>
-							Limpiar
-						</Button>
-					</div>
-					{#if outputDirForJob && sourceMode === "folder"}
-						<p class="text-muted-foreground shrink-0 truncate font-mono text-[11px]" title={outputDirForJob}>
-							{outputDirForJob}
-						</p>
-					{/if}
-					<div class="border-border/70 min-h-0 flex-1 overflow-hidden rounded-lg border">
-						<Table.Root>
-							<Table.Header class="bg-muted/30 sticky top-0 z-10">
-								<Table.Row>
-									<Table.Head class="w-8 py-2 text-xs">#</Table.Head>
-									<Table.Head class="py-2 text-xs">{paths.length} PDF</Table.Head>
-									<Table.Head class="w-10 py-2"></Table.Head>
-								</Table.Row>
-							</Table.Header>
-							<Table.Body>
-								{#each paths as p, i}
-									<Table.Row class="[&_td]:py-1.5">
-										<Table.Cell class="text-muted-foreground text-xs">{i + 1}</Table.Cell>
-										<Table.Cell class="max-w-0 font-mono text-[11px]">
-											<span class="block truncate" title={p}>{p}</span>
-										</Table.Cell>
-										<Table.Cell>
-											<Button
-												variant="ghost"
-												size="icon-xs"
-												class="text-destructive"
-												onclick={() => removeAt(i)}
-												aria-label="Quitar"
-											>
-												<Trash2Icon class="size-4" />
-											</Button>
-										</Table.Cell>
-									</Table.Row>
-								{/each}
-							</Table.Body>
-						</Table.Root>
-					</div>
-				{/if}
+		<section
+			class="bg-card text-card-foreground flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border shadow-sm"
+		>
+			<div class="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5 scrollbar-subtle">
+				<SignComposePanel
+					{paths}
+					{sourceMode}
+					{outputDirForJob}
+					{busy}
+					{dropHover}
+					{certs}
+					bind:certId
+					{slotsWithTokenCount}
+					listContextHint={listContextHint}
+					{showPinProbe}
+					bind:probePin
+					{pinProbeBusy}
+					{pinRequired}
+					bind:pin
+					bind:pinError
+					bind:pinVisible
+					bind:pinModalOpen
+					bind:sigGridCol
+					bind:sigGridRow
+					{submitInFlight}
+					signLabel={signButtonLabel}
+					onBrowse={() => pickPdfs()}
+					onBrowseFolder={() => pickFolder()}
+					onClearPaths={() => clearPaths()}
+					onRemoveAt={(i) => removeAt(i)}
+					onRefreshCerts={() => refreshCertsWithBusy()}
+					onResetReader={() => resetPkcs11ConnectionAndRefresh()}
+					onTryListWithPin={() => tryListWithPin()}
+					onSubmit={() => submitBatch()}
+				/>
 			</div>
-			{#snippet footer()}
+			<div class="border-border/80 bg-muted/20 shrink-0 border-t px-4 py-3 sm:px-5">
 				<Button
 					type="button"
-					size="sm"
-					class="gap-1"
-					disabled={busy || paths.length === 0}
-					onclick={() => step1Continue()}
+					size="lg"
+					class="h-11 w-full gap-2 text-sm font-semibold"
+					disabled={!canSign}
+					onclick={() => requestSign()}
 				>
-					Siguiente
-					<ChevronRightIcon class="size-4" aria-hidden="true" />
+					{#if submitInFlight}
+						<Loader2Icon class="size-4 animate-spin" aria-hidden="true" />
+						Firmando…
+					{:else}
+						<PenLineIcon class="size-4" aria-hidden="true" />
+						{signButtonLabel}
+					{/if}
 				</Button>
-			{/snippet}
-		</SignWizardPanel>
+			</div>
+		</section>
 	{/if}
 
 	{#if wizardStep === 2}
-		<SignWizardPanel>
-			<div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 py-2">
-				<Badge variant="secondary" class="h-6 px-2.5 font-mono text-xs tabular-nums">
-					{sigGridCol + 1} · {sigGridRow + 1}
-				</Badge>
-				<div
-					class="overflow-hidden rounded-xl border border-border bg-linear-to-b from-muted/30 to-muted/10 p-3 shadow-inner"
-				>
-					{#each [0, 1, 2, 3, 4] as row}
-						<div class="flex gap-1.5 pb-1.5 last:pb-0">
-							{#each [0, 1, 2] as col}
-								<button
-									type="button"
-									class={cn(
-										"flex size-10 shrink-0 items-center justify-center rounded-lg border text-xs font-semibold transition-all sm:size-11",
-										sigGridCol === col && sigGridRow === row
-											? "border-primary bg-primary text-primary-foreground shadow-md"
-											: "border-border/70 bg-background text-muted-foreground hover:border-primary/30 hover:bg-muted/60",
-									)}
-									aria-label="Casilla {row * SIG_GRID_COLS + col + 1}"
-									aria-pressed={sigGridCol === col && sigGridRow === row}
-									onclick={() => {
-										sigGridCol = col;
-										sigGridRow = row;
-									}}
-								>
-									{row * SIG_GRID_COLS + col + 1}
-								</button>
-							{/each}
-						</div>
-					{/each}
-				</div>
-			</div>
-			{#snippet footer()}
-				<Button type="button" size="sm" class="gap-1" onclick={() => step2PlacementContinue()}>
-					Siguiente
-					<ChevronRightIcon class="size-4" aria-hidden="true" />
-				</Button>
-			{/snippet}
-		</SignWizardPanel>
-	{/if}
-
-	{#if wizardStep === 3}
-		<SignWizardPanel>
-			<SigningCertPicker
-				{certs}
-				bind:certId
-				{busy}
-				slotsWithToken={slotsWithTokenCount}
-				helpVariant="brief"
-				showDedupeNote={false}
-				compact
-				class="min-h-0 flex-1"
-				onRefresh={() => refreshCertsWithBusy()}
-				onResetReader={() => resetPkcs11ConnectionAndRefresh()}
-			/>
-			{#snippet footer()}
-				<Button
-					type="button"
-					size="sm"
-					class="gap-1"
-					disabled={busy || !certId.trim() || certs.length === 0}
-					onclick={() => step3CertContinue()}
-				>
-					Siguiente
-					<ChevronRightIcon class="size-4" aria-hidden="true" />
-				</Button>
-			{/snippet}
-		</SignWizardPanel>
-	{/if}
-
-	{#if wizardStep === 4}
-		<SignWizardPanel contentCentered>
-			<SignConfirmPanel
-				pathCount={paths.length}
-				{selectedCert}
-				{sigGridCol}
-				{sigGridRow}
-				{outputDirForJob}
-				bind:pin
-				bind:pinError
-				bind:pinVisible
-				{busy}
-				{submitInFlight}
-				onSubmit={() => submitBatch()}
-			/>
-		</SignWizardPanel>
-	{/if}
-
-	{#if wizardStep === 5}
-		<SignWizardPanel class="w-full">
-			<div class="mx-auto flex min-h-0 w-full max-w-md flex-1 flex-col gap-3 overflow-hidden">
+		<section
+			class="bg-card text-card-foreground flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border shadow-sm"
+		>
+			<div class="mx-auto flex min-h-0 w-full max-w-md flex-1 flex-col gap-3 overflow-hidden p-4 sm:p-5">
 				<div class="flex shrink-0 items-center gap-3">
 					{#if resultStepSigning}
 						<div
@@ -932,7 +891,7 @@
 					</div>
 				{/if}
 
-				<div class="min-h-0 flex-1 overflow-y-auto">
+				<div class="scrollbar-subtle min-h-0 flex-1 overflow-y-auto pb-1">
 					<SignJobResults
 						items={jobFileDisplayList}
 						{outputDirForJob}
@@ -942,16 +901,29 @@
 					/>
 				</div>
 			</div>
-			{#snippet footer()}
+			<div
+				class="border-border/80 bg-muted/20 flex shrink-0 items-center justify-end gap-2 border-t px-4 py-3 sm:px-5"
+			>
 				{#if canCancelBatchJobStep5}
-					<Button type="button" variant="outline" size="sm" onclick={() => cancelJob()}>Cancelar</Button>
+					<Button type="button" variant="outline" size="sm" class="mr-auto" onclick={() => cancelJob()}>
+						Cancelar
+					</Button>
 				{:else if batchQueue.activeBatchJobId && !jobSettled && activeJobItem?.status === "cancelling"}
-					<Loader2Icon class="text-muted-foreground mr-auto size-4 animate-spin" aria-label="Cancelando" />
+					<Loader2Icon
+						class="text-muted-foreground mr-auto size-4 animate-spin"
+						aria-label="Cancelando"
+					/>
 				{/if}
-				<Button type="button" size="sm" disabled={!jobSettled} onclick={() => startNewSigningRound()}>
+				<Button
+					type="button"
+					size="lg"
+					class="h-11 min-w-[9rem] gap-2 text-sm font-semibold"
+					disabled={!jobSettled}
+					onclick={() => startNewSigningRound()}
+				>
 					Nuevo lote
 				</Button>
-			{/snippet}
-		</SignWizardPanel>
+			</div>
+		</section>
 	{/if}
 </div>

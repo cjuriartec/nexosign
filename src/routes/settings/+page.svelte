@@ -459,7 +459,7 @@
 	<title>Ajustes — NexoSign</title>
 </svelte:head>
 
-<div class="mx-auto max-w-3xl space-y-8">
+<div class="mx-auto max-w-3xl min-h-0 flex-1 space-y-8 overflow-y-auto pb-6">
 	<div>
 		<h1 class="text-3xl font-semibold tracking-tight">Ajustes</h1>
 		<p class="text-muted-foreground mt-1 text-sm">

@@ -51,7 +51,10 @@
 		return `${okCount} firmado${okCount === 1 ? "" : "s"}, ${errorCount} con error`;
 	});
 
-	function statusBadge(item: SignJobFileDisplay): { label: string; variant: "default" | "secondary" | "destructive" | "outline" } {
+	function statusBadge(item: SignJobFileDisplay): {
+		label: string;
+		variant: "default" | "secondary" | "destructive" | "outline";
+	} {
 		switch (item.status) {
 			case "ok":
 				return { label: "Firmado", variant: "secondary" };
@@ -82,14 +85,14 @@
 					type="button"
 					variant="outline"
 					size="sm"
-					class="h-8 gap-1.5 text-xs"
+					class="h-8 shrink-0 gap-1.5 text-xs"
 					onclick={() =>
 						void runOpen(async () => {
 							await showOutputDirectoryInExplorer(outputDirForJob);
 						})}
 				>
 					<FolderOpenIcon class="size-3.5" aria-hidden="true" />
-					Abrir carpeta de salida
+					Abrir carpeta
 				</Button>
 			{/if}
 		</div>
@@ -98,16 +101,21 @@
 			{#each items as item (item.index)}
 				{@const badge = statusBadge(item)}
 				{@const isActive = signing && activeFileIndex === item.index}
+				{@const canOpen =
+					item.outputPath && isTauriRuntime() && item.status === "ok"}
 				<li
 					class={cn(
 						"rounded-lg border px-3 py-2.5 transition-colors",
 						item.status === "error" && "border-destructive/40 bg-destructive/5",
 						item.status === "ok" && "border-emerald-500/30 bg-emerald-500/5",
 						isActive && "border-primary/50 bg-primary/5 ring-1 ring-primary/20",
-						item.status !== "error" && item.status !== "ok" && !isActive && "border-border/70 bg-muted/15",
+						item.status !== "error" &&
+							item.status !== "ok" &&
+							!isActive &&
+							"border-border/70 bg-muted/15",
 					)}
 				>
-					<div class="flex items-start gap-2.5">
+					<div class="flex gap-2.5">
 						<span class="mt-0.5 shrink-0" aria-hidden="true">
 							{#if item.status === "ok"}
 								<CircleCheckIcon class="size-4 text-emerald-600 dark:text-emerald-400" />
@@ -120,43 +128,47 @@
 							{/if}
 						</span>
 
-						<div class="min-w-0 flex-1 space-y-1">
-							<div class="flex flex-wrap items-center gap-2">
-								<p class="min-w-0 flex-1 text-sm font-medium leading-snug" title={item.label}>
-									{item.label}
-								</p>
-								<Badge variant={badge.variant} class="h-5 shrink-0 text-[10px]">
-									{badge.label}
-								</Badge>
+						<div class="min-w-0 flex-1 space-y-1.5">
+							<p class="truncate text-sm font-medium leading-snug" title={item.label}>
+								{item.label}
+							</p>
+
+							<div class="flex items-center justify-between gap-2">
+								<div class="flex min-w-0 flex-wrap items-center gap-1.5">
+									<Badge variant={badge.variant} class="h-5 shrink-0 text-[10px]">
+										{badge.label}
+									</Badge>
+									{#if item.status === "ok" && item.outputPath}
+										<span class="text-muted-foreground truncate text-[11px]">
+											Guardado en disco
+										</span>
+									{:else if item.status === "idle" && signing}
+										<span class="text-muted-foreground text-[11px]">En cola</span>
+									{/if}
+								</div>
+
+								{#if canOpen}
+									<Button
+										type="button"
+										variant="outline"
+										size="sm"
+										class="h-7 shrink-0 gap-1 px-2 text-[11px]"
+										title="Abrir en el Explorador"
+										onclick={() =>
+											void runOpen(async () => {
+												await showSignedOutputInExplorer(item.outputPath!);
+											})}
+									>
+										<FolderOpenIcon class="size-3.5" aria-hidden="true" />
+										Abrir
+									</Button>
+								{/if}
 							</div>
 
 							{#if item.error}
 								<p class="text-destructive text-xs leading-relaxed">{item.error}</p>
-							{:else if item.status === "ok" && item.outputPath}
-								<p class="text-muted-foreground text-[11px] leading-snug">
-									Guardado en disco
-								</p>
-							{:else if item.status === "idle" && signing}
-								<p class="text-muted-foreground text-[11px]">En cola</p>
 							{/if}
 						</div>
-
-						{#if item.outputPath && isTauriRuntime() && item.status === "ok"}
-							<Button
-								type="button"
-								variant="outline"
-								size="sm"
-								class="h-8 shrink-0 gap-1 px-2.5 text-xs"
-								title="Abrir en el Explorador"
-								onclick={() =>
-									void runOpen(async () => {
-										await showSignedOutputInExplorer(item.outputPath!);
-									})}
-							>
-								<FolderOpenIcon class="size-3.5" aria-hidden="true" />
-								Abrir
-							</Button>
-						{/if}
 					</div>
 				</li>
 			{/each}
