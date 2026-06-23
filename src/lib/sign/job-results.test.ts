@@ -1,9 +1,32 @@
 import { describe, expect, it } from "vitest";
 import {
 	buildSignJobFileDisplayList,
+	labelFromProgressPayload,
 	resolveBatchOutputDirectoryHint,
 	upsertJobFileResult,
 } from "./job-results";
+
+describe("labelFromProgressPayload", () => {
+	it("prefiere nombre_archivo sobre path", () => {
+		expect(
+			labelFromProgressPayload({
+				actual: 1,
+				nombre_archivo: "doc.pdf",
+				path: "D:\\otro.pdf",
+			}),
+		).toBe("doc.pdf");
+	});
+
+	it("extrae basename del path si no hay nombre_archivo", () => {
+		expect(
+			labelFromProgressPayload({
+				actual: 2,
+				nombre_archivo: "",
+				path: "C:\\lote\\informe.pdf",
+			}),
+		).toBe("informe.pdf");
+	});
+});
 
 describe("upsertJobFileResult", () => {
 	it("oculta MY duplicado por huella al actualizar éxito", () => {

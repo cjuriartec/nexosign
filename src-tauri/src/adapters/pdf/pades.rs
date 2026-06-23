@@ -1333,10 +1333,18 @@ impl PdfPadesSigner for CompositePdfPadesSigner {
 #[cfg(test)]
 mod tests {
     use super::{
-        contents_hex_is_provisional, enumerate_subfilter_pades,
-        find_contents_hex_angle_open, find_subfilter_pades,
-        find_subfilter_pades_from,
+        contents_hex_is_provisional, digest_pdf_pades, enumerate_subfilter_pades,
+        find_contents_hex_angle_open, find_subfilter_pades, find_subfilter_pades_from,
+        patch_byte_range,
     };
+
+    fn provisional_sig_tail() -> Vec<u8> {
+        let mut buf = b"%PDF-1.4\n".to_vec();
+        buf.extend_from_slice(
+            b"<</Type/Sig/SubFilter/ETSI.CAdES.detached/Contents<000000000000000000000000000000000000000000000000000000000000000000>/ByteRange[0 999999999999999 999999999999999 999999999999999]>>",
+        );
+        buf
+    }
 
     #[test]
     fn subfilter_etsi_with_or_without_space() {
@@ -1384,5 +1392,44 @@ mod tests {
         buf.extend_from_slice(etsi);
         buf.extend_from_slice(adbe);
         assert_eq!(enumerate_subfilter_pades(&buf).len(), 2);
+    }
+
+    #[test]
+    fn patch_byte_range_fits_large_placeholder() {
+        let mut buf = provisional_sig_tail();
+        patch_byte_range(&mut buf).expect("patch");
+        let text = std::str::from_utf8(&buf).unwrap();
+        assert!(text.contains("/ByteRange"));
+        assert!(!text.contains("999999999999999"));
+    }
+
+    #[test]
+    fn patch_byte_range_rejects_tiny_hole() {
+        let mut buf = b"%PDF-1.4\n<</Type/Sig/SubFilter/ETSI.CAdES.detached/Contents<0000>/ByteRange[0 1 2 3]>>"
+            .to_vec();
+        let err = patch_byte_range(&mut buf).unwrap_err();
+        assert!(err.to_string().to_lowercase().contains("byterange"));
+    }
+
+    #[test]
+    fn patch_byte_range_targets_provisional_not_finalized_signature() {
+        let old =
+            b"%PDF-1.4\n<</Type/Sig/SubFilter/ETSI.CAdES.detached/Contents<ABCDEF010203>/ByteRange[0 10 20 30]>>";
+        let new = b"<</Type/Sig/SubFilter/ETSI.CAdES.detached/Contents<000000000000000000000000000000000000000000000000000000000000000000>/ByteRange[0 999999999999999 999999999999999 999999999999999]>>";
+        let mut buf = Vec::new();
+        buf.extend_from_slice(old);
+        buf.extend_from_slice(new);
+        patch_byte_range(&mut buf).expect("debe parchear la firma provisional");
+        let text = std::str::from_utf8(&buf).unwrap();
+        assert!(!text.contains("999999999999999"));
+        assert!(text.contains("ABCDEF010203"));
+    }
+
+    #[test]
+    fn digest_pdf_pades_excludes_contents_hex() {
+        let buf = provisional_sig_tail();
+        let digest = digest_pdf_pades(&buf).expect("digest");
+        assert_eq!(digest.len(), 32);
+        assert_ne!(digest, [0u8; 32]);
     }
 }

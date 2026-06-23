@@ -139,6 +139,38 @@ mod tests {
     }
 
     #[test]
+    fn validate_single_rejects_relative_path() {
+        let rel = std::path::PathBuf::from("relative.pdf");
+        let err = validate_single_pdf_input(&rel).unwrap_err();
+        assert!(err.contains("absoluta"));
+    }
+
+    #[test]
+    fn partition_rejected_carries_path_and_reason() {
+        let dir = std::env::temp_dir().join(format!(
+            "nexosign-pdf-part-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bad = dir.join("plantilla.pdf");
+        std::fs::write(&bad, b"<%xml version=\"1.0\"?>").unwrap();
+        let bad_abs = bad.canonicalize().unwrap();
+
+        let (_, rejected) = partition_pdf_paths(vec![bad_abs.clone()]);
+        assert_eq!(rejected.len(), 1);
+        assert!(rejected[0].path.contains("plantilla.pdf"));
+        assert!(
+            rejected[0]
+                .reason
+                .to_lowercase()
+                .contains("pdf")
+                || rejected[0].reason.contains("%PDF")
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn validate_single_and_partition_with_temp_pdf() {
         let dir = std::env::temp_dir().join(format!(
             "nexosign-pdf-val-{}",
