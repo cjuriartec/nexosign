@@ -29,6 +29,8 @@
 		onResetReader?: () => void | Promise<void>;
 		/** Asistente Firmar: menos padding y sin fila extra de acciones. */
 		compact?: boolean;
+		/** Asistente Firmar: rellena altura disponible en contenedor con scroll. */
+		fillHeight?: boolean;
 		/** Mensaje extra cuando la lista está vacía (política chip vs MY). */
 		contextHint?: string | null;
 		class?: string;
@@ -44,6 +46,7 @@
 		onRefresh,
 		onResetReader,
 		compact = false,
+		fillHeight = false,
 		contextHint = null,
 		class: className,
 	}: Props = $props();
@@ -57,7 +60,11 @@
 
 <div
 	class={cn(
-		compact ? "flex min-h-0 flex-1 flex-col gap-2" : "space-y-3",
+		compact
+			? fillHeight
+				? "flex min-h-0 flex-1 flex-col gap-2"
+				: "flex flex-col gap-2"
+			: "space-y-3",
 		className,
 	)}
 >
@@ -115,7 +122,11 @@
 	{:else}
 		<div
 			class={cn(
-				compact ? "min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5" : "space-y-2",
+				compact
+					? fillHeight
+						? "min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-0.5"
+						: "space-y-1.5"
+					: "space-y-2",
 			)}
 			role="radiogroup"
 			aria-label="Certificado de firma"

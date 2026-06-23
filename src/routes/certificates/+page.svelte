@@ -213,9 +213,7 @@
 			</div>
 		</section>
 	{:else}
-		<section
-			class="bg-card text-card-foreground flex flex-col overflow-hidden rounded-xl border shadow-sm"
-		>
+		<section class="bg-card text-card-foreground flex flex-col rounded-xl border shadow-sm">
 			<div
 				class="border-border/80 bg-muted/25 flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3"
 			>
@@ -281,27 +279,24 @@
 					</div>
 				{/if}
 
-				<div class="flex max-h-[min(50vh,26rem)] min-h-0 flex-col">
-					<SigningCertPicker
-						{certs}
-						bind:certId
-						{busy}
-						slotsWithToken={slotsWithTokenCount}
-						contextHint={listContextHint}
-						helpVariant="full"
-						showDedupeNote={false}
-						compact
-						class="min-h-0 flex-1"
-						onRefresh={() => loadCerts({ runChipProbe: true })}
-						onResetReader={() => resetReaderAndReload()}
-					/>
-				</div>
+				<SigningCertPicker
+					{certs}
+					bind:certId
+					{busy}
+					slotsWithToken={slotsWithTokenCount}
+					contextHint={listContextHint}
+					helpVariant="full"
+					showDedupeNote={false}
+					compact
+					onRefresh={() => loadCerts({ runChipProbe: true })}
+					onResetReader={() => resetReaderAndReload()}
+				/>
 			</div>
 		</section>
 
 		<section
 			class={cn(
-				"bg-card text-card-foreground flex flex-col overflow-hidden rounded-xl border shadow-sm transition-opacity",
+				"bg-card text-card-foreground flex flex-col rounded-xl border shadow-sm transition-opacity",
 				!selectedCert && certs.length > 0 && "opacity-95",
 			)}
 		>
