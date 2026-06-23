@@ -33,6 +33,8 @@
 		fillHeight?: boolean;
 		/** Mensaje extra cuando la lista está vacía (política chip vs MY). */
 		contextHint?: string | null;
+		/** `panel` en Certificados: vacío visual sin alerta duplicada. */
+		emptyPresentation?: "alert" | "panel";
 		class?: string;
 	}
 
@@ -48,6 +50,7 @@
 		compact = false,
 		fillHeight = false,
 		contextHint = null,
+		emptyPresentation = "alert",
 		class: className,
 	}: Props = $props();
 
@@ -69,56 +72,88 @@
 	)}
 >
 	{#if onRefresh || onResetReader}
-		<div class="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-			{#if onResetReader}
-				<Button
-					type="button"
-					variant="ghost"
-					size="sm"
-					class="text-muted-foreground h-8 px-2 text-xs"
-					disabled={busy}
-					title="Cierra la conexión con el lector y vuelve a detectar la tarjeta"
-					onclick={() => void onResetReader()}
-				>
-					Reconectar lector
-				</Button>
-			{/if}
-			{#if onRefresh}
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					class="h-8 gap-1.5 px-2.5 text-xs"
-					disabled={busy}
-					title="Actualizar certificados disponibles"
-					onclick={() => void onRefresh()}
-				>
-					<RefreshCwIcon
-						class={cn("size-3.5", busy && "animate-spin")}
-						aria-hidden="true"
-					/>
-					{busy ? "Actualizando…" : "Actualizar"}
-				</Button>
-			{/if}
+		<div class="flex shrink-0 flex-wrap items-center justify-between gap-1.5">
+			<div class="flex min-w-0 flex-wrap items-center gap-1.5">
+				{#if slotsWithToken > 0}
+					<Badge variant="secondary" class="h-5 text-[10px] font-normal tabular-nums">
+						{slotsWithToken} lector{slotsWithToken === 1 ? "" : "es"}
+					</Badge>
+				{/if}
+			</div>
+			<div class="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+				{#if onResetReader}
+					<Button
+						type="button"
+						variant="ghost"
+						size="sm"
+						class="text-muted-foreground h-8 px-2 text-xs"
+						disabled={busy}
+						title="Cierra la conexión con el lector y vuelve a detectar la tarjeta"
+						onclick={() => void onResetReader()}
+					>
+						Reconectar lector
+					</Button>
+				{/if}
+				{#if onRefresh}
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						class="h-8 gap-1.5 px-2.5 text-xs"
+						disabled={busy}
+						title="Actualizar certificados disponibles"
+						onclick={() => void onRefresh()}
+					>
+						<RefreshCwIcon
+							class={cn("size-3.5", busy && "animate-spin")}
+							aria-hidden="true"
+						/>
+						{busy ? "Actualizando…" : "Actualizar"}
+					</Button>
+				{/if}
+			</div>
 		</div>
 	{:else if showDedupeNote}
 		<p class="text-muted-foreground max-w-prose shrink-0 text-xs leading-snug">{DEDUPED_WIN_MY_FOOTNOTE}</p>
 	{/if}
 
 	{#if certs.length === 0}
-		<Alert
-			variant={slotsWithToken <= 0 ? "destructive" : "default"}
-			class={cn("text-left", compact && "py-2")}
-		>
-			<TriangleAlertIcon class="size-4" />
-			<AlertTitle class="text-sm">{emptyHelp.title}</AlertTitle>
-			<AlertDescription class="space-y-1.5 text-xs leading-snug">
-				<p>{emptyHelp.description}</p>
-				{#if contextHint}
-					<p class="text-muted-foreground">{contextHint}</p>
-				{/if}
-			</AlertDescription>
-		</Alert>
+		{#if emptyPresentation === "panel"}
+			<div
+				class={cn(
+					"border-border/60 bg-muted/10 flex flex-col items-center gap-3 rounded-xl border border-dashed px-4 py-7 text-center",
+					busy && "opacity-70",
+				)}
+			>
+				<span
+					class="bg-muted text-muted-foreground flex size-11 items-center justify-center rounded-full"
+					aria-hidden="true"
+				>
+					<IdCardIcon class="size-5" />
+				</span>
+				<div class="max-w-[16rem] space-y-1">
+					<p class="text-sm font-medium leading-snug">{emptyHelp.title}</p>
+					<p class="text-muted-foreground text-xs leading-snug">{emptyHelp.description}</p>
+					{#if contextHint}
+						<p class="text-muted-foreground pt-0.5 text-[11px] leading-snug">{contextHint}</p>
+					{/if}
+				</div>
+			</div>
+		{:else}
+			<Alert
+				variant={slotsWithToken <= 0 ? "destructive" : "default"}
+				class={cn("text-left", compact && "py-2")}
+			>
+				<TriangleAlertIcon class="size-4" />
+				<AlertTitle class="text-sm">{emptyHelp.title}</AlertTitle>
+				<AlertDescription class="space-y-1.5 text-xs leading-snug">
+					<p>{emptyHelp.description}</p>
+					{#if contextHint}
+						<p class="text-muted-foreground">{contextHint}</p>
+					{/if}
+				</AlertDescription>
+			</Alert>
+		{/if}
 	{:else}
 		<div
 			class={cn(
@@ -141,7 +176,7 @@
 					role="radio"
 					aria-checked={selected}
 					class={cn(
-						"flex w-full items-center gap-2.5 rounded-lg border text-left transition-colors",
+						"flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-lg border text-left transition-colors",
 						compact ? "px-2.5 py-2" : "items-start gap-3 px-3 py-3",
 						selected
 							? "border-primary bg-primary/5 ring-primary/30 ring-2"
@@ -161,12 +196,29 @@
 					>
 						<IdCardIcon class={compact ? "size-3.5" : "size-4"} />
 					</span>
-					<span class="min-w-0 flex-1">
-						<span class="flex flex-wrap items-center gap-1.5">
-							<span class="text-sm font-semibold leading-tight">
+					<span class="min-w-0 flex-1 overflow-hidden">
+						<span
+							class={cn(
+								"flex gap-1.5",
+								compact ? "flex-col items-start" : "flex-wrap items-center",
+							)}
+						>
+							<span
+								class={cn(
+									"font-semibold leading-tight",
+									compact ? "line-clamp-2 text-xs" : "text-sm",
+								)}
+								title={name}
+							>
 								{name}
 							</span>
-							<Badge variant="secondary" class="h-5 px-1.5 text-[10px] font-normal">
+							<Badge
+								variant="secondary"
+								class={cn(
+									"h-5 shrink-0 px-1.5 text-[10px] font-normal",
+									compact && "max-w-full truncate",
+								)}
+							>
 								{signingCertSourceLabel(c.source)}
 							</Badge>
 						</span>

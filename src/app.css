@@ -163,10 +163,10 @@
 		@apply bg-selection text-selection-foreground;
 	}
 	html {
-		@apply overscroll-y-none;
+		@apply h-full overscroll-y-none;
 	}
 	body {
-		@apply bg-background text-foreground font-sans antialiased;
+		@apply h-full overflow-hidden bg-background text-foreground font-sans antialiased;
 		font-synthesis-weight: none;
 		text-rendering: optimizeLegibility;
 	}
