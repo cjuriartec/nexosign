@@ -44,14 +44,13 @@ export const DEDUPED_WIN_MY_FOOTNOTE =
 export function emptySigningCertsHelpBrief(slotsWithToken: number): EmptySigningCertsHelp {
 	if (slotsWithToken <= 0) {
 		return {
-			title: "Sin tarjeta en el lector",
-			description: "Conecta el DNIe y pulsa Actualizar.",
+			title: "Conecta el DNIe",
+			description: "Inserta la tarjeta en el lector y pulsa Actualizar.",
 		};
 	}
 	return {
-		title: "Sin certificado de firma en el chip",
-		description:
-			"El lector detecta tarjeta. Inserta el DNIe y usa «Probar con PIN» si no aparece el certificado de firma.",
+		title: "Certificado no visible",
+		description: "El lector detecta tarjeta. Usa «Probar PIN» si hace falta.",
 	};
 }
 

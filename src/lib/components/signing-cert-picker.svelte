@@ -59,6 +59,15 @@
 			? emptySigningCertsHelpBrief(slotsWithToken)
 			: emptySigningCertsHelp(slotsWithToken),
 	);
+
+	const showEmptyContextHint = $derived(
+		contextHint != null &&
+			!(
+				emptyPresentation === "panel" &&
+				helpVariant === "brief" &&
+				slotsWithToken <= 0
+			),
+	);
 </script>
 
 <div
@@ -121,20 +130,24 @@
 		{#if emptyPresentation === "panel"}
 			<div
 				class={cn(
-					"border-border/60 bg-muted/10 flex flex-col items-center gap-3 rounded-xl border border-dashed px-4 py-7 text-center",
+					"border-border/60 bg-muted/10 flex flex-col items-center rounded-xl border border-dashed text-center",
+					compact ? "gap-2 px-3 py-5" : "gap-3 px-4 py-7",
 					busy && "opacity-70",
 				)}
 			>
 				<span
-					class="bg-muted text-muted-foreground flex size-11 items-center justify-center rounded-full"
+					class={cn(
+						"bg-muted text-muted-foreground flex items-center justify-center rounded-full",
+						compact ? "size-9" : "size-11",
+					)}
 					aria-hidden="true"
 				>
-					<IdCardIcon class="size-5" />
+					<IdCardIcon class={compact ? "size-4" : "size-5"} />
 				</span>
-				<div class="max-w-[16rem] space-y-1">
+				<div class={cn("space-y-1", compact ? "max-w-[15rem]" : "max-w-[16rem]")}>
 					<p class="text-sm font-medium leading-snug">{emptyHelp.title}</p>
 					<p class="text-muted-foreground text-xs leading-snug">{emptyHelp.description}</p>
-					{#if contextHint}
+					{#if showEmptyContextHint}
 						<p class="text-muted-foreground pt-0.5 text-[11px] leading-snug">{contextHint}</p>
 					{/if}
 				</div>
@@ -148,7 +161,7 @@
 				<AlertTitle class="text-sm">{emptyHelp.title}</AlertTitle>
 				<AlertDescription class="space-y-1.5 text-xs leading-snug">
 					<p>{emptyHelp.description}</p>
-					{#if contextHint}
+					{#if showEmptyContextHint}
 						<p class="text-muted-foreground">{contextHint}</p>
 					{/if}
 				</AlertDescription>

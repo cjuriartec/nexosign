@@ -221,6 +221,7 @@
 			helpVariant="brief"
 			showDedupeNote={false}
 			compact
+			emptyPresentation="panel"
 			onRefresh={() => onRefreshCerts?.()}
 			onResetReader={() => onResetReader?.()}
 		/>
