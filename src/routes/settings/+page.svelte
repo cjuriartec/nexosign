@@ -28,6 +28,7 @@
 		setPkcs11PreferredModule,
 		listPkcs11EffectiveModulePaths,
 	} from "$lib/tauri/settings";
+	import { checkForAppUpdates, getAppVersion } from "$lib/tauri/update";
 	import { cn } from "$lib/utils.js";
 	import { isTauriRuntime } from "$lib/tauri/env";
 	import { ask } from "@tauri-apps/plugin-dialog";
@@ -40,7 +41,10 @@
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 	import GripVerticalIcon from "@lucide/svelte/icons/grip-vertical";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
+	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
+	let appVersion = $state<string | null>(null);
+	let updateCheckBusy = $state(false);
 	let origins = $state<string[]>([]);
 	let newOrigin = $state("");
 	let apiUrl = $state(LOCAL_API_BASE);
@@ -82,6 +86,28 @@
 	let batchJobTimeoutLockedByEnv = $state(false);
 	let batchJobTimeoutBusy = $state(false);
 	const PATH_DRAG_THRESHOLD = 4;
+
+	async function refreshAppVersion() {
+		if (!isTauriRuntime()) return;
+		try {
+			const info = await getAppVersion();
+			appVersion = info.current;
+		} catch {
+			appVersion = null;
+		}
+	}
+
+	async function runUpdateCheck() {
+		if (!isTauriRuntime() || updateCheckBusy) return;
+		updateCheckBusy = true;
+		try {
+			await checkForAppUpdates();
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			updateCheckBusy = false;
+		}
+	}
 
 	async function probeActiveModulePath() {
 		if (!isTauriRuntime()) return;
@@ -442,6 +468,7 @@
 	onMount(() => {
 		void refreshDiagnostics();
 		if (isTauriRuntime()) {
+			void refreshAppVersion();
 			void refresh();
 			void syncBatchJobTimeout();
 			void (async () => {
@@ -478,6 +505,36 @@
 			<ThemeToggle />
 		</Card.Content>
 	</Card.Root>
+
+	{#if isTauriRuntime()}
+		<Card.Root>
+			<Card.Header>
+				<Card.Title class="text-base">Actualizaciones</Card.Title>
+				<Card.Description>
+					Comprueba si hay una versión nueva en GitHub. También se busca en segundo plano cada 12 h
+					mientras NexoSign está en ejecución (menú de la bandeja).
+				</Card.Description>
+			</Card.Header>
+			<Card.Content class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+				<p class="text-muted-foreground text-sm">
+					Versión instalada:
+					<span class="text-foreground font-mono font-medium">
+						{appVersion ? `v${appVersion}` : "—"}
+					</span>
+				</p>
+				<Button
+					type="button"
+					variant="outline"
+					class="shrink-0 gap-2"
+					disabled={updateCheckBusy}
+					onclick={() => void runUpdateCheck()}
+				>
+					<RefreshCwIcon class={cn("size-4", updateCheckBusy && "animate-spin")} aria-hidden="true" />
+					{updateCheckBusy ? "Comprobando…" : "Buscar actualizaciones"}
+				</Button>
+			</Card.Content>
+		</Card.Root>
+	{/if}
 
 	{#if isTauriRuntime()}
 		<Card.Root>

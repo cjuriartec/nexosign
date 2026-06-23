@@ -55,6 +55,8 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: NexoSign ${{ github.ref_name }}
@@ -66,4 +68,5 @@ jobs:
             **Windows installers are not code-signed in CI.** For production distribution, sign binaries per [docs/distribucion-windows.md](https://github.com/cjuriartec/nexosign/blob/main/docs/distribucion-windows.md).
           releaseDraft: false
           prerelease: false
+          includeUpdaterJson: true
           args: ${{ matrix.args }}

@@ -6,6 +6,8 @@ node_modules
 .env
 .env.*
 !.env.example
+# Claves del updater Tauri (privada + pub local; la pub en repo va en tauri.conf.json)
+.secrets/
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 /playwright-report/
