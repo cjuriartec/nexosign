@@ -1,6 +1,6 @@
 [package]
 name = "nexosign"
-version = "1.0.2"
+version = "1.0.3"
 description = "Firma PDF PAdES con certificado en hardware (PKCS#11)"
 authors = ["NexoSign contributors"]
 license = "MIT"
