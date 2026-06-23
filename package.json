@@ -27,6 +27,7 @@
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test:all": "npm run test && npm run test:e2e && npm run test:rust",
     "tauri": "tauri",
+    "updater:generate-keys": "node scripts/generate-updater-keys.mjs",
     "load-test:gen-pdfs": "node scripts/gen-load-test-pdfs.mjs"
   },
   "license": "MIT",

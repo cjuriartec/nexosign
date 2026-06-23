@@ -27,11 +27,34 @@ use crate::commands::{BatchCancelRegistry, BatchSignedOutputsStore};
 static INIT_TRACING: Once = Once::new();
 
 #[cfg(desktop)]
+fn schedule_tray_update_check<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = infrastructure::updater::run_update_flow(app, true).await {
+            tracing::warn!(error = %e, "comprobación de actualización desde bandeja");
+        }
+    });
+}
+
+#[cfg(desktop)]
 fn try_install_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let show = match MenuItem::with_id(app, "tray_show", "Abrir NexoSign", true, None::<&str>) {
         Ok(i) => i,
         Err(e) => {
             tracing::warn!(error = %e, "menú bandeja: ítem Abrir");
+            return;
+        }
+    };
+    let check_updates = match MenuItem::with_id(
+        app,
+        "tray_check_updates",
+        "Buscar actualizaciones",
+        true,
+        None::<&str>,
+    ) {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::warn!(error = %e, "menú bandeja: ítem actualizaciones");
             return;
         }
     };
@@ -42,7 +65,7 @@ fn try_install_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             return;
         }
     };
-    let menu = match Menu::with_items(app, &[&show, &quit]) {
+    let menu = match Menu::with_items(app, &[&show, &check_updates, &quit]) {
         Ok(m) => m,
         Err(e) => {
             tracing::warn!(error = %e, "menú bandeja");
@@ -58,6 +81,8 @@ fn try_install_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
                 app.exit(0);
             } else if event.id == "tray_show" {
                 window::show_main_window(app);
+            } else if event.id == "tray_check_updates" {
+                schedule_tray_update_check(app);
             }
         });
 
@@ -100,6 +125,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(origins.clone())
         .manage(pkcs11.clone())
         .manage(BatchCancelRegistry(batch_cancel.clone()))
@@ -148,6 +174,8 @@ pub fn run() {
             commands::local_api::local_api_ping,
             commands::local_api::local_api_enqueue_batch_sign,
             commands::local_api::local_api_batch_job_status,
+            commands::update::get_app_version,
+            commands::update::check_for_app_updates,
         ])
         .on_window_event(|window, event| {
             if window.label() != MAIN_WINDOW_LABEL {
@@ -219,6 +247,9 @@ pub fn run() {
 
             #[cfg(desktop)]
             try_install_tray(app.handle());
+
+            #[cfg(desktop)]
+            infrastructure::updater::spawn_periodic_update_checks(app.handle().clone());
 
             infrastructure::local_server::spawn_local_api(api_state, local_api.clone());
 

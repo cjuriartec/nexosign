@@ -53,6 +53,7 @@ spki = "0.7.3"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 tokio-util = "0.7.18"
 tauri-plugin-dialog = "2.7.1"
+tauri-plugin-updater = "2"
 chrono = { version = "0.4.44", features = ["clock"] }
 base64 = "0.22"
 bytes = "1"

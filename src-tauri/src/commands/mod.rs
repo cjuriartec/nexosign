@@ -24,6 +24,7 @@ use crate::infrastructure::origin_db::OriginDbPath;
 
 pub mod batch_queue_history;
 pub mod local_api;
+pub mod update;
 
 /// Estado gestionado por Tauri (`.manage`) compartido con la API local.
 type OriginsStore = Arc<RwLock<AllowedOrigins>>;
