@@ -1,6 +1,6 @@
 {
   "name": "nexosign",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Desktop PDF signing with hardware certificates and a local API (Tauri)",
   "repository": {
     "type": "git",
