@@ -97,7 +97,9 @@
 		}
 	}
 
-	async function loadCerts(opts?: { runChipProbe?: boolean }) {
+	type LoadCertsOpts = { runChipProbe?: boolean };
+
+	async function loadCerts(opts: LoadCertsOpts = {}) {
 		if (!isTauriRuntime()) return;
 		busy = true;
 		try {

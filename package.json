@@ -14,9 +14,9 @@
   "scripts": {
     "sync:web-icon": "node -e \"require('fs').copyFileSync('src-tauri/icons/128x128.png','static/favicon.png')\"",
     "predev": "npm run sync:web-icon",
-    "prebuild": "npm run sync:web-icon",
+    "prebuild": "npm run sync:web-icon && svelte-kit sync",
     "dev": "vite dev",
-    "build": "vite build",
+    "build": "svelte-kit sync && vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
