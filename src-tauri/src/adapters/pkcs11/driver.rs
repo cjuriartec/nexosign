@@ -26,10 +26,16 @@ pub fn builtin_pkcs11_path_strings() -> &'static [&'static str] {
     #[cfg(target_os = "windows")]
     {
         &[
+            // RENIEC DNI electrónico 3.0 (Perú) — IDPlug Classic / IDEMIA
+            r"C:\Program Files\IDEMIA\IDPlugClassic\DLLs\idplug-pkcs11.dll",
+            r"C:\Program Files (x86)\IDEMIA\IDPlugClassic\DLLs\idplug-pkcs11.dll",
+            // DNIe 3.0 (España) — Bit4id / IDPrime
             r"C:\Windows\System32\bit4ipki.dll",
             r"C:\Windows\System32\idprimepkcs1164.dll",
+            r"C:\Windows\System32\idprimepkcs1132.dll",
             r"C:\Windows\System32\etpkcs11.dll",
             r"C:\Windows\System32\eps2003csp11.dll",
+            // DNIe 2.0 (España) — FNMT / Athena
             r"C:\Windows\System32\asepkcs.dll",
             r"C:\Windows\System32\opensc-pkcs11.dll",
             r"C:\Windows\System32\pkcs11.dll",
