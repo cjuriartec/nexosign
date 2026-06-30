@@ -1,65 +1,64 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("svelte-sonner", () => ({
-	toast: {
-		message: vi.fn(),
-		warning: vi.fn(),
-		error: vi.fn(),
-	},
+vi.mock("$lib/tauri/env", () => ({
+	isTauriRuntime: () => false,
 }));
 
-import { toast } from "svelte-sonner";
-import { toastFail, toastInfo, toastWarn } from "./app-toast";
+const sendNotification = vi.fn();
+const isPermissionGranted = vi.fn().mockResolvedValue(true);
+const requestPermission = vi.fn();
 
-const mockToast = toast as {
-	message: ReturnType<typeof vi.fn>;
-	warning: ReturnType<typeof vi.fn>;
-	error: ReturnType<typeof vi.fn>;
-};
+vi.mock("@tauri-apps/plugin-notification", () => ({
+	isPermissionGranted,
+	requestPermission,
+	sendNotification,
+}));
+
+import { toast } from "./notify";
+import { toastFail, toastInfo, toastWarn } from "./app-toast";
 
 describe("app-toast", () => {
 	afterEach(() => {
 		vi.clearAllMocks();
 	});
 
-	it("toastInfo usa message con duración por defecto", () => {
+	it("toastInfo delega en notify.message", () => {
+		const spy = vi.spyOn(toast, "message");
 		toastInfo("Listo");
-		expect(mockToast.message).toHaveBeenCalledWith("Listo", { duration: 4500 });
+		expect(spy).toHaveBeenCalledWith("Listo", undefined);
 	});
 
 	it("toastInfo admite descripción opcional", () => {
+		const spy = vi.spyOn(toast, "message");
 		toastInfo("Sin PDF", "Revisa la carpeta");
-		expect(mockToast.message).toHaveBeenCalledWith("Sin PDF", {
-			duration: 4500,
-			description: "Revisa la carpeta",
-		});
+		expect(spy).toHaveBeenCalledWith("Sin PDF", { description: "Revisa la carpeta" });
 	});
 
 	it("toastWarn usa warning", () => {
+		const spy = vi.spyOn(toast, "warning");
 		toastWarn("PDF demasiado grande", "Máximo 50 MiB");
-		expect(mockToast.warning).toHaveBeenCalledWith("PDF demasiado grande", {
-			duration: 4500,
+		expect(spy).toHaveBeenCalledWith("PDF demasiado grande", {
 			description: "Máximo 50 MiB",
 		});
 	});
 
 	it("toastFail trunca mensajes largos", () => {
+		const spy = vi.spyOn(toast, "error");
 		const long = "x".repeat(130);
 		toastFail(long);
-		expect(mockToast.error).toHaveBeenCalledWith(`${"x".repeat(117)}…`, {
-			duration: 6000,
-		});
+		expect(spy).toHaveBeenCalledWith(`${"x".repeat(117)}…`, undefined);
 	});
 
 	it("toastFail omite descripción si supera 100 caracteres", () => {
+		const spy = vi.spyOn(toast, "error");
 		toastFail("Error", "d".repeat(101));
-		expect(mockToast.error).toHaveBeenCalledWith("Error", { duration: 6000 });
+		expect(spy).toHaveBeenCalledWith("Error", undefined);
 	});
 
 	it("toastFail incluye descripción corta", () => {
+		const spy = vi.spyOn(toast, "error");
 		toastFail("Origen no autorizado", "Añádelo en Ajustes");
-		expect(mockToast.error).toHaveBeenCalledWith("Origen no autorizado", {
-			duration: 6000,
+		expect(spy).toHaveBeenCalledWith("Origen no autorizado", {
 			description: "Añádelo en Ajustes",
 		});
 	});

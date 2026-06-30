@@ -15,6 +15,7 @@
       "allow": [{ "path": "**" }]
     },
     "dialog:default",
+    "notification:default",
     "updater:default"
   ]
 }

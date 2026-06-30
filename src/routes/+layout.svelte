@@ -4,10 +4,9 @@
 	import { goto } from "$app/navigation";
 	import { listen } from "@tauri-apps/api/event";
 	import { ask } from "@tauri-apps/plugin-dialog";
-	import { toast } from "svelte-sonner";
+	import { ensureNotificationPermission, toast } from "$lib/ui/notify";
 	import { toastFail } from "$lib/ui/app-toast";
 	import { ModeWatcher } from "mode-watcher";
-	import { Toaster } from "$lib/components/ui/sonner/index.js";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 	import AppSidebar from "$lib/components/app-sidebar.svelte";
 	import {
@@ -34,6 +33,9 @@
 
 		void (async () => {
 			await initBatchQueuePersistence();
+			if (isTauriRuntime()) {
+				void ensureNotificationPermission();
+			}
 			try {
 				unsubs.push(
 					await listen<{ origin: string }>(
@@ -99,7 +101,6 @@
 </script>
 
 <ModeWatcher />
-<Toaster position="bottom-right" closeButton duration={4500} visibleToasts={3} expand={false} />
 
 <Sidebar.Provider open={false}>
 	<AppSidebar />

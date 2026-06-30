@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("svelte-sonner", () => ({
+vi.mock("$lib/ui/notify", () => ({
 	toast: {
 		warning: vi.fn(),
 	},
 }));
 
-import { toast } from "svelte-sonner";
+import { toast } from "$lib/ui/notify";
 import {
 	humanizePdfRejectionReason,
 	humanizeUserFacingError,
@@ -81,7 +81,6 @@ describe("toastPdfRejections", () => {
 		]);
 		expect(mockWarning).toHaveBeenCalledWith("CV.pdf omitido", {
 			description: "No es un PDF válido",
-			duration: 5500,
 		});
 	});
 
@@ -94,7 +93,6 @@ describe("toastPdfRejections", () => {
 		expect(mockWarning).toHaveBeenCalledWith(
 			"3 archivos omitidos",
 			expect.objectContaining({
-				duration: 5500,
 				description: expect.stringMatching(/^one\.pdf, two\.pdf · No es un PDF válido/),
 			}),
 		);

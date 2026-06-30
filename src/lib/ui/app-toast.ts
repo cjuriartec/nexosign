@@ -1,29 +1,19 @@
-import { toast } from "svelte-sonner";
+import { toast } from "$lib/ui/notify";
 
-const DEFAULT_MS = 4_500;
-const ERROR_MS = 6_000;
-
-/** Mensaje informativo breve (esquina, sin bloquear). */
+/** Mensaje informativo breve (notificación del sistema). */
 export function toastInfo(message: string, description?: string) {
-	toast.message(message, {
-		duration: DEFAULT_MS,
-		...(description ? { description } : {}),
-	});
+	toast.message(message, description ? { description } : undefined);
 }
 
 /** Aviso recuperable (validación, archivos omitidos, etc.). */
 export function toastWarn(message: string, description?: string) {
-	toast.warning(message, {
-		duration: DEFAULT_MS,
-		...(description ? { description } : {}),
-	});
+	toast.warning(message, description ? { description } : undefined);
 }
 
 /** Error puntual: una línea, sin pared de texto. */
 export function toastFail(message: string, description?: string) {
 	const short = message.length > 120 ? `${message.slice(0, 117)}…` : message;
-	toast.error(short, {
-		duration: ERROR_MS,
-		...(description && description.length <= 100 ? { description } : {}),
-	});
+	const desc =
+		description && description.length <= 100 ? description : undefined;
+	toast.error(short, desc ? { description: desc } : undefined);
 }
