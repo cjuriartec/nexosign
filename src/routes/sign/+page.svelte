@@ -2,7 +2,7 @@
 	import { onMount } from "svelte";
 	import { open } from "@tauri-apps/plugin-dialog";
 	import { basename, dirname, join } from "$lib/tauri/path";
-	import { toast } from "svelte-sonner";
+	import { toast } from "$lib/ui/notify";
 	import { toastFail, toastInfo, toastWarn } from "$lib/ui/app-toast";
 	import { toastPdfRejections } from "$lib/ui/pdf-rejection-toast";
 	import { Button } from "$lib/components/ui/button/index.js";

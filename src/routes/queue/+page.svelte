@@ -7,7 +7,7 @@
 	import * as ScrollArea from "$lib/components/ui/scroll-area/index.js";
 	import { cancelActiveBatchJob } from "$lib/batch/cancel-active-batch";
 	import { ask } from "@tauri-apps/plugin-dialog";
-	import { toast } from "svelte-sonner";
+	import { toast } from "$lib/ui/notify";
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import * as Progress from "$lib/components/ui/progress/index.js";

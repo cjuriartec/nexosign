@@ -276,7 +276,8 @@ struct PathScanOutcome {
 
 const PKCS11_SCAN_TIMEOUT: Duration = Duration::from_secs(12);
 /// En listado rutinario no recorrer todos los `.dll` del SO (evita bloqueos y minutos de espera).
-const MAX_MODULES_ROUTINE_LIST: usize = 2;
+/// Al descartar controladores que ven el lector pero no la tarjeta, probamos un poco más.
+const MAX_MODULES_ROUTINE_SCAN: usize = 6;
 
 /// Explora un módulo PKCS#11 (todos los slots); opcionalmente hace `C_Login` antes de listar.
 fn scan_pkcs11_path(path: &Path, pin: Option<&str>) -> PathScanOutcome {
@@ -422,6 +423,36 @@ fn session_error_token_not_recognized(err: &str) -> bool {
     e.contains("not recognize") || e.contains("token not recognized")
 }
 
+/// El lector puede aparecer en `C_GetSlotList` con un `.dll` que no abre sesión en esa tarjeta (p. ej. asepkcs + DNI RENIEC).
+fn pkcs11_module_has_usable_token(pkcs11: &Pkcs11) -> bool {
+    let Ok(slots) = slots_with_token_effective(pkcs11) else {
+        return false;
+    };
+    for slot in slots {
+        if open_session_for_slot_with_retry(pkcs11, slot, false).is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+fn scan_module_unusable(outcome: &PathScanOutcome) -> bool {
+    if !outcome.certs.is_empty() {
+        return false;
+    }
+    if outcome.slots_with_token == 0 {
+        return false;
+    }
+    outcome.slot_probes.iter().all(|s| {
+        s.raw_x509_count == 0
+            && s.signing_after_filter_count == 0
+            && s
+                .session_error
+                .as_deref()
+                .is_some_and(session_error_token_not_recognized)
+    })
+}
+
 /// Abre sesión en el slot: RO para listar sin PIN; RW si hace falta login o RO falla.
 fn open_session_for_slot(
     pkcs11: &Pkcs11,
@@ -474,12 +505,14 @@ fn merge_paths_scan(
     let mut merged = Vec::new();
     let mut seen = HashSet::new();
     let mut saw_token_not_recognized = false;
+    let mut modules_tried = 0usize;
 
-    for (i, path) in paths.iter().enumerate() {
-        if i >= MAX_MODULES_ROUTINE_LIST {
+    for path in paths {
+        if modules_tried >= MAX_MODULES_ROUTINE_SCAN {
             break;
         }
         let scan = scan_pkcs11_path_timed(path, pin, PKCS11_SCAN_TIMEOUT);
+        modules_tried += 1;
         if let Some(err) = &scan.error {
             tracing::info!(path = %path.display(), error = %err, "PKCS#11 listado sin certificados");
         }
@@ -489,6 +522,13 @@ fn merge_paths_scan(
                     saw_token_not_recognized = true;
                 }
             }
+        }
+        if scan_module_unusable(&scan) {
+            tracing::info!(
+                path = %path.display(),
+                "PKCS#11: controlador ve lector pero no reconoce la tarjeta; probando siguiente"
+            );
+            continue;
         }
         merge_signing_cert_summaries(&mut merged, scan.certs, &mut seen);
 
@@ -995,11 +1035,11 @@ fn ensure_pkcs11(inner: &mut Inner) -> Result<(), TokenError> {
 
     let paths = merged_pkcs11_module_paths(inner)?;
 
-    for path in paths.iter().take(MAX_MODULES_ROUTINE_LIST) {
+    for path in paths.iter().take(MAX_MODULES_ROUTINE_SCAN) {
         if let Ok(pkcs11) = Pkcs11::new(path) {
             if pkcs11.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK)).is_ok() {
                 if let Ok(slots) = slots_with_token_effective(&pkcs11) {
-                    if !slots.is_empty() {
+                    if !slots.is_empty() && pkcs11_module_has_usable_token(&pkcs11) {
                         inner.pkcs11 = Some(pkcs11);
                         inner.active_module_path = Some(path.clone());
                         return Ok(());

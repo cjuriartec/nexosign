@@ -1,4 +1,4 @@
-import { toast } from "svelte-sonner";
+import { toast } from "$lib/ui/notify";
 import { cancelBatchJob } from "$lib/tauri/settings";
 import { isTauriRuntime } from "$lib/tauri/env";
 import { batchQueue, upsertBatchQueueItem } from "$lib/stores/batch-queue.svelte";

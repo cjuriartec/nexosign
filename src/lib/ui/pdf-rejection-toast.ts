@@ -1,8 +1,7 @@
-import { toast } from "svelte-sonner";
+import { toast } from "$lib/ui/notify";
 import type { RejectedPdfPath } from "$lib/tauri/batch-validation";
 import { pdfBasenameFromPath } from "$lib/sign/path-util";
 
-const TOAST_DURATION_MS = 5_500;
 const NAME_PREVIEW_LIMIT = 2;
 
 /** Motivo corto y legible (sin rutas absolutas ni jerga interna). */
@@ -69,7 +68,6 @@ export function toastPdfRejections(rejected: RejectedPdfPath[]): void {
 		const reason = humanizePdfRejectionReason(rejected[0].reason);
 		toast.warning(`${name} omitido`, {
 			description: reason,
-			duration: TOAST_DURATION_MS,
 		});
 		return;
 	}
@@ -88,6 +86,6 @@ export function toastPdfRejections(rejected: RejectedPdfPath[]): void {
 
 	toast.warning(
 		`${rejected.length} archivos omitidos`,
-		{ description, duration: TOAST_DURATION_MS },
+		{ description },
 	);
 }

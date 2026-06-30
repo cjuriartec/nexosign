@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **PKCS#11:** rutas por defecto para **DNI electrónico 3.0 RENIEC (IDPlug Classic / IDEMIA)** e **IDPrime (DNIe 3.0 España)**; si un controlador ve el lector pero no reconoce la tarjeta, se prueba el siguiente automáticamente.
+
+### Changed
+
+- **Avisos:** notificaciones del **sistema operativo** (centro de notificaciones de Windows) en lugar de toasts dentro de la ventana, para no tapar botones ni el asistente de firma.
+
 ## [1.0.5] - 2026-06-23
 
 ### Added

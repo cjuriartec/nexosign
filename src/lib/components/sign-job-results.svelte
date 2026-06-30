@@ -4,7 +4,7 @@
 	import type { SignJobFileDisplay } from "$lib/sign/job-results";
 	import { isTauriRuntime } from "$lib/tauri/env";
 	import { showOutputDirectoryInExplorer, showSignedOutputInExplorer } from "$lib/tauri/open-output";
-	import { toast } from "svelte-sonner";
+	import { toast } from "$lib/ui/notify";
 	import { humanizeUserFacingError } from "$lib/ui/pdf-rejection-toast";
 	import { cn } from "$lib/utils.js";
 	import CircleCheckIcon from "@lucide/svelte/icons/circle-check";
